@@ -1,0 +1,26 @@
+import { ArrowRight } from "lucide-react";
+
+export function CTASection() {
+  return (
+    <section className="relative py-28">
+      <div className="mx-auto max-w-5xl px-6">
+        <div className="relative overflow-hidden rounded-[36px] border border-border bg-card px-8 py-16 text-center md:px-16 md:py-24">
+          <div className="pointer-events-none absolute -top-32 left-1/2 h-72 w-[600px] -translate-x-1/2 rounded-full bg-gradient-brand opacity-30 blur-3xl" />
+          <div className="absolute inset-0 grid-bg opacity-50" />
+
+          <h2 className="relative text-4xl font-black md:text-6xl">
+            Pronto para movimentar <br />
+            <span className="text-gradient-brand">mais imóveis?</span>
+          </h2>
+          <p className="relative mx-auto mt-5 max-w-xl text-muted-foreground">
+            Junte-se às imobiliárias que já automatizaram o seu fluxo. Comece grátis por 14 dias — sem cartão.
+          </p>
+          <a href="#planos" className="relative mt-10 inline-flex items-center gap-2 rounded-full bg-gradient-brand px-8 py-4 text-base font-semibold text-primary-foreground shadow-glow animate-glow-pulse transition hover:brightness-110">
+            Criar minha conta
+            <ArrowRight className="h-4 w-4" />
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
