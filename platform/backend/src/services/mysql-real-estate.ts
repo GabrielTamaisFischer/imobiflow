@@ -1,0 +1,753 @@
+import { randomUUID } from "node:crypto";
+import type { PrismaClient } from "@prisma/client";
+import { getPrisma } from "../lib/website-builder-prisma.js";
+
+type PropertyInput = Record<string, any>;
+
+const propertyInclude = {
+  owner: true,
+  media: {
+    orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
+  },
+};
+
+export function prisma() {
+  return getPrisma();
+}
+
+export async function ensurePropertyBelongsToCompany(propertyId: string, companyId: string) {
+  const property = await prisma().property.findFirst({
+    where: { id: propertyId, companyId },
+    select: { id: true },
+  });
+
+  if (!property) {
+    throw Object.assign(new Error("Imóvel inválido para esta empresa."), {
+      statusCode: 404,
+      code: "PROPERTY_NOT_FOUND",
+    });
+  }
+
+  return property.id;
+}
+
+async function ensureOwnerBelongsToCompany(ownerId: string, companyId: string) {
+  const owner = await prisma().propertyOwner.findFirst({
+    where: { id: ownerId, companyId },
+    select: { id: true },
+  });
+
+  if (!owner) {
+    throw Object.assign(new Error("Proprietário inválido para esta empresa."), {
+      statusCode: 404,
+      code: "OWNER_NOT_FOUND",
+    });
+  }
+
+  return owner.id;
+}
+
+export async function listMysqlOwners(companyId: string, status = "active") {
+  const owners = await prisma().propertyOwner.findMany({
+    where: { companyId, status },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return owners.map(serializeOwner);
+}
+
+export async function createMysqlOwner(companyId: string, userId: string, input: PropertyInput) {
+  const owner = await prisma().propertyOwner.create({
+    data: {
+      companyId,
+      createdBy: uuidOrNull(userId),
+      ownerType: input.owner_type ?? "individual",
+      clientType: input.client_type ?? "proprietario",
+      name: input.name,
+      document: emptyToNull(input.document),
+      email: emptyToNull(input.email),
+      phone: emptyToNull(input.phone),
+      whatsapp: emptyToNull(input.whatsapp),
+      residentialPhone: emptyToNull(input.residential_phone),
+      commercialPhone: emptyToNull(input.commercial_phone),
+      addressJson: input.address_json ?? {},
+      notes: emptyToNull(input.notes),
+      status: "active",
+      portalToken: randomUUID(),
+      portalEnabled: true,
+    },
+  });
+
+  return serializeOwner(owner);
+}
+
+export async function updateMysqlOwner(companyId: string, ownerId: string, input: PropertyInput) {
+  await ensureOwnerBelongsToCompany(ownerId, companyId);
+  const owner = await prisma().propertyOwner.update({
+    where: { id: ownerId },
+    data: cleanOwnerUpdate(input),
+  });
+
+  return serializeOwner(owner);
+}
+
+export async function archiveMysqlOwner(companyId: string, ownerId: string) {
+  await ensureOwnerBelongsToCompany(ownerId, companyId);
+  const owner = await prisma().propertyOwner.update({
+    where: { id: ownerId },
+    data: { status: "archived" },
+  });
+
+  return serializeOwner(owner);
+}
+
+export async function listMysqlProperties(companyId: string, status?: string) {
+  const properties = await prisma().property.findMany({
+    where: {
+      companyId,
+      ...(status && status !== "all" ? { status } : {}),
+    },
+    include: propertyInclude,
+    orderBy: { createdAt: "desc" },
+  });
+
+  return properties.map(serializeProperty);
+}
+
+export async function createMysqlProperty(companyId: string, userId: string, input: PropertyInput) {
+  const ownerId = await ensureMysqlOwner(companyId, input.owner_id || null);
+  const code = input.code || (await generateMysqlPropertyCode(companyId));
+
+  await ensureMysqlPropertyCodeAvailable(companyId, code);
+
+  const property = await prisma().property.create({
+    data: {
+      ...(propertyDataFromInput(input) as any),
+      companyId,
+      ownerId,
+      createdBy: uuidOrNull(userId),
+      responsibleUserId: uuidOrNull(input.responsible_user_id || userId),
+      code,
+    },
+    include: propertyInclude,
+  });
+
+  if (ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
+
+  return serializeProperty(property);
+}
+
+export async function updateMysqlProperty(companyId: string, propertyId: string, input: PropertyInput) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  if (input.code !== undefined) await ensureMysqlPropertyCodeAvailable(companyId, input.code, propertyId);
+
+  const ownerId = input.owner_id !== undefined ? await ensureMysqlOwner(companyId, input.owner_id || null) : undefined;
+  const property = await prisma().property.update({
+    where: { id: propertyId },
+    data: {
+      ...(propertyDataFromInput(input, true) as any),
+      ...(input.owner_id !== undefined ? { ownerId } : {}),
+    },
+    include: propertyInclude,
+  });
+
+  if (input.owner_id !== undefined && ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
+  return serializeProperty(property);
+}
+
+export async function archiveMysqlProperty(companyId: string, propertyId: string) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  const property = await prisma().property.update({
+    where: { id: propertyId },
+    data: { status: "archived", publishedAt: null },
+    include: propertyInclude,
+  });
+
+  return serializeProperty(property);
+}
+
+export async function listMysqlPropertyMedia(companyId: string, propertyId: string) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  const media = await prisma().propertyMedia.findMany({
+    where: { companyId, propertyId },
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+  });
+
+  return media.map(serializeMedia);
+}
+
+export async function countMysqlPropertyMedia(companyId: string, propertyId: string, mediaType?: string) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  return prisma().propertyMedia.count({
+    where: {
+      companyId,
+      propertyId,
+      ...(mediaType ? { mediaType } : {}),
+    },
+  });
+}
+
+export async function createMysqlPropertyMedia(
+  companyId: string,
+  propertyId: string,
+  input: {
+    media_type?: string;
+    url: string;
+    caption?: string | null;
+    position?: number;
+    storage_bucket?: string | null;
+    storage_path?: string | null;
+    mime_type?: string | null;
+    file_size?: number | null;
+    is_cover?: boolean;
+  },
+) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  if (input.is_cover) {
+    await prisma().propertyMedia.updateMany({
+      where: { companyId, propertyId },
+      data: { isCover: false },
+    });
+  }
+
+  const media = await prisma().propertyMedia.create({
+    data: {
+      companyId,
+      propertyId,
+      mediaType: input.media_type ?? "photo",
+      url: input.url,
+      caption: input.caption ?? null,
+      position: input.position ?? 0,
+      storageBucket: input.storage_bucket ?? null,
+      storagePath: input.storage_path ?? null,
+      mimeType: input.mime_type ?? null,
+      fileSize: input.file_size ?? null,
+      isCover: Boolean(input.is_cover),
+    },
+  });
+
+  return serializeMedia(media);
+}
+
+export async function reorderMysqlPropertyMedia(
+  companyId: string,
+  propertyId: string,
+  media: Array<{ id: string; position: number }>,
+) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  for (const item of media) {
+    await prisma().propertyMedia.updateMany({
+      where: { id: item.id, companyId, propertyId },
+      data: { position: item.position },
+    });
+  }
+  return listMysqlPropertyMedia(companyId, propertyId);
+}
+
+export async function deleteMysqlPropertyMedia(companyId: string, propertyId: string, mediaId: string) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  await prisma().propertyMedia.deleteMany({ where: { id: mediaId, companyId, propertyId } });
+}
+
+export async function ensureMysqlCompanySite(companyId: string, userId: string, batchId?: string) {
+  const existing = await prisma().companySite.findFirst({ where: { companyId } });
+  if (existing) return { siteId: existing.id, site: serializeCompanySite(existing), created: false };
+
+  const site = await prisma().companySite.create({
+    data: {
+      companyId,
+      createdBy: uuidOrNull(userId),
+      slug: `qa-site-${companyId.slice(0, 8).toLowerCase()}`,
+      status: "published",
+      brandName: "ImobiFlow QA",
+      headline: "Vitrine de testes ImobiFlow",
+      description: "Site estrutural criado para validar imóveis reais de QA da empresa.",
+      phone: "(11) 4000-0000",
+      whatsapp: "5511999990000",
+      email: "qa@imobiflow.test",
+      logoUrl: "/site-templates/imoveis-logo.png",
+      primaryColor: "#c8a24b",
+      settingsJson: {
+        show_full_address: false,
+        show_prices: true,
+        allow_lead_capture: true,
+        auto_publish_properties: true,
+        template_key: "premium-gold",
+        test_lab: batchId ? { is_test_data: true, test_batch_id: batchId } : undefined,
+      },
+      seoJson: batchId ? { test_lab: { is_test_data: true, test_batch_id: batchId } } : {},
+      publishedAt: new Date(),
+    },
+  });
+
+  return { siteId: site.id, site: serializeCompanySite(site), created: true };
+}
+
+export async function getMysqlPublishedSite(slug: string) {
+  const site = await prisma().companySite.findFirst({
+    where: { slug, status: "published" },
+    include: { company: true },
+  });
+  if (!site || site.company.status !== "active") throw publicSiteNotFound();
+
+  const subscription = await prisma().subscription.findFirst({
+    where: { companyId: site.companyId },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!subscription || !["active", "trial"].includes(subscription.status)) throw publicSiteNotFound();
+
+  return { site, company: site.company };
+}
+
+export async function loadMysqlPublicProperties(site: { companyId: string; settingsJson: unknown }, limit: number) {
+  const properties = await prisma().property.findMany({
+    where: {
+      companyId: site.companyId,
+      status: { in: ["available", "reserved"] },
+      publishedAt: { not: null },
+    },
+    include: propertyInclude,
+    orderBy: { publishedAt: "desc" },
+    take: limit,
+  });
+
+  return properties.map((property) => sanitizePublicProperty(serializeProperty(property), site));
+}
+
+export async function loadMysqlPublicPropertyByReference(
+  site: { companyId: string; settingsJson: unknown },
+  reference: string,
+) {
+  const where = isUuid(reference)
+    ? { id: reference, companyId: site.companyId }
+    : { companyId: site.companyId };
+
+  if (isUuid(reference)) {
+    const property = await prisma().property.findFirst({
+      where: {
+        ...where,
+        status: { in: ["available", "reserved"] },
+        publishedAt: { not: null },
+      },
+      include: propertyInclude,
+    });
+    if (!property) throw publicSiteNotFound();
+    return sanitizePublicProperty(serializeProperty(property), site);
+  }
+
+  const properties = await prisma().property.findMany({
+    where: {
+      companyId: site.companyId,
+      status: { in: ["available", "reserved"] },
+      publishedAt: { not: null },
+    },
+    include: propertyInclude,
+    orderBy: { publishedAt: "desc" },
+    take: 500,
+  });
+  const property = properties.map(serializeProperty).find((item) => matchesPropertySlug(item, reference));
+  if (!property) throw publicSiteNotFound();
+  return sanitizePublicProperty(property, site);
+}
+
+export async function createMysqlPublicLead(params: {
+  site: { id: string; companyId: string; slug: string };
+  propertyId: string | null;
+  input: { name: string; email?: string; phone?: string; message?: string };
+  sourceUrl?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
+  let propertyReference: string | null = null;
+  if (params.propertyId) {
+    const property = await prisma().property.findFirst({
+      where: { id: params.propertyId, companyId: params.site.companyId },
+      select: { code: true, title: true },
+    });
+    if (!property) throw publicSiteNotFound();
+    propertyReference = property.code || property.title;
+  }
+
+  const lead = await prisma().lead.create({
+    data: {
+      companyId: params.site.companyId,
+      name: params.input.name,
+      email: emptyToNull(params.input.email),
+      phone: emptyToNull(params.input.phone),
+      source: "site",
+      interestType: "not_defined",
+      propertyReference,
+      notes: emptyToNull(params.input.message),
+    },
+  });
+
+  await prisma().siteLead.create({
+    data: {
+      companyId: params.site.companyId,
+      siteId: params.site.id,
+      propertyId: params.propertyId,
+      leadId: lead.id,
+      name: params.input.name,
+      email: emptyToNull(params.input.email),
+      phone: emptyToNull(params.input.phone),
+      message: emptyToNull(params.input.message),
+      sourceUrl: params.sourceUrl ?? null,
+      ipAddress: params.ipAddress ?? null,
+      userAgent: params.userAgent ?? null,
+      metadata: { slug: params.site.slug },
+    },
+  });
+
+  return {
+    id: lead.id,
+    name: lead.name,
+    email: lead.email,
+    phone: lead.phone,
+    source: lead.source,
+    created_at: lead.createdAt.toISOString(),
+  };
+}
+
+export function serializeCompanySite(site: any) {
+  return {
+    id: site.id,
+    company_id: site.companyId,
+    slug: site.slug,
+    custom_domain: site.customDomain,
+    status: site.status,
+    brand_name: site.brandName,
+    headline: site.headline,
+    description: site.description,
+    phone: site.phone,
+    whatsapp: site.whatsapp,
+    email: site.email,
+    logo_url: site.logoUrl,
+    primary_color: site.primaryColor,
+    settings_json: site.settingsJson ?? {},
+    seo_json: site.seoJson ?? {},
+    published_at: toIso(site.publishedAt),
+    created_at: toIso(site.createdAt),
+    updated_at: toIso(site.updatedAt),
+  };
+}
+
+export function publicSiteView(site: any) {
+  const serialized = serializeCompanySite(site);
+  return {
+    id: serialized.id,
+    slug: serialized.slug,
+    custom_domain: serialized.custom_domain,
+    brand_name: serialized.brand_name,
+    headline: serialized.headline,
+    description: serialized.description,
+    phone: serialized.phone,
+    whatsapp: serialized.whatsapp,
+    email: serialized.email,
+    logo_url: serialized.logo_url,
+    primary_color: serialized.primary_color,
+    settings_json: serialized.settings_json,
+    seo_json: serialized.seo_json,
+    published_at: serialized.published_at,
+  };
+}
+
+export function serializeOwner(owner: any) {
+  return {
+    id: owner.id,
+    company_id: owner.companyId,
+    owner_type: owner.ownerType,
+    client_type: owner.clientType,
+    name: owner.name,
+    document: owner.document,
+    email: owner.email,
+    phone: owner.phone,
+    whatsapp: owner.whatsapp,
+    residential_phone: owner.residentialPhone,
+    commercial_phone: owner.commercialPhone,
+    address_json: owner.addressJson ?? {},
+    notes: owner.notes,
+    status: owner.status,
+    portal_token: owner.portalToken,
+    portal_enabled: owner.portalEnabled,
+    portal_last_access_at: toIso(owner.portalLastAccessAt),
+    created_at: toIso(owner.createdAt),
+    updated_at: toIso(owner.updatedAt),
+  };
+}
+
+export function serializeProperty(property: any) {
+  return {
+    id: property.id,
+    company_id: property.companyId,
+    owner_id: property.ownerId,
+    code: property.code,
+    title: property.title,
+    description: property.description,
+    property_type: property.propertyType,
+    operation: property.operation,
+    status: property.status,
+    street: property.street,
+    number: property.number,
+    complement: property.complement,
+    neighborhood: property.neighborhood,
+    city: property.city,
+    state: property.state,
+    country: property.country,
+    zip_code: property.zipCode,
+    latitude: property.latitude,
+    longitude: property.longitude,
+    condominium_name: property.condominiumName,
+    nearby_highways: Array.isArray(property.nearbyHighways) ? property.nearbyHighways : [],
+    responsible_user_id: property.responsibleUserId,
+    capture_json: property.captureJson ?? {},
+    primary_details_json: property.primaryDetailsJson ?? {},
+    measurements_json: property.measurementsJson ?? {},
+    bedrooms: property.bedrooms,
+    bathrooms: property.bathrooms,
+    suites: property.suites,
+    parking_spaces: property.parkingSpaces,
+    private_area: property.privateArea,
+    total_area: property.totalArea,
+    sale_price_cents: property.salePriceCents,
+    rent_price_cents: property.rentPriceCents,
+    condominium_fee_cents: property.condominiumFeeCents,
+    iptu_cents: property.iptuCents,
+    commercial_terms_json: property.commercialTermsJson ?? {},
+    features_json: property.featuresJson ?? {},
+    amenity_groups_json: property.amenityGroupsJson ?? {},
+    videos_json: Array.isArray(property.videosJson) ? property.videosJson : [],
+    publication_settings_json: property.publicationSettingsJson ?? {},
+    description_template_key: property.descriptionTemplateKey,
+    published_at: toIso(property.publishedAt),
+    created_at: toIso(property.createdAt),
+    updated_at: toIso(property.updatedAt),
+    property_owners: property.owner
+      ? {
+          id: property.owner.id,
+          name: property.owner.name,
+          phone: property.owner.phone,
+          whatsapp: property.owner.whatsapp,
+          email: property.owner.email,
+        }
+      : null,
+    property_media: (property.media ?? property.property_media ?? []).map(serializeMedia),
+  };
+}
+
+export function serializeMedia(media: any) {
+  return {
+    id: media.id,
+    company_id: media.companyId,
+    property_id: media.propertyId,
+    media_type: media.mediaType,
+    url: media.url,
+    caption: media.caption,
+    position: media.position,
+    storage_bucket: media.storageBucket,
+    storage_path: media.storagePath,
+    mime_type: media.mimeType,
+    file_size: media.fileSize,
+    is_cover: media.isCover,
+    created_at: toIso(media.createdAt),
+  };
+}
+
+export function getPropertySlug(property: { id: string; code?: string | null; title: string }) {
+  const base = [property.code, property.title].filter(Boolean).join("-");
+  return `${slugify(base || property.id)}-${property.id.slice(0, 8)}`;
+}
+
+export function matchesPropertySlug(property: { id: string; code?: string | null; title: string }, reference: string) {
+  const lowerReference = reference.toLowerCase();
+  return (
+    reference === property.id ||
+    lowerReference === (property.code ?? "").toLowerCase() ||
+    lowerReference === getPropertySlug(property).toLowerCase()
+  );
+}
+
+function sanitizePublicProperty(property: any, site: { settingsJson: unknown }) {
+  const settings = isRecord(site.settingsJson) ? site.settingsJson : {};
+  const showFullAddress = settings.show_full_address === true;
+  const showPrices = settings.show_prices !== false;
+
+  return {
+    ...property,
+    street: showFullAddress ? property.street : null,
+    number: showFullAddress ? property.number : null,
+    complement: showFullAddress ? property.complement : null,
+    zip_code: showFullAddress ? property.zip_code : null,
+    sale_price_cents: showPrices ? property.sale_price_cents : null,
+    rent_price_cents: showPrices ? property.rent_price_cents : null,
+  };
+}
+
+function propertyDataFromInput(input: PropertyInput, partial = false) {
+  const map: Array<[string, string, (value: any) => any]> = [
+    ["code", "code", emptyToNull],
+    ["title", "title", String],
+    ["description", "description", emptyToNull],
+    ["property_type", "propertyType", String],
+    ["operation", "operation", String],
+    ["status", "status", String],
+    ["street", "street", emptyToNull],
+    ["number", "number", emptyToNull],
+    ["complement", "complement", emptyToNull],
+    ["neighborhood", "neighborhood", emptyToNull],
+    ["city", "city", emptyToNull],
+    ["state", "state", emptyToNull],
+    ["country", "country", emptyToNull],
+    ["zip_code", "zipCode", emptyToNull],
+    ["latitude", "latitude", Number],
+    ["longitude", "longitude", Number],
+    ["condominium_name", "condominiumName", emptyToNull],
+    ["responsible_user_id", "responsibleUserId", uuidOrNull],
+    ["bedrooms", "bedrooms", numberOrNull],
+    ["bathrooms", "bathrooms", numberOrNull],
+    ["suites", "suites", numberOrNull],
+    ["parking_spaces", "parkingSpaces", numberOrNull],
+    ["private_area", "privateArea", numberOrNull],
+    ["total_area", "totalArea", numberOrNull],
+    ["sale_price_cents", "salePriceCents", numberOrNull],
+    ["rent_price_cents", "rentPriceCents", numberOrNull],
+    ["condominium_fee_cents", "condominiumFeeCents", numberOrNull],
+    ["iptu_cents", "iptuCents", numberOrNull],
+    ["description_template_key", "descriptionTemplateKey", emptyToNull],
+  ];
+
+  const data: Record<string, any> = {};
+  for (const [source, target, transform] of map) {
+    if (source in input) data[target] = transform(input[source]);
+  }
+
+  const jsonFields: Array<[string, string, unknown]> = [
+    ["nearby_highways", "nearbyHighways", []],
+    ["capture_json", "captureJson", {}],
+    ["primary_details_json", "primaryDetailsJson", {}],
+    ["measurements_json", "measurementsJson", {}],
+    ["commercial_terms_json", "commercialTermsJson", {}],
+    ["features_json", "featuresJson", {}],
+    ["amenity_groups_json", "amenityGroupsJson", {}],
+    ["videos_json", "videosJson", []],
+    ["publication_settings_json", "publicationSettingsJson", {}],
+  ];
+  for (const [source, target, fallback] of jsonFields) {
+    if (source in input) data[target] = input[source] ?? fallback;
+    else if (!partial) data[target] = fallback;
+  }
+
+  return data;
+}
+
+function cleanOwnerUpdate(input: PropertyInput) {
+  const data: Record<string, any> = {};
+  const map: Array<[string, string, (value: any) => any]> = [
+    ["owner_type", "ownerType", String],
+    ["client_type", "clientType", String],
+    ["name", "name", String],
+    ["document", "document", emptyToNull],
+    ["email", "email", emptyToNull],
+    ["phone", "phone", emptyToNull],
+    ["whatsapp", "whatsapp", emptyToNull],
+    ["residential_phone", "residentialPhone", emptyToNull],
+    ["commercial_phone", "commercialPhone", emptyToNull],
+    ["notes", "notes", emptyToNull],
+  ];
+  for (const [source, target, transform] of map) {
+    if (source in input) data[target] = transform(input[source]);
+  }
+  if ("address_json" in input) data.addressJson = input.address_json ?? {};
+  return data;
+}
+
+async function ensureMysqlOwner(companyId: string, ownerId: string | null) {
+  if (!ownerId) return null;
+  const owner = await prisma().propertyOwner.findFirst({ where: { id: ownerId, companyId }, select: { id: true } });
+  if (!owner) {
+    throw Object.assign(new Error("Proprietário inválido para esta empresa."), {
+      statusCode: 422,
+      code: "INVALID_OWNER",
+    });
+  }
+  return owner.id;
+}
+
+async function generateMysqlPropertyCode(companyId: string) {
+  const year = new Date().getFullYear();
+  const count = await prisma().property.count({ where: { companyId } });
+  return `IMB-${year}-${String(count + 1).padStart(5, "0")}`;
+}
+
+async function ensureMysqlPropertyCodeAvailable(companyId: string, code: string | null | undefined, exceptPropertyId?: string) {
+  const normalizedCode = code?.trim();
+  if (!normalizedCode) return;
+  const duplicate = await prisma().property.findFirst({
+    where: {
+      companyId,
+      code: normalizedCode,
+      ...(exceptPropertyId ? { id: { not: exceptPropertyId } } : {}),
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw Object.assign(new Error("Já existe um imóvel cadastrado com este código nesta empresa."), {
+      statusCode: 409,
+      code: "DUPLICATE_PROPERTY_CODE",
+    });
+  }
+}
+
+async function upsertOwnerLink(client: PrismaClient, companyId: string, propertyId: string, ownerId: string) {
+  await client.propertyOwnerLink.upsert({
+    where: {
+      companyId_propertyId_ownerId: { companyId, propertyId, ownerId },
+    },
+    create: { companyId, propertyId, ownerId, isMainOwner: true },
+    update: { isMainOwner: true },
+  });
+}
+
+function publicSiteNotFound() {
+  return Object.assign(new Error("Site não encontrado."), {
+    statusCode: 404,
+    code: "PUBLIC_SITE_NOT_FOUND",
+  });
+}
+
+function slugify(value: string) {
+  return (
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "imovel"
+  );
+}
+
+function emptyToNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim();
+  return cleaned ? cleaned : null;
+}
+
+function numberOrNull(value: unknown) {
+  return value === undefined || value === null || value === "" ? null : Number(value);
+}
+
+function uuidOrNull(value: unknown) {
+  return typeof value === "string" && isUuid(value) ? value : null;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function toIso(value: Date | string | null | undefined) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
