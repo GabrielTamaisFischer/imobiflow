@@ -41,6 +41,15 @@ type ParsedImportContent = {
   zip_media_files?: ParsedImportMediaFile[];
 };
 
+export const IMPORT_INPUT_LIMITS = Object.freeze({
+  maxFileBytes: 10 * 1024 * 1024,
+  maxRows: 10_000,
+  maxZipEntries: 2_000,
+  maxZipUncompressedBytes: 100 * 1024 * 1024,
+  maxJsonDepth: 32,
+  parseTimeoutMs: 30_000,
+});
+
 const fieldAliases: Record<string, string[]> = {
   owner_name: ["proprietario", "proprietario nome", "nome proprietario", "owner", "owner name", "contact name", "listing contact name"],
   owner_document: ["cpf", "cnpj", "cpf cnpj", "documento", "documento proprietario", "owner document"],
@@ -113,6 +122,7 @@ const statusMap: Record<string, string> = {
 };
 
 export function previewCsvImport(input: ImportPreviewInput) {
+  assertFileSize(input.contentBase64);
   const text = decodeBase64Text(input.contentBase64);
   return buildImportPreview({
     input: { ...input, sourceType: "csv" },
@@ -129,11 +139,14 @@ export function parseFullCsvImport(input: ImportPreviewInput) {
 }
 
 export async function previewDataImport(input: ImportPreviewInput) {
+  assertFileSize(input.contentBase64);
   const sourceType = input.sourceType ?? detectSourceType(input.fileName);
-  const parsed = await parseImportContent(input.contentBase64, sourceType, {
-    delimiter: input.delimiter,
-    includeMediaContent: Boolean(input.includeMediaContent),
-  });
+  const parsed = await withImportTimeout(
+    parseImportContent(input.contentBase64, sourceType, {
+      delimiter: input.delimiter,
+      includeMediaContent: Boolean(input.includeMediaContent),
+    }),
+  );
   return buildImportPreview({ input: { ...input, sourceType }, parsed });
 }
 
@@ -151,6 +164,13 @@ function buildImportPreview(input: {
 }) {
   const sourceType = input.input.sourceType;
   const parsed = input.parsed;
+  if (parsed.rows.length > IMPORT_INPUT_LIMITS.maxRows) {
+    throw importInputError(
+      "IMPORT_ROW_LIMIT_EXCEEDED",
+      `O arquivo excede o limite de ${IMPORT_INPUT_LIMITS.maxRows} registros por job.`,
+      413,
+    );
+  }
   const headers = parsed.headers;
   const mapping = applyMappingOverride(suggestMapping(headers), headers, input.input.mappingOverride);
   const rows = parsed.rows.slice(0, input.input.maxRows ?? parsed.rows.length).map((row, index) => {
@@ -338,6 +358,7 @@ function parseCsv(csv: string, delimiter: string) {
 
 function parseJsonImport(jsonText: string) {
   const parsed = JSON.parse(jsonText) as unknown;
+  assertJsonDepth(parsed);
   const items = extractJsonItems(parsed);
   const rows = items.map(jsonItemToRow);
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
@@ -407,6 +428,21 @@ async function parseZipImport(
 ): Promise<ParsedImportContent> {
   const zip = await JSZip.loadAsync(decodeBase64Buffer(contentBase64));
   const files = Object.values(zip.files).filter((file) => !file.dir && !isHiddenZipFile(file.name));
+  if (files.length > IMPORT_INPUT_LIMITS.maxZipEntries) {
+    throw importInputError(
+      "ZIP_ENTRY_LIMIT_EXCEEDED",
+      `O ZIP excede o limite de ${IMPORT_INPUT_LIMITS.maxZipEntries} arquivos.`,
+      413,
+    );
+  }
+  const declaredBytes = files.reduce((total, file) => total + zipDeclaredUncompressedSize(file), 0);
+  if (declaredBytes > IMPORT_INPUT_LIMITS.maxZipUncompressedBytes) {
+    throw importInputError(
+      "ZIP_UNCOMPRESSED_LIMIT_EXCEEDED",
+      "O conteudo descompactado do ZIP excede 100 MB.",
+      413,
+    );
+  }
   const dataFile = findZipDataFile(files);
 
   if (!dataFile) {
@@ -751,6 +787,60 @@ function decodeBase64Text(content: string) {
 function decodeBase64Buffer(content: string) {
   const base64 = content.includes(",") ? content.split(",").at(-1) : content;
   return Buffer.from(base64 ?? "", "base64");
+}
+
+function assertFileSize(contentBase64: string) {
+  const size = decodeBase64Buffer(contentBase64).length;
+  if (size === 0) throw importInputError("IMPORT_FILE_EMPTY", "O arquivo de importacao esta vazio.", 422);
+  if (size > IMPORT_INPUT_LIMITS.maxFileBytes) {
+    throw importInputError("IMPORT_FILE_TOO_LARGE", "O arquivo excede o limite de 10 MB.", 413);
+  }
+}
+
+function assertJsonDepth(value: unknown) {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 1 }];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    if (current.depth > IMPORT_INPUT_LIMITS.maxJsonDepth) {
+      throw importInputError(
+        "JSON_DEPTH_LIMIT_EXCEEDED",
+        `O JSON excede a profundidade maxima de ${IMPORT_INPUT_LIMITS.maxJsonDepth} niveis.`,
+        422,
+      );
+    }
+    if (Array.isArray(current.value)) {
+      current.value.forEach((child) => stack.push({ value: child, depth: current.depth + 1 }));
+    } else if (isRecord(current.value)) {
+      Object.values(current.value).forEach((child) => stack.push({ value: child, depth: current.depth + 1 }));
+    }
+  }
+}
+
+function zipDeclaredUncompressedSize(file: JSZip.JSZipObject) {
+  const internal = file as unknown as { _data?: { uncompressedSize?: number } };
+  const size = Number(internal._data?.uncompressedSize ?? 0);
+  return Number.isFinite(size) && size > 0 ? size : 0;
+}
+
+async function withImportTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(importInputError("IMPORT_PARSE_TIMEOUT", "O parser excedeu o tempo limite de 30 segundos.", 408)),
+          IMPORT_INPUT_LIMITS.parseTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function importInputError(code: string, message: string, statusCode: number) {
+  return Object.assign(new Error(message), { code, statusCode });
 }
 
 function detectDelimiter(csv: string) {

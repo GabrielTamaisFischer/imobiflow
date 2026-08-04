@@ -17,6 +17,10 @@
     "website-builder:preflight": "node scripts/website-builder-preflight.mjs",
     "website-builder:preflight:strict": "node scripts/website-builder-preflight.mjs --strict",
     "production:qa-smoke": "node scripts/production-qa-smoke.mjs",
+    "import:staging:fixtures:50": "node scripts/generate-import-staging-fixtures.mjs --count=50",
+    "import:staging:fixtures:500": "node scripts/generate-import-staging-fixtures.mjs --count=500",
+    "import:staging:validate:50": "node scripts/run-import-staging-validation.mjs --count=50",
+    "import:staging:validate:500": "node scripts/run-import-staging-validation.mjs --count=500",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

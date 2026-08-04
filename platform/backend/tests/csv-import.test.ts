@@ -256,4 +256,53 @@ describe("csv import parser", () => {
       }),
     ]);
   });
+
+  it("rejeita arquivo acima do limite antes de executar o parser", async () => {
+    await expect(
+      previewDataImport({
+        fileName: "grande.csv",
+        contentBase64: Buffer.alloc(10 * 1024 * 1024 + 1, "a").toString("base64"),
+        importType: "properties",
+      }),
+    ).rejects.toMatchObject({ code: "IMPORT_FILE_TOO_LARGE", statusCode: 413 });
+  });
+
+  it("rejeita JSON excessivamente profundo", async () => {
+    let nested: unknown = "fim";
+    for (let depth = 0; depth < 33; depth += 1) nested = { child: nested };
+
+    await expect(
+      previewDataImport({
+        fileName: "profundo.json",
+        contentBase64: b64(JSON.stringify(nested)),
+        importType: "properties",
+      }),
+    ).rejects.toMatchObject({ code: "JSON_DEPTH_LIMIT_EXCEEDED", statusCode: 422 });
+  });
+
+  it("rejeita mais de dez mil registros por job", async () => {
+    const rows = ["Codigo;Titulo"];
+    for (let index = 0; index < 10_001; index += 1) rows.push(`LIMIT-${index};Imovel ${index}`);
+
+    await expect(
+      previewDataImport({
+        fileName: "muitas-linhas.csv",
+        contentBase64: b64(rows.join("\n")),
+        importType: "properties",
+      }),
+    ).rejects.toMatchObject({ code: "IMPORT_ROW_LIMIT_EXCEEDED", statusCode: 413 });
+  });
+
+  it("rejeita ZIP com quantidade excessiva de entradas", async () => {
+    const files: Record<string, string> = { "base.csv": "Codigo;Titulo\nZIP-1;Imovel" };
+    for (let index = 0; index < 2_000; index += 1) files[`extras/${index}.txt`] = "x";
+
+    await expect(
+      previewDataImport({
+        fileName: "muitas-entradas.zip",
+        contentBase64: await zipB64(files),
+        importType: "properties",
+      }),
+    ).rejects.toMatchObject({ code: "ZIP_ENTRY_LIMIT_EXCEEDED", statusCode: 413 });
+  });
 });
