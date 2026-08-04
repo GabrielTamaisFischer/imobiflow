@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   listImports,
+  processNextImportBatch,
   previewImport,
+  retryFailedImport,
+  rollbackImport,
   startImport,
   type ImportJob,
   type ImportPreview,
@@ -29,6 +32,8 @@ function ImportsPage() {
   const [sourceType, setSourceType] = useState<ImportSourceType>("csv");
   const [importType, setImportType] = useState<ImportType>("owners_properties");
   const [allowPartial, setAllowPartial] = useState(false);
+  const [mode, setMode] = useState<"test" | "full">("test");
+  const [confirmFullImport, setConfirmFullImport] = useState(false);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [isBusy, setIsBusy] = useState(false);
@@ -123,14 +128,32 @@ function ImportsPage() {
         source_type: sourceType,
         mapping_json: mapping,
         allow_partial: allowPartial,
+        mode,
+        confirm_full_import: confirmFullImport,
       });
       setSuccess(
-        `Importação concluída: ${response.result.imported_properties} imóveis, ${response.result.imported_owners} proprietários e ${response.result.imported_media} fotos por URL processados.`,
+        `Primeiro lote processado: ${response.import.processed_rows}/${response.import.total_rows} registros.`,
       );
       setPreview(null);
       await refreshImports();
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "Não foi possível iniciar a importação.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleJobAction(job: ImportJob, action: "next" | "retry" | "rollback") {
+    if (action === "rollback" && !window.confirm("Confirma o rollback somente dos dados criados por esta importação?")) return;
+    setIsBusy(true);
+    setError(null);
+    try {
+      if (action === "next") await processNextImportBatch(job.id);
+      else if (action === "retry") await retryFailedImport(job.id);
+      else await rollbackImport(job.id);
+      await refreshImports();
+    } catch (jobError) {
+      setError(jobError instanceof Error ? jobError.message : "Falha ao atualizar a importação.");
     } finally {
       setIsBusy(false);
     }
@@ -289,8 +312,21 @@ function ImportsPage() {
             </table>
           </div>
 
-          <div className="mt-4 flex justify-end">
-            <Button type="button" onClick={handleStart} disabled={isBusy || preview.valid_rows === 0}>
+          <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={mode === "test"} onChange={() => { setMode("test"); setConfirmFullImport(false); }} />
+                Teste (máximo de 50 imóveis)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={mode === "full"} onChange={() => setMode("full")} /> Importação completa
+              </label>
+              {mode === "full" ? <label className="flex items-center gap-2 text-destructive">
+                <input type="checkbox" checked={confirmFullImport} onChange={(event) => setConfirmFullImport(event.target.checked)} />
+                Confirmo explicitamente a importação completa
+              </label> : null}
+            </div>
+            <Button type="button" onClick={handleStart} disabled={isBusy || preview.valid_rows === 0 || (mode === "full" && !confirmFullImport)}>
               {isBusy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
               Confirmar importação
             </Button>
@@ -305,12 +341,19 @@ function ImportsPage() {
             {jobs.map((job) => (
               <div key={job.id} className="flex flex-col gap-2 rounded-md border border-border p-3 text-sm md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p className="font-medium">{job.file_name}</p>
+                  <p className="font-medium">{job.source_name}</p>
                   <p className="text-muted-foreground">
-                    {job.total_rows} linhas, {job.imported_properties} imóveis, {job.imported_owners} proprietários.
+                    {job.processed_rows}/{job.total_rows} processados ({job.total_rows ? Math.round((job.processed_rows / job.total_rows) * 100) : 0}%), {job.imported_rows} importados, {job.duplicate_rows} duplicados e {job.failed_rows} falhas.
                   </p>
+                  <p className="text-xs text-muted-foreground">Modo {job.mode}; lote {job.batch_size}; cursor {job.next_cursor}; fotos {job.imported_photos} ok/{job.failed_photos} falhas.</p>
+                  {job.last_error ? <p className="text-xs text-destructive">Último erro: {job.last_error}</p> : null}
                 </div>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium">{job.status}</span>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium">{job.status}</span>
+                  {job.status !== "COMPLETED" && job.status !== "CANCELED" ? <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void handleJobAction(job, "next")}>Processar próximo lote</Button> : null}
+                  {job.failed_rows > 0 ? <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void handleJobAction(job, "retry")}>Tentar falhas novamente</Button> : null}
+                  {job.status !== "CANCELED" ? <Button size="sm" variant="destructive" disabled={isBusy} onClick={() => void handleJobAction(job, "rollback")}>Rollback</Button> : null}
+                </div>
               </div>
             ))}
           </div>
@@ -368,4 +411,6 @@ const importFieldOptions = [
   { key: "sale_price_cents", label: "Valor de venda" },
   { key: "rent_price_cents", label: "Valor de aluguel" },
   { key: "media_urls", label: "URLs de fotos" },
+  { key: "video_url", label: "URL de vídeo" },
+  { key: "tour_url", label: "URL de tour virtual" },
 ];

@@ -32,14 +32,21 @@ export type ImportJob = {
   id: string;
   import_type: ImportType;
   source_type: string;
-  file_name: string;
+  source_name: string;
+  mode: "test" | "full";
   status: string;
   total_rows: number;
-  valid_rows: number;
-  invalid_rows: number;
-  imported_owners: number;
-  imported_properties: number;
+  processed_rows: number;
+  imported_rows: number;
+  updated_rows: number;
+  duplicate_rows: number;
+  failed_rows: number;
+  imported_photos: number;
+  failed_photos: number;
   skipped_rows: number;
+  batch_size: number;
+  next_cursor: number;
+  last_error: string | null;
   created_at: string;
   finished_at: string | null;
 };
@@ -65,21 +72,34 @@ export async function startImport(input: {
   source_type?: ImportSourceType;
   mapping_json?: Record<string, string>;
   allow_partial: boolean;
+  mode: "test" | "full";
+  confirm_full_import: boolean;
+  batch_size?: number;
 }) {
-  return apiRequest<{
-    import: ImportJob;
-    result: {
-      imported_owners: number;
-      imported_properties: number;
-      imported_media: number;
-      skipped_rows: number;
-      failed_rows: number;
-      errors: Array<{ row_number: number; errors: string[] }>;
-    };
-  }>("/imports/start", {
+  return apiRequest<ImportReport>("/imports/start", {
     method: "POST",
     token: getStoredToken() ?? undefined,
     body: JSON.stringify(input),
+  });
+}
+
+export type ImportReport = {
+  import: ImportJob;
+  failures: Array<{ row_number: number; external_id: string | null; error_code: string | null; error_message: string | null }>;
+  has_pending_batches: boolean;
+};
+
+export function processNextImportBatch(id: string) {
+  return apiRequest<ImportReport>(`/imports/${id}/process-next-batch`, { method: "POST", token: getStoredToken() ?? undefined });
+}
+
+export function retryFailedImport(id: string) {
+  return apiRequest<ImportReport>(`/imports/${id}/retry-failed`, { method: "POST", token: getStoredToken() ?? undefined });
+}
+
+export function rollbackImport(id: string) {
+  return apiRequest<{ import: ImportJob; rollback: Record<string, number> }>(`/imports/${id}/rollback`, {
+    method: "POST", token: getStoredToken() ?? undefined, body: JSON.stringify({ confirm_rollback: true }),
   });
 }
 

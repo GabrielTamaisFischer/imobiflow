@@ -20,6 +20,10 @@ type StoredFileRecord = {
   uploadedBy: string | null;
   isTestData: boolean;
   testBatchId: string | null;
+  sourceUrl: string | null;
+  importJobId: string | null;
+  importSource: string | null;
+  metadataJson: unknown;
 };
 
 type StoredFileDelegate = {
@@ -36,6 +40,10 @@ export async function createStoredFileRecord(input: {
   uploadedBy?: string | null;
   isTestData?: boolean;
   testBatchId?: string | null;
+  sourceUrl?: string | null;
+  importJobId?: string | null;
+  importSource?: string | null;
+  metadata?: Record<string, unknown> | null;
 }) {
   return storedFileDelegate().create({
     data: {
@@ -55,6 +63,10 @@ export async function createStoredFileRecord(input: {
       uploadedBy: input.uploadedBy ?? null,
       isTestData: Boolean(input.isTestData),
       testBatchId: input.testBatchId ?? null,
+      sourceUrl: input.sourceUrl ?? null,
+      importJobId: input.importJobId ?? null,
+      importSource: input.importSource ?? null,
+      metadataJson: input.metadata ?? undefined,
     },
   });
 }

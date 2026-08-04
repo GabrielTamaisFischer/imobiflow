@@ -70,6 +70,8 @@ const fieldAliases: Record<string, string[]> = {
   condominium_fee_cents: ["condominio", "condomínio", "condominium", "condominium fee"],
   iptu_cents: ["iptu", "property tax"],
   media_urls: ["fotos", "foto urls", "urls fotos", "imagens", "image urls", "media urls", "image", "images", "media item"],
+  video_url: ["video", "video url", "url video", "youtube", "vimeo"],
+  tour_url: ["tour", "tour url", "tour virtual", "virtual tour", "360 url"],
 };
 
 const propertyTypeMap: Record<string, string> = {
@@ -216,6 +218,8 @@ function validateImportRow(input: {
     condominium_fee_cents: parseMoneyCents(readMapped(input.raw, input.mapping.condominium_fee_cents)),
     iptu_cents: parseMoneyCents(readMapped(input.raw, input.mapping.iptu_cents)),
     media_urls: parseUrlList(readMapped(input.raw, input.mapping.media_urls)),
+    video_url: readMapped(input.raw, input.mapping.video_url),
+    tour_url: readMapped(input.raw, input.mapping.tour_url),
   };
   const errors: string[] = [];
 
@@ -232,6 +236,8 @@ function validateImportRow(input: {
   }
 
   const invalidUrls = (property.media_urls ?? []).filter((url) => !isValidHttpUrl(url));
+  if (property.video_url && !isValidHttpUrl(property.video_url)) invalidUrls.push(property.video_url);
+  if (property.tour_url && !isValidHttpUrl(property.tour_url)) invalidUrls.push(property.tour_url);
   if (invalidUrls.length > 0) {
     errors.push("Uma ou mais URLs de foto sao invalidas.");
   }

@@ -24,6 +24,8 @@ model Company {
   leads         Lead[]
   siteLeads     SiteLead[]
   appointments  Appointment[]
+  importJobs    ImportJob[]
+  importRows    ImportRow[]
 
   @@index([status])
   @@map("companies")
@@ -135,6 +137,10 @@ model Property {
   suites                  Int?
   parkingSpaces           Int?            @map("parking_spaces")
   publishedAt             DateTime?       @map("published_at")
+  importSource            String?         @map("import_source") @db.VarChar(80)
+  importExternalId        String?         @map("import_external_id") @db.VarChar(180)
+  importJobId             String?         @map("import_job_id") @db.Char(36)
+  importedAt              DateTime?       @map("imported_at")
   createdAt               DateTime        @default(now()) @map("created_at")
   updatedAt               DateTime        @updatedAt @map("updated_at")
   company                 Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -142,11 +148,15 @@ model Property {
   media                   PropertyMedia[]
   siteLeads               SiteLead[]
   appointments            Appointment[]
+  importJob               ImportJob?      @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+  importRows              ImportRow[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
   @@index([companyId, operation])
   @@index([companyId, city, neighborhood])
+  @@index([companyId, importSource, importExternalId])
+  @@index([companyId, importJobId])
   @@map("properties")
 }
 
@@ -202,11 +212,84 @@ model StoredFile {
   uploadedBy       String?  @map("uploaded_by") @db.Char(36)
   isTestData       Boolean  @default(false) @map("is_test_data")
   testBatchId      String?  @map("test_batch_id") @db.VarChar(120)
+  sourceUrl        String?  @map("source_url") @db.VarChar(1200)
+  importJobId      String?  @map("import_job_id") @db.Char(36)
+  importSource     String?  @map("import_source") @db.VarChar(80)
+  metadataJson     Json?    @map("metadata_json")
 
   @@unique([provider, publicId])
   @@index([companyId, entityType, entityId])
   @@index([companyId, isTestData, testBatchId])
+  @@index([companyId, importJobId])
   @@map("stored_files")
+}
+
+model ImportJob {
+  id                String      @id @default(uuid()) @db.Char(36)
+  companyId         String      @map("company_id") @db.Char(36)
+  createdBy         String?     @map("created_by") @db.Char(36)
+  importType        String      @default("owners_properties") @map("import_type") @db.VarChar(40)
+  sourceType        String      @map("source_type") @db.VarChar(40)
+  sourceName        String      @map("source_name") @db.VarChar(240)
+  mode              String      @default("test") @db.VarChar(20)
+  status            String      @default("PENDING") @db.VarChar(40)
+  totalRows         Int         @default(0) @map("total_rows")
+  processedRows     Int         @default(0) @map("processed_rows")
+  importedRows      Int         @default(0) @map("imported_rows")
+  updatedRows       Int         @default(0) @map("updated_rows")
+  skippedRows       Int         @default(0) @map("skipped_rows")
+  duplicateRows     Int         @default(0) @map("duplicate_rows")
+  failedRows        Int         @default(0) @map("failed_rows")
+  importedPhotos    Int         @default(0) @map("imported_photos")
+  failedPhotos      Int         @default(0) @map("failed_photos")
+  batchSize         Int         @default(25) @map("batch_size")
+  nextCursor        Int         @default(1) @map("next_cursor")
+  confirmFullImport Boolean     @default(false) @map("confirm_full_import")
+  mappingJson       Json        @map("mapping_json")
+  metadataJson      Json        @map("metadata_json")
+  startedAt         DateTime?   @map("started_at")
+  finishedAt        DateTime?   @map("finished_at")
+  lastError         String?     @map("last_error") @db.Text
+  lockToken         String?     @map("lock_token") @db.Char(36)
+  lockExpiresAt     DateTime?   @map("lock_expires_at")
+  rolledBackAt      DateTime?   @map("rolled_back_at")
+  rollbackJson      Json?       @map("rollback_json")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  rows              ImportRow[]
+  properties        Property[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, updatedAt])
+  @@map("import_jobs")
+}
+
+model ImportRow {
+  id                String      @id @default(uuid()) @db.Char(36)
+  importJobId       String      @map("import_job_id") @db.Char(36)
+  companyId         String      @map("company_id") @db.Char(36)
+  rowNumber         Int         @map("row_number")
+  externalId        String?     @map("external_id") @db.VarChar(180)
+  status            String      @default("PENDING") @db.VarChar(40)
+  action            String?     @db.VarChar(40)
+  propertyId        String?     @map("property_id") @db.Char(36)
+  ownerId           String?     @map("owner_id") @db.Char(36)
+  errorCode         String?     @map("error_code") @db.VarChar(100)
+  errorMessage      String?     @map("error_message") @db.Text
+  sourcePayloadJson Json        @map("source_payload_json")
+  mappedDataJson    Json        @map("mapped_data_json")
+  processedAt       DateTime?   @map("processed_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  job               ImportJob   @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property          Property?   @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@unique([importJobId, rowNumber])
+  @@index([companyId, importJobId, status, rowNumber])
+  @@index([companyId, externalId])
+  @@map("import_rows")
 }
 
 model CompanySite {
