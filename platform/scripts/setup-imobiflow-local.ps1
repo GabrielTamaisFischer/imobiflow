@@ -240,12 +240,21 @@ $supabaseAnon = $existingEnv["SUPABASE_ANON_KEY"]
 $supabaseService = $existingEnv["SUPABASE_SERVICE_ROLE_KEY"]
 $storageProviderValue = if ($existingEnv["STORAGE_PROVIDER"]) { $existingEnv["STORAGE_PROVIDER"] } else { "cloudinary" }
 $cloudinaryUploadFolderValue = if ($existingEnv["CLOUDINARY_UPLOAD_FOLDER"]) { $existingEnv["CLOUDINARY_UPLOAD_FOLDER"] } else { "imobiflow" }
+$localDevTokenBytes = New-Object byte[] 48
+$localDevTokenGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+  $localDevTokenGenerator.GetBytes($localDevTokenBytes)
+}
+finally {
+  $localDevTokenGenerator.Dispose()
+}
+$localDevTokenValue = ([Convert]::ToBase64String($localDevTokenBytes).TrimEnd("=") -replace '\+', '-' -replace '/', '_')
 
 $rootEnvLines = @(
   "VITE_IMOBIFLOW_API_URL=http://localhost:3333",
   "DATABASE_URL=$DatabaseUrl",
   "VITE_IMOBIFLOW_LOCAL_DEV_AUTH=true",
-  "VITE_IMOBIFLOW_LOCAL_DEV_TOKEN=imobiflow.local_dev_access",
+  "VITE_IMOBIFLOW_LOCAL_DEV_TOKEN=$localDevTokenValue",
   "STORAGE_PROVIDER=$storageProviderValue",
   "CLOUDINARY_CLOUD_NAME=$($existingEnv["CLOUDINARY_CLOUD_NAME"])",
   "CLOUDINARY_API_KEY=$($existingEnv["CLOUDINARY_API_KEY"])",
@@ -257,12 +266,14 @@ $rootEnvLines = @(
 
 $backendEnvLines = @(
   "PORT=3333",
+  "NODE_ENV=development",
   "APP_URL=http://localhost:5173",
   "DATABASE_URL=$DatabaseUrl",
   "IMOBIFLOW_LOCAL_DEV_AUTH=true",
-  "IMOBIFLOW_LOCAL_DEV_TOKEN=imobiflow.local_dev_access",
+  "IMOBIFLOW_LOCAL_DEV_TOKEN=$localDevTokenValue",
   "IMOBIFLOW_LOCAL_DEV_COMPANY_ID=local-company",
   "IMOBIFLOW_LOCAL_DEV_USER_ID=local-user",
+  "IMOBIFLOW_LOCAL_DEV_ROLE=owner",
   "SUPABASE_URL=$supabaseUrl",
   "SUPABASE_ANON_KEY=$supabaseAnon",
   "SUPABASE_SERVICE_ROLE_KEY=$supabaseService",
@@ -362,7 +373,7 @@ if (-not $SkipStart) {
   Write-Step "Testando CRUD local do Website Builder"
   try {
     $localHeaders = @{
-      Authorization = "Bearer imobiflow.local_dev_access"
+      Authorization = "Bearer $localDevTokenValue"
       "Content-Type" = "application/json"
     }
     $authorization = Invoke-RestMethod -Method Get -Uri "http://localhost:3333/me/authorization" -Headers $localHeaders

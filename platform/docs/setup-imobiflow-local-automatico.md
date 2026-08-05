@@ -95,11 +95,12 @@ Para acelerar os testes antes da VPS e do Supabase real, o script grava:
 
 ```txt
 VITE_IMOBIFLOW_LOCAL_DEV_AUTH=true
-VITE_IMOBIFLOW_LOCAL_DEV_TOKEN=imobiflow.local_dev_access
+VITE_IMOBIFLOW_LOCAL_DEV_TOKEN=<segredo-aleatorio-gerado-pelo-script>
 IMOBIFLOW_LOCAL_DEV_AUTH=true
-IMOBIFLOW_LOCAL_DEV_TOKEN=imobiflow.local_dev_access
+IMOBIFLOW_LOCAL_DEV_TOKEN=<mesmo-segredo-aleatorio-gerado-pelo-script>
 IMOBIFLOW_LOCAL_DEV_COMPANY_ID=local-company
 IMOBIFLOW_LOCAL_DEV_USER_ID=local-user
+IMOBIFLOW_LOCAL_DEV_ROLE=owner
 ```
 
 Esse acesso só funciona fora de produção e serve para testar banco, migrations, Website Builder, CRUD e APIs protegidas localmente. Em produção, o backend continua dependendo de autenticação real, empresa, assinatura ativa e permissões.

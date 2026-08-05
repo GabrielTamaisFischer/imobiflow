@@ -4,7 +4,7 @@ import { isPreviewAccessAllowed, isStoredPreviewTokenAllowed, previewAccessToken
 const tokenKey = "imobiflow.access_token";
 const previewUserKey = "imobiflow.preview_user";
 const previewToken = previewAccessToken;
-const localDevToken = import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_TOKEN || "imobiflow.local_dev_access";
+const localDevToken = import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_TOKEN?.trim() || "";
 const demoAccessEmail = "gtamaisfischer@gmail.com";
 const demoAccessPasswordHash = "568c3c475d919820cc93717fe9a13a44df01d7f6b617d65f29aa202a4f3d9af7";
 
@@ -97,7 +97,12 @@ export function storePreviewAccess() {
 }
 
 export function isLocalDevAccessEnabled() {
-  return !import.meta.env.PROD && import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_AUTH === "true";
+  return (
+    !import.meta.env.PROD &&
+    import.meta.env.DEV &&
+    import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_AUTH === "true" &&
+    localDevToken.length >= 32
+  );
 }
 
 export function storeLocalDevAccess() {

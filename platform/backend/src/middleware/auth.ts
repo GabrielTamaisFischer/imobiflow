@@ -17,7 +17,12 @@ export async function requireAuth(req: RequestWithAccess, res: Response, next: N
       return res.status(401).json({ error: "AUTH_REQUIRED", message: "Login obrigatório." });
     }
 
-    const localDevAccess = buildLocalDevAccessContext(token);
+    const localDevAccess = buildLocalDevAccessContext(token, {
+      hostname: req.hostname,
+      remoteAddress: req.socket.remoteAddress,
+      forwardedHost: req.get("x-forwarded-host"),
+      forwardedFor: req.get("x-forwarded-for"),
+    });
     if (localDevAccess) {
       req.access = localDevAccess;
       return next();
