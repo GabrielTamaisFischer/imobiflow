@@ -426,6 +426,11 @@ function WebsiteBuilderCodeEditorPage() {
                 );
               })}
             </div>
+            {selectedFile?.language === "javascript" ? (
+              <div className="border-b border-amber-300/20 bg-amber-400/10 px-4 py-3 text-xs leading-5 text-amber-100">
+                JavaScript personalizado é salvo no MySQL, mas não é executado no editor nem nas prévias da plataforma por segurança.
+              </div>
+            ) : null}
             <div className="min-h-0 flex-1">
               <Editor
                 height="100%"
@@ -509,7 +514,7 @@ function WebsiteBuilderCodeEditorPage() {
               Esta tela mostra a estrutura tecnica do site ativo: paginas, componentes, estilos, dados, SEO, assets e integracoes. Use para ajustes finos quando souber mexer em codigo.
             </p>
             <p className="mt-3 text-xs leading-5 text-amber-50/75">
-              Segurança: scripts com acesso a cookies, localStorage, sessionStorage, indexedDB, eval ou Function são bloqueados pelo backend antes de salvar.
+              Segurança: JavaScript e tracking podem ser salvos, mas não executam no editor ou no preview. A execução futura exigirá uma origem pública isolada, sem sessão autenticada da plataforma.
             </p>
           </div>
         </aside>

@@ -23,6 +23,7 @@ import {
   type WebsiteBuilderWebsite,
 } from "@/product/website-builder";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { BUILDER_VISUAL_PREVIEW_SANDBOX } from "@/product/website-preview-security";
 
 export const Route = createFileRoute("/app/site/builder/preview/$websiteId")({
   component: WebsiteBuilderPreviewPage,
@@ -214,7 +215,13 @@ function WebsiteBuilderPreviewPage() {
       <section className="min-h-0 flex-1 overflow-auto bg-neutral-900 px-4 py-4">
         <div className={viewportFrameClass(viewport)} data-loaded-properties={properties.length}>
           <div className="h-[calc(100vh-96px)] overflow-hidden rounded-lg border border-white/10 bg-white shadow-2xl">
-            <iframe className="h-full w-full border-0 bg-white" src={livePreviewUrl} title="Prévia real do site" />
+            <iframe
+              className="h-full w-full border-0 bg-white"
+              sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
+              referrerPolicy="no-referrer"
+              src={livePreviewUrl}
+              title="Prévia real do site"
+            />
           </div>
         </div>
       </section>

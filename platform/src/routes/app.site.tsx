@@ -31,6 +31,7 @@ import {
   type SiteLead,
 } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { BUILDER_VISUAL_PREVIEW_SANDBOX } from "@/product/website-preview-security";
 import {
   createBlankWebsite,
   createWebsiteBuilderWebsite,
@@ -780,7 +781,14 @@ function SiteProjectPreview({ url, title }: { url: string; title: string }) {
         <span className="ml-2 truncate rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/65">Projeto - {title}</span>
       </div>
       <div className="relative h-[320px] overflow-hidden bg-neutral-950 sm:h-[380px]">
-        <iframe className="h-[760px] w-[200%] origin-top-left scale-50 border-0" src={url} title={`Preview ${title}`} loading="lazy" />
+        <iframe
+          className="h-[760px] w-[200%] origin-top-left scale-50 border-0"
+          sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
+          referrerPolicy="no-referrer"
+          src={url}
+          title={`Preview ${title}`}
+          loading="lazy"
+        />
         <a className="absolute inset-0" href={url} target="_blank" rel="noreferrer" aria-label={`Abrir preview ${title}`} />
       </div>
     </div>
@@ -801,6 +809,8 @@ function SiteTemplateLivePreview({ url, template, compact = false }: { url: stri
       <div className={compact ? "relative h-[300px] overflow-hidden bg-neutral-950 sm:h-[340px]" : "relative h-[360px] overflow-hidden bg-neutral-950 sm:h-[420px]"}>
         <iframe
           className={compact ? "h-[680px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]" : "h-[840px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"}
+          sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
+          referrerPolicy="no-referrer"
           src={url}
           title={`Preview ${template.name}`}
           loading="lazy"

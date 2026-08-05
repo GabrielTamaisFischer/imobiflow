@@ -56,6 +56,11 @@ import {
   type WebsiteBuilderWebsite,
 } from "@/product/website-builder";
 import { useSessionGuard } from "@/product/use-session-guard";
+import {
+  BUILDER_EDITOR_SANDBOX,
+  createSandboxedBuilderPreviewDocument,
+  sanitizeBuilderPreviewHtml,
+} from "@/product/website-preview-security";
 
 export const Route = createFileRoute("/app/site/builder/editor/$websiteId")({
   component: WebsiteBuilderVisualEditorPage,
@@ -1554,15 +1559,16 @@ function WebsiteBuilderVisualEditorWorkspace() {
           element.removeAttribute("data-imobiflow-editor-layer");
         });
 
-      return `<!doctype html>${parsed.documentElement.outerHTML}`;
+      return sanitizeBuilderPreviewHtml(`<!doctype html>${parsed.documentElement.outerHTML}`);
     } catch {
-      return html;
+      return sanitizeBuilderPreviewHtml(html);
     }
   }
 
   function openHtmlPreviewInNewTab(html: string) {
     if (!html.trim()) return;
-    const blob = new Blob([cleanStandalonePreviewHtml(html)], { type: "text/html;charset=utf-8" });
+    const safePreviewDocument = createSandboxedBuilderPreviewDocument(cleanStandalonePreviewHtml(html));
+    const blob = new Blob([safePreviewDocument], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const opened = window.open(url, "_blank", "noopener,noreferrer");
     if (!opened) {
@@ -1594,7 +1600,7 @@ function WebsiteBuilderVisualEditorWorkspace() {
       const response = await updateWebsiteBuilderWebsite(website.id, {
         settings_json: {
           ...website.settingsJson,
-          builder_canvas_html: snapshotHtml,
+          builder_canvas_html: sanitizeBuilderPreviewHtml(snapshotHtml),
           builder_canvas_page_id: selectedPage?.id ?? "",
           builder_canvas_saved_at: new Date().toISOString(),
         },
@@ -4090,7 +4096,13 @@ function LiveSiteInspectorFrame({
   const redoHistoryRef = useRef<string[]>([]);
   const lastSnapshotRef = useRef("");
   const safeSrc = isBuilderSafeSitePreviewUrl(src) ? src : defaultPublicSitePreviewUrl;
-  const iframeKey = snapshotHtml ? `snapshot-${snapshotHtml.length}-${snapshotHtml.slice(0, 80)}` : `src-${safeSrc}`;
+  const safeSnapshotHtml = useMemo(
+    () => (snapshotHtml ? sanitizeBuilderPreviewHtml(snapshotHtml) : ""),
+    [snapshotHtml],
+  );
+  const iframeKey = safeSnapshotHtml
+    ? `snapshot-${safeSnapshotHtml.length}-${safeSnapshotHtml.slice(0, 80)}`
+    : `src-${safeSrc}`;
 
   useEffect(() => {
     if (!domElementPatch) return;
@@ -5267,12 +5279,15 @@ function cssImageValue(value: string) {
     const bodyAttributes = Array.from(bodyClone.attributes)
       .map((attribute) => `${attribute.name}="${escapeHtml(attribute.value)}"`)
       .join(" ");
-    return `<!doctype html><html ${htmlAttributes}><head>${headClone.innerHTML}</head><body ${bodyAttributes}>${bodyClone.innerHTML}</body></html>`;
+    return sanitizeBuilderPreviewHtml(
+      `<!doctype html><html ${htmlAttributes}><head>${headClone.innerHTML}</head><body ${bodyAttributes}>${bodyClone.innerHTML}</body></html>`,
+    );
   }
 
   function openCurrentCanvasPreview(doc: Document) {
     const html = buildCurrentCanvasPreviewHtml(doc);
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const safePreviewDocument = createSandboxedBuilderPreviewDocument(html);
+    const blob = new Blob([safePreviewDocument], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const opened = window.open(url, "_blank", "noopener,noreferrer");
     if (!opened) {
@@ -6063,7 +6078,7 @@ function cssImageValue(value: string) {
   useEffect(() => {
     installInspector();
     return () => cleanupRef.current?.();
-  }, [safeSrc, snapshotHtml]);
+  }, [safeSrc, safeSnapshotHtml]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-white">
@@ -6071,8 +6086,10 @@ function cssImageValue(value: string) {
         key={iframeKey}
         ref={iframeRef}
         className="h-full w-full border-0 bg-white"
-        src={snapshotHtml ? undefined : safeSrc}
-        srcDoc={snapshotHtml || undefined}
+        sandbox={BUILDER_EDITOR_SANDBOX}
+        referrerPolicy="no-referrer"
+        src={safeSnapshotHtml ? undefined : safeSrc}
+        srcDoc={safeSnapshotHtml || undefined}
         title="Site real em edição"
         onLoad={installInspector}
       />
