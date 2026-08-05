@@ -1,7 +1,7 @@
 import { getPrisma } from "../../lib/website-builder-prisma.js";
 import type { StoredFile } from "./types.js";
 
-type StoredFileRecord = {
+export type StoredFileRecord = {
   id: string;
   companyId: string;
   entityType: string;
@@ -31,6 +31,40 @@ type StoredFileDelegate = {
   findFirst(input: Record<string, unknown>): Promise<StoredFileRecord | null>;
   deleteMany(input: Record<string, unknown>): Promise<{ count: number }>;
 };
+
+export async function createStoredFileReference(input: {
+  id: string;
+  companyId: string;
+  entityType: string;
+  entityId: string;
+  provider: string;
+  publicId: string;
+  resourceType: string;
+  secureUrl: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes?: number | null;
+  uploadedBy?: string | null;
+  metadata?: Record<string, unknown> | null;
+}) {
+  return storedFileDelegate().create({
+    data: {
+      id: input.id,
+      companyId: input.companyId,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      provider: input.provider,
+      publicId: input.publicId,
+      resourceType: input.resourceType,
+      secureUrl: input.secureUrl,
+      originalFilename: input.originalFilename,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes ?? null,
+      uploadedBy: input.uploadedBy ?? null,
+      metadataJson: input.metadata ?? undefined,
+    },
+  });
+}
 
 export async function createStoredFileRecord(input: {
   companyId: string;
@@ -78,9 +112,31 @@ export async function findStoredFileForEntity(companyId: string, entityType: str
   });
 }
 
+export async function findStoredFileByIdForEntity(
+  companyId: string,
+  storedFileId: string,
+  entityType: string,
+  entityId: string,
+) {
+  return storedFileDelegate().findFirst({
+    where: { id: storedFileId, companyId, entityType, entityId },
+  });
+}
+
 export async function deleteStoredFileRecordsForEntity(companyId: string, entityType: string, entityId: string) {
   return storedFileDelegate().deleteMany({
     where: { companyId, entityType, entityId },
+  });
+}
+
+export async function deleteStoredFileByIdForEntity(
+  companyId: string,
+  storedFileId: string,
+  entityType: string,
+  entityId: string,
+) {
+  return storedFileDelegate().deleteMany({
+    where: { id: storedFileId, companyId, entityType, entityId },
   });
 }
 

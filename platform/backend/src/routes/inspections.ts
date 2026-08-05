@@ -9,6 +9,12 @@ import {
 } from "../middleware/auth.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { buildInspectionPdfBuffer } from "../services/inspection-pdf.js";
+import {
+  createStoredFileReference,
+  deleteStoredFileByIdForEntity,
+  findStoredFileByIdForEntity,
+  type StoredFileRecord,
+} from "../services/storage/stored-files.js";
 import { recordUsageEvent } from "../services/usage-costs.js";
 import type { RequestWithAccess } from "../types/access.js";
 
@@ -32,6 +38,7 @@ const signatureSelect =
   "id, company_id, inspection_id, signer_name, signer_document, signer_email, signer_phone, signer_role, status, signature_token, signature_url, signature_text, signed_at, ip_address, signed_user_agent, signed_payload, expires_at, created_at, updated_at";
 
 const inspectionStorageBucket = "imobiflow-inspections";
+const inspectionMediaEntityType = "inspection_media";
 
 const defaultRooms = [
   "Entrada",
@@ -89,8 +96,7 @@ const mediaSchema = z.object({
   item_id: z.string().uuid().optional().or(z.literal("")),
   media_type: z.enum(["photo", "video", "audio", "document"]).default("photo"),
   file_url: z.string().url().optional().or(z.literal("")),
-  storage_bucket: z.string().min(2).default(inspectionStorageBucket),
-  storage_path: z.string().max(800).optional().or(z.literal("")),
+  stored_file_id: z.string().uuid().optional().or(z.literal("")),
   file_name: z.string().max(240).optional().or(z.literal("")),
   mime_type: z.string().max(120).optional().or(z.literal("")),
   file_size: z.number().int().nonnegative().optional(),
@@ -132,6 +138,16 @@ function cleanEmpty<T extends Record<string, unknown>>(input: T) {
 
 function readParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function rejectClientStorageLocation(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return;
+  if ("storage_bucket" in body || "storage_path" in body) {
+    throw Object.assign(new Error("Bucket e caminho de storage são definidos pelo servidor."), {
+      statusCode: 400,
+      code: "CLIENT_STORAGE_LOCATION_FORBIDDEN",
+    });
+  }
 }
 
 async function ensurePropertyBelongsToCompany(propertyId: string, companyId: string) {
@@ -249,16 +265,62 @@ function buildInspectionStoragePath(companyId: string, inspectionId: string, fil
   return `${companyId}/inspections/${inspectionId}/${randomUUID()}-${sanitizeFileName(fileName)}`;
 }
 
+function inspectionStorageResourceType(mimeType: string) {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  return "raw";
+}
+
+function inspectionStorageBinding(
+  file: StoredFileRecord | null,
+  companyId: string,
+  inspectionId: string,
+) {
+  if (!file || file.provider !== "supabase") return null;
+  const metadata = file.metadataJson && typeof file.metadataJson === "object" && !Array.isArray(file.metadataJson)
+    ? file.metadataJson as Record<string, unknown>
+    : {};
+  const expectedPrefix = `${companyId}/inspections/${inspectionId}/`;
+  if (metadata.inspection_id !== inspectionId || !file.publicId.startsWith(expectedPrefix)) return null;
+  return { file, bucket: inspectionStorageBucket, path: file.publicId };
+}
+
+async function requireInspectionStoredFile(companyId: string, inspectionId: string, storedFileId: string) {
+  const file = await findStoredFileByIdForEntity(
+    companyId,
+    storedFileId,
+    inspectionMediaEntityType,
+    storedFileId,
+  );
+  const binding = inspectionStorageBinding(file, companyId, inspectionId);
+  if (!binding) {
+    throw Object.assign(new Error("Arquivo da vistoria não encontrado."), {
+      statusCode: 404,
+      code: "INSPECTION_FILE_NOT_FOUND",
+    });
+  }
+  return binding;
+}
+
 async function withSignedMediaUrls<
-  T extends { storage_bucket?: string | null; storage_path?: string | null; file_url?: string | null },
->(media: T[]) {
+  T extends { id: string; storage_path?: string | null; file_url?: string | null },
+>(companyId: string, inspectionId: string, media: T[]) {
   return Promise.all(
     media.map(async (entry) => {
       if (!entry.storage_path) return { ...entry, signed_url: entry.file_url ?? null };
 
+      const file = await findStoredFileByIdForEntity(
+        companyId,
+        entry.id,
+        inspectionMediaEntityType,
+        entry.id,
+      );
+      const binding = inspectionStorageBinding(file, companyId, inspectionId);
+      if (!binding) return { ...entry, signed_url: null };
+
       const { data, error } = await supabaseAdmin.storage
-        .from(entry.storage_bucket || inspectionStorageBucket)
-        .createSignedUrl(entry.storage_path, 60 * 60);
+        .from(binding.bucket)
+        .createSignedUrl(binding.path, 60 * 60);
 
       return { ...entry, signed_url: error ? null : data.signedUrl };
     }),
@@ -527,7 +589,11 @@ inspectionsRouter.get(
       if (itemsError) throw itemsError;
       if (mediaError) throw mediaError;
 
-      res.json({ rooms: rooms ?? [], items: items ?? [], media: await withSignedMediaUrls(media ?? []) });
+      res.json({
+        rooms: rooms ?? [],
+        items: items ?? [],
+        media: await withSignedMediaUrls(companyId, inspectionId, media ?? []),
+      });
     } catch (error) {
       next(error);
     }
@@ -553,7 +619,7 @@ inspectionsRouter.get(
 
       if (error) throw error;
 
-      res.json({ media: await withSignedMediaUrls(data ?? []) });
+      res.json({ media: await withSignedMediaUrls(companyId, inspectionId, data ?? []) });
     } catch (error) {
       next(error);
     }
@@ -575,7 +641,7 @@ inspectionsRouter.get(
         inspection,
         rooms,
         items,
-        media: await withSignedMediaUrls(media),
+        media: await withSignedMediaUrls(companyId, inspectionId, media),
         signatures,
       });
     } catch (error) {
@@ -816,6 +882,7 @@ inspectionsRouter.post(
       if (!inspectionId) throw Object.assign(new Error("Vistoria não informada."), { statusCode: 400 });
       await ensureInspectionBelongsToCompany(inspectionId, companyId);
       const input = uploadUrlSchema.parse(req.body);
+      const storedFileId = randomUUID();
       const storagePath = buildInspectionStoragePath(companyId, inspectionId, input.file_name);
 
       const { data, error } = await supabaseAdmin.storage
@@ -824,7 +891,24 @@ inspectionsRouter.post(
 
       if (error) throw error;
 
+      await createStoredFileReference({
+        id: storedFileId,
+        companyId,
+        entityType: inspectionMediaEntityType,
+        entityId: storedFileId,
+        provider: "supabase",
+        publicId: storagePath,
+        resourceType: inspectionStorageResourceType(input.mime_type),
+        secureUrl: `supabase://${inspectionStorageBucket}/${storagePath}`,
+        originalFilename: input.file_name,
+        mimeType: input.mime_type,
+        sizeBytes: input.file_size,
+        uploadedBy: req.access!.appUser.id,
+        metadata: { inspection_id: inspectionId },
+      });
+
       res.status(201).json({
+        stored_file_id: storedFileId,
         bucket: inspectionStorageBucket,
         path: storagePath,
         token: data.token,
@@ -847,13 +931,18 @@ inspectionsRouter.post(
       const inspectionId = readParam(req.params.id);
       if (!inspectionId) throw Object.assign(new Error("Vistoria não informada."), { statusCode: 400 });
       await ensureInspectionBelongsToCompany(inspectionId, companyId);
+      rejectClientStorageLocation(req.body);
       const input = mediaSchema.parse(req.body);
+      const { stored_file_id: storedFileId, ...mediaInput } = input;
+      const storageBinding = storedFileId
+        ? await requireInspectionStoredFile(companyId, inspectionId, storedFileId)
+        : null;
       const roomId = await ensureRoomBelongsToCompany(input.room_id || null, inspectionId, companyId);
       if (input.item_id) {
         await ensureItemBelongsToCompany(input.item_id, inspectionId, companyId);
       }
 
-      if (!input.file_url && !input.storage_path) {
+      if (!input.file_url && !storageBinding) {
         throw Object.assign(new Error("Informe um arquivo ou URL para registrar a mídia."), {
           statusCode: 422,
           code: "MEDIA_FILE_REQUIRED",
@@ -863,10 +952,15 @@ inspectionsRouter.post(
       const { data: media, error } = await supabaseAdmin
         .from("inspection_media")
         .insert({
-          ...cleanEmpty(input),
+          ...cleanEmpty(mediaInput),
+          ...(storageBinding ? { id: storageBinding.file.id } : {}),
           room_id: roomId,
           item_id: input.item_id || null,
-          storage_bucket: input.storage_bucket || inspectionStorageBucket,
+          storage_bucket: storageBinding?.bucket ?? null,
+          storage_path: storageBinding?.path ?? null,
+          file_name: storageBinding?.file.originalFilename ?? mediaInput.file_name ?? null,
+          mime_type: storageBinding?.file.mimeType ?? mediaInput.mime_type ?? null,
+          file_size: storageBinding?.file.sizeBytes ?? mediaInput.file_size ?? null,
           company_id: companyId,
           inspection_id: inspectionId,
           created_by: userId,
@@ -876,7 +970,7 @@ inspectionsRouter.post(
 
       if (error) throw error;
 
-      const [signedMedia] = await withSignedMediaUrls([media]);
+      const [signedMedia] = await withSignedMediaUrls(companyId, inspectionId, [media]);
 
       const usageEvents = [];
       if (media.media_type === "photo") {
@@ -952,8 +1046,14 @@ inspectionsRouter.delete(
       if (findError) throw findError;
       if (!media) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
 
-      if (media.storage_bucket && media.storage_path) {
-        await supabaseAdmin.storage.from(media.storage_bucket).remove([media.storage_path]);
+      const storageBinding = media.storage_path
+        ? await requireInspectionStoredFile(companyId, inspectionId, media.id)
+        : null;
+      if (storageBinding) {
+        const { error: storageError } = await supabaseAdmin.storage
+          .from(storageBinding.bucket)
+          .remove([storageBinding.path]);
+        if (storageError) throw storageError;
       }
 
       const { error } = await supabaseAdmin
@@ -964,6 +1064,15 @@ inspectionsRouter.delete(
         .eq("company_id", companyId);
 
       if (error) throw error;
+
+      if (storageBinding) {
+        await deleteStoredFileByIdForEntity(
+          companyId,
+          storageBinding.file.id,
+          inspectionMediaEntityType,
+          storageBinding.file.id,
+        );
+      }
 
       res.json({ ok: true, media_id: mediaId });
     } catch (error) {

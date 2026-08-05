@@ -145,8 +145,7 @@ export type InspectionMediaInput = {
   item_id?: string;
   media_type?: InspectionMedia["media_type"];
   file_url?: string;
-  storage_bucket?: string;
-  storage_path?: string;
+  stored_file_id?: string;
   file_name?: string;
   mime_type?: string;
   file_size?: number;
@@ -378,6 +377,7 @@ export async function createInspectionUploadUrl(
   input: InspectionUploadUrlInput,
 ) {
   return apiRequest<{
+    stored_file_id: string;
     bucket: string;
     path: string;
     token: string;
@@ -717,8 +717,8 @@ function createPreviewMedia(inspectionId: string, input: InspectionMediaInput): 
     item_id: input.item_id || null,
     media_type: input.media_type ?? "photo",
     file_url: input.file_url || null,
-    storage_bucket: input.storage_bucket || null,
-    storage_path: input.storage_path || null,
+    storage_bucket: null,
+    storage_path: null,
     file_name: input.file_name || null,
     mime_type: input.mime_type || null,
     file_size: input.file_size ?? null,
