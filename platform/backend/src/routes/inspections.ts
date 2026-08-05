@@ -23,7 +23,7 @@ export const inspectionsRouter = Router();
 inspectionsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
 
 const inspectionSelect =
-  "id, company_id, property_id, assigned_to, inspection_type, status, scheduled_at, started_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, public_token, pdf_url, metadata, created_at, updated_at, properties(id, code, title, neighborhood, city, state)";
+  "id, company_id, property_id, assigned_to, inspection_type, status, scheduled_at, started_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, pdf_url, metadata, created_at, updated_at, properties(id, code, title, neighborhood, city, state)";
 
 const roomSelect =
   "id, company_id, inspection_id, name, position, general_condition, notes, created_at, updated_at";
@@ -35,7 +35,8 @@ const mediaSelect =
   "id, company_id, inspection_id, room_id, item_id, media_type, file_url, storage_bucket, storage_path, file_name, mime_type, file_size, caption, position, created_by, created_at";
 
 const signatureSelect =
-  "id, company_id, inspection_id, signer_name, signer_document, signer_email, signer_phone, signer_role, status, signature_token, signature_url, signature_text, signed_at, ip_address, signed_user_agent, signed_payload, expires_at, created_at, updated_at";
+  "id, company_id, inspection_id, signer_name, signer_document, signer_email, signer_phone, signer_role, status, signature_url, signature_text, signed_at, ip_address, signed_user_agent, signed_payload, expires_at, created_at, updated_at";
+const signatureCredentialSelect = `${signatureSelect}, signature_token`;
 
 const inspectionStorageBucket = "imobiflow-inspections";
 const inspectionMediaEntityType = "inspection_media";
@@ -140,6 +141,33 @@ function readParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function defaultSignatureExpiration() {
+  return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function signatureView<T extends Record<string, unknown>>(signature: T) {
+  const { signature_token: _signatureToken, ...view } = signature;
+  return view;
+}
+
+function signatureInvite(signature: Record<string, unknown>) {
+  const token = typeof signature.signature_token === "string" ? signature.signature_token : null;
+  if (!token) return null;
+  return {
+    url_path: `/assinar-vistoria/${encodeURIComponent(token)}`,
+    expires_at: typeof signature.expires_at === "string" ? signature.expires_at : null,
+  };
+}
+
+function assertInspectionAcceptsSignatures(inspection: { status: string }) {
+  if (["completed", "cancelled", "archived"].includes(inspection.status)) {
+    throw Object.assign(new Error("Vistoria não aceita novas assinaturas."), {
+      statusCode: 409,
+      code: "INSPECTION_NOT_SIGNABLE",
+    });
+  }
+}
+
 function rejectClientStorageLocation(body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return;
   if ("storage_bucket" in body || "storage_path" in body) {
@@ -172,10 +200,10 @@ async function ensurePropertyBelongsToCompany(propertyId: string, companyId: str
 async function ensureInspectionBelongsToCompany(inspectionId: string, companyId: string) {
   const { data, error } = await supabaseAdmin
     .from("inspections")
-    .select("id")
+    .select("id, status")
     .eq("id", inspectionId)
     .eq("company_id", companyId)
-    .maybeSingle<{ id: string }>();
+    .maybeSingle<{ id: string; status: string }>();
 
   if (error) throw error;
   if (!data) {
@@ -184,6 +212,7 @@ async function ensureInspectionBelongsToCompany(inspectionId: string, companyId:
       code: "INSPECTION_NOT_FOUND",
     });
   }
+  return data;
 }
 
 async function ensureRoomBelongsToCompany(roomId: string | null, inspectionId: string, companyId: string) {
@@ -399,7 +428,7 @@ async function loadInspectionDetail(companyId: string, inspectionId: string) {
     rooms: rooms ?? [],
     items: items ?? [],
     media: media ?? [],
-    signatures: signatures ?? [],
+    signatures: (signatures ?? []).map((signature) => signatureView(signature)),
   };
 }
 
@@ -669,7 +698,7 @@ inspectionsRouter.get(
 
       if (error) throw error;
 
-      res.json({ signatures: data ?? [] });
+      res.json({ signatures: (data ?? []).map((signature) => signatureView(signature)) });
     } catch (error) {
       next(error);
     }
@@ -684,8 +713,10 @@ inspectionsRouter.post(
       const companyId = req.access!.company.id;
       const inspectionId = readParam(req.params.id);
       if (!inspectionId) throw Object.assign(new Error("Vistoria não informada."), { statusCode: 400 });
-      await ensureInspectionBelongsToCompany(inspectionId, companyId);
+      const currentInspection = await ensureInspectionBelongsToCompany(inspectionId, companyId);
+      assertInspectionAcceptsSignatures(currentInspection);
       const input = signatureSchema.parse(req.body);
+      const expiresAt = input.expires_at || defaultSignatureExpiration();
 
       const { data: signature, error } = await supabaseAdmin
         .from("inspection_signatures")
@@ -695,8 +726,9 @@ inspectionsRouter.post(
           inspection_id: inspectionId,
           status: "pending",
           signature_token: randomUUID(),
+          expires_at: expiresAt,
         })
-        .select(signatureSelect)
+        .select(signatureCredentialSelect)
         .single();
 
       if (error) throw error;
@@ -725,12 +757,74 @@ inspectionsRouter.post(
           .single();
 
         if (existingInspectionError) throw existingInspectionError;
-        return res.status(201).json({ signature, inspection: existingInspection });
+        return res.status(201).json({
+          signature: signatureView(signature),
+          inspection: existingInspection,
+          invite: signatureInvite(signature),
+        });
       }
 
-      return res.status(201).json({ signature, inspection });
+      return res.status(201).json({
+        signature: signatureView(signature),
+        inspection,
+        invite: signatureInvite(signature),
+      });
     } catch (error) {
       return next(error);
+    }
+  },
+);
+
+inspectionsRouter.post(
+  "/:id/signatures/:signatureId/invite",
+  requirePermission("inspections.sign"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const inspectionId = readParam(req.params.id);
+      const signatureId = readParam(req.params.signatureId);
+      if (!inspectionId || !signatureId) {
+        throw Object.assign(new Error("Assinatura não informada."), { statusCode: 400 });
+      }
+
+      const inspection = await ensureInspectionBelongsToCompany(inspectionId, companyId);
+      assertInspectionAcceptsSignatures(inspection);
+
+      const { data: currentSignature, error: currentError } = await supabaseAdmin
+        .from("inspection_signatures")
+        .select(signatureCredentialSelect)
+        .eq("id", signatureId)
+        .eq("inspection_id", inspectionId)
+        .eq("company_id", companyId)
+        .maybeSingle();
+      if (currentError) throw currentError;
+      if (!currentSignature) {
+        throw Object.assign(new Error("Assinatura inválida para esta vistoria."), {
+          statusCode: 404,
+          code: "INSPECTION_SIGNATURE_NOT_FOUND",
+        });
+      }
+      if (currentSignature.status !== "pending") {
+        throw Object.assign(new Error("Somente assinaturas pendentes podem receber convite."), {
+          statusCode: 409,
+          code: "SIGNATURE_INVITE_NOT_PENDING",
+        });
+      }
+
+      const { data: signature, error } = await supabaseAdmin
+        .from("inspection_signatures")
+        .update({ signature_token: randomUUID(), expires_at: defaultSignatureExpiration() })
+        .eq("id", signatureId)
+        .eq("inspection_id", inspectionId)
+        .eq("company_id", companyId)
+        .eq("status", "pending")
+        .select(signatureCredentialSelect)
+        .single();
+      if (error) throw error;
+
+      res.status(201).json({ signature: signatureView(signature), invite: signatureInvite(signature) });
+    } catch (error) {
+      next(error);
     }
   },
 );
@@ -783,7 +877,7 @@ inspectionsRouter.post(
 
       const inspection = await refreshInspectionSignatureStatus(companyId, inspectionId);
 
-      res.json({ signature, inspection });
+      res.json({ signature: signatureView(signature), inspection });
     } catch (error) {
       next(error);
     }

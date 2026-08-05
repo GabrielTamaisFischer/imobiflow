@@ -96,7 +96,7 @@ export type InspectionSignature = {
   signer_phone: string | null;
   signer_role: "tenant" | "owner" | "broker" | "manager" | "witness";
   status: "pending" | "signed" | "cancelled" | "expired";
-  signature_token: string | null;
+  signature_token?: string | null;
   signature_url: string | null;
   signature_text: string | null;
   signed_at: string | null;
@@ -171,6 +171,11 @@ export type InspectionSignatureInput = {
 export type SignInspectionSignatureInput = {
   signature_text: string;
   accepted_terms: true;
+};
+
+export type InspectionSignatureInvite = {
+  url_path: string;
+  expires_at: string | null;
 };
 
 export type InspectionPdfResponse = {
@@ -305,11 +310,27 @@ export async function createInspectionSignature(
     return createPreviewSignature(inspectionId, input);
   }
 
-  return apiRequest<{ signature: InspectionSignature; inspection: Inspection }>(
+  return apiRequest<{
+    signature: InspectionSignature;
+    inspection: Inspection;
+    invite: InspectionSignatureInvite | null;
+  }>(
     `/inspections/${inspectionId}/signatures`,
     {
       method: "POST",
       body: JSON.stringify(input),
+      token: getStoredToken() ?? undefined,
+    },
+  );
+}
+
+export async function createInspectionSignatureInvite(inspectionId: string, signatureId: string) {
+  if (isPreviewInspections()) return createPreviewSignatureInvite(inspectionId, signatureId);
+
+  return apiRequest<{ signature: InspectionSignature; invite: InspectionSignatureInvite | null }>(
+    `/inspections/${inspectionId}/signatures/${signatureId}/invite`,
+    {
+      method: "POST",
       token: getStoredToken() ?? undefined,
     },
   );
@@ -736,8 +757,9 @@ function createPreviewMedia(inspectionId: string, input: InspectionMediaInput): 
 function createPreviewSignature(
   inspectionId: string,
   input: InspectionSignatureInput,
-): { signature: InspectionSignature; inspection: Inspection } {
+): { signature: InspectionSignature; inspection: Inspection; invite: InspectionSignatureInvite } {
   const now = new Date().toISOString();
+  const expiresAt = input.expires_at || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const signature: InspectionSignature = {
     id: window.crypto.randomUUID(),
     company_id: "preview-company",
@@ -755,7 +777,7 @@ function createPreviewSignature(
     ip_address: null,
     signed_user_agent: null,
     signed_payload: {},
-    expires_at: input.expires_at || null,
+    expires_at: expiresAt,
     created_at: now,
     updated_at: now,
   };
@@ -767,7 +789,28 @@ function createPreviewSignature(
     updated_at: now,
   });
 
-  return { signature, inspection };
+  return {
+    signature,
+    inspection,
+    invite: { url_path: `/assinar-vistoria/${signature.signature_token}`, expires_at: expiresAt },
+  };
+}
+
+function createPreviewSignatureInvite(
+  inspectionId: string,
+  signatureId: string,
+): { signature: InspectionSignature; invite: InspectionSignatureInvite } {
+  const signatures = readPreviewSignatures();
+  const signature = signatures.find(
+    (item) => item.id === signatureId && item.inspection_id === inspectionId,
+  );
+  if (!signature || signature.status !== "pending") throw new Error("Assinatura pendente não encontrada.");
+
+  const token = window.crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const updated = { ...signature, signature_token: token, expires_at: expiresAt, updated_at: new Date().toISOString() };
+  writePreviewSignatures(signatures.map((item) => (item.id === signatureId ? updated : item)));
+  return { signature: updated, invite: { url_path: `/assinar-vistoria/${token}`, expires_at: expiresAt } };
 }
 
 function signPreviewSignature(

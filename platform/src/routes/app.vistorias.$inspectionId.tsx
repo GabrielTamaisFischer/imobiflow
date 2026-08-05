@@ -26,6 +26,7 @@ import {
   createInspectionMedia,
   createInspectionRoom,
   createInspectionSignature,
+  createInspectionSignatureInvite,
   deleteInspection,
   deleteInspectionMedia,
   generateInspectionPdf,
@@ -149,6 +150,7 @@ function InspectionDetailPage() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isCreatingSignature, setIsCreatingSignature] = useState(false);
   const [signingId, setSigningId] = useState<string | null>(null);
+  const [invitingId, setInvitingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [signatureError, setSignatureError] = useState<string | null>(null);
@@ -285,6 +287,27 @@ function InspectionDetailPage() {
       );
     } finally {
       setSigningId(null);
+    }
+  }
+
+  async function handleOpenSignatureInvite(signature: InspectionSignature) {
+    setInvitingId(signature.id);
+    setSignatureError(null);
+    const popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+
+    try {
+      const response = await createInspectionSignatureInvite(inspectionId, signature.id);
+      setSignatures((current) =>
+        current.map((item) => (item.id === response.signature.id ? response.signature : item)),
+      );
+      if (!response.invite) throw new Error("Convite de assinatura não disponível.");
+      if (popup) popup.location.href = response.invite.url_path;
+      else window.location.href = response.invite.url_path;
+    } catch (inviteError) {
+      popup?.close();
+      setSignatureError(inviteError instanceof Error ? inviteError.message : "Não foi possível gerar o convite.");
+    } finally {
+      setInvitingId(null);
     }
   }
 
@@ -431,10 +454,12 @@ function InspectionDetailPage() {
                 form={signatureForm}
                 isCreating={isCreatingSignature}
                 signingId={signingId}
+                invitingId={invitingId}
                 error={signatureError}
                 onFormChange={setSignatureForm}
                 onCreate={handleCreateSignature}
                 onSign={handleSign}
+                onInvite={handleOpenSignatureInvite}
               />
               <MediaReport media={media} rooms={rooms} items={items} />
               <PdfPreparation metrics={metrics} pdfUrl={inspection.pdf_url} />
@@ -1058,10 +1083,12 @@ function SignaturePanel({
   form,
   isCreating,
   signingId,
+  invitingId,
   error,
   onFormChange,
   onCreate,
   onSign,
+  onInvite,
 }: {
   signatures: InspectionSignature[];
   form: {
@@ -1072,6 +1099,7 @@ function SignaturePanel({
   };
   isCreating: boolean;
   signingId: string | null;
+  invitingId: string | null;
   error: string | null;
   onFormChange: (form: {
     signer_name: string;
@@ -1081,6 +1109,7 @@ function SignaturePanel({
   }) => void;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
   onSign: (signature: InspectionSignature) => void;
+  onInvite: (signature: InspectionSignature) => void;
 }) {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
@@ -1192,16 +1221,20 @@ function SignaturePanel({
                 </p>
               ) : null}
               <div className="mt-3 grid gap-2">
-                {signature.signature_token ? (
-                  <a
-                    href={`/assinar-vistoria/${signature.signature_token}`}
-                    target="_blank"
-                    rel="noreferrer"
+                {signature.status === "pending" ? (
+                  <button
+                    type="button"
+                    onClick={() => onInvite(signature)}
+                    disabled={invitingId === signature.id}
                     className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
                   >
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    {invitingId === signature.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    )}
                     Abrir link externo
-                  </a>
+                  </button>
                 ) : null}
                 {signature.status !== "signed" ? (
                   <button

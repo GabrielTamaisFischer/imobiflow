@@ -10,7 +10,7 @@ const publicSignatureSelect =
   "id, company_id, inspection_id, signer_name, signer_document, signer_email, signer_phone, signer_role, status, signature_token, signature_url, signature_text, signed_at, ip_address, signed_user_agent, signed_payload, expires_at, created_at, updated_at";
 
 const publicInspectionSelect =
-  "id, company_id, property_id, inspection_type, status, scheduled_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, public_token, pdf_url, metadata, created_at, updated_at, properties(id, code, title, neighborhood, city, state)";
+  "id, company_id, property_id, inspection_type, status, scheduled_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, pdf_url, metadata, created_at, updated_at, properties(id, code, title, neighborhood, city, state)";
 
 const signPublicSignatureSchema = z.object({
   signature_text: z.string().min(2).max(180),
@@ -19,6 +19,19 @@ const signPublicSignatureSchema = z.object({
 
 function readParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function publicSignatureView<T extends Record<string, unknown>>(signature: T) {
+  const { signature_token: _signatureToken, ...view } = signature;
+  return view;
+}
+
+function publicContextView(context: {
+  signature: Record<string, unknown>;
+  inspection: Record<string, unknown>;
+  company: Record<string, unknown>;
+}) {
+  return { ...context, signature: publicSignatureView(context.signature) };
 }
 
 async function loadPublicSignatureContext(token: string) {
@@ -80,7 +93,21 @@ async function loadPublicSignatureContext(token: string) {
     });
   }
 
-  if (signature.expires_at && new Date(signature.expires_at).getTime() < Date.now()) {
+  if (["cancelled", "expired", "signed"].includes(signature.status)) {
+    throw Object.assign(new Error("Link de assinatura não está mais ativo."), {
+      statusCode: 410,
+      code: "PUBLIC_SIGNATURE_INACTIVE",
+    });
+  }
+
+  if (["completed", "cancelled", "archived"].includes(inspection.status)) {
+    throw Object.assign(new Error("Vistoria não está mais disponível para assinatura."), {
+      statusCode: 410,
+      code: "PUBLIC_INSPECTION_NOT_SIGNABLE",
+    });
+  }
+
+  if (signature.expires_at && new Date(signature.expires_at).getTime() <= Date.now()) {
     await supabaseAdmin
       .from("inspection_signatures")
       .update({ status: "expired" })
@@ -130,7 +157,7 @@ publicInspectionsRouter.get("/signatures/:token", async (req, res, next) => {
     if (!token) throw Object.assign(new Error("Token de assinatura não informado."), { statusCode: 400 });
 
     const context = await loadPublicSignatureContext(token);
-    res.json(context);
+    res.json(publicContextView(context));
   } catch (error) {
     next(error);
   }
@@ -142,16 +169,6 @@ publicInspectionsRouter.post("/signatures/:token/sign", async (req, res, next) =
     if (!token) throw Object.assign(new Error("Token de assinatura não informado."), { statusCode: 400 });
 
     const { signature: currentSignature, inspection, company } = await loadPublicSignatureContext(token);
-    if (currentSignature.status === "signed") {
-      return res.json({ signature: currentSignature, inspection, company });
-    }
-    if (currentSignature.status !== "pending") {
-      throw Object.assign(new Error("Assinatura não está pendente."), {
-        statusCode: 409,
-        code: "PUBLIC_SIGNATURE_NOT_PENDING",
-      });
-    }
-
     const input = signPublicSignatureSchema.parse(req.body);
     const signedAt = new Date().toISOString();
     const { data: signature, error } = await supabaseAdmin
@@ -178,7 +195,7 @@ publicInspectionsRouter.post("/signatures/:token/sign", async (req, res, next) =
 
     const updatedInspection = await refreshInspectionSignatureStatus(signature.company_id, signature.inspection_id);
 
-    res.json({ signature, inspection: updatedInspection, company });
+    res.json(publicContextView({ signature, inspection: updatedInspection, company }));
   } catch (error) {
     next(error);
   }
