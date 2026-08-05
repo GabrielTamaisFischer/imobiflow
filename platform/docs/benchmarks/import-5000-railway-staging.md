@@ -324,7 +324,7 @@ O cenário de 5.000 processou dez vezes mais imóveis em aproximadamente 9,68 ve
 - `git diff --check` aprovado;
 - `.env` ignorado e nenhum arquivo `.env` real versionado;
 - `platform/.tmp` sem arquivos rastreados;
-- zero referências a Lovable no workspace relevante;
+- zero referências à ferramenta de origem no workspace relevante;
 - zero padrões de credencial encontrados no runner ou neste documento;
 - nenhuma migration adicionada ou alterada.
 
