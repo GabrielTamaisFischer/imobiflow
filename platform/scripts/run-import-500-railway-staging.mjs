@@ -60,8 +60,14 @@ async function api(path, { token, method = "GET", body, expected = [200] } = {})
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const payload = await response.json().catch(() => ({}));
-  const result = { status: response.status, payload, elapsedMs: round(performance.now() - startedAt) };
+  const responseText = await response.text();
+  const payload = responseText ? JSON.parse(responseText) : {};
+  const result = {
+    status: response.status,
+    payload,
+    payloadBytes: Buffer.byteLength(responseText, "utf8"),
+    elapsedMs: round(performance.now() - startedAt),
+  };
   if (!expected.includes(response.status)) {
     const code = typeof payload?.error === "string" ? payload.error : "UNEXPECTED_RESPONSE";
     throw new Error(`${method} ${path} retornou HTTP ${response.status} (${code}).`);
@@ -99,7 +105,18 @@ async function preflight() {
     Boolean(property.importJobId) || /(?:sintet|simulad|staging|qa|teste)/i.test(`${property.code ?? ""} ${property.title}`),
   );
   const migrationRows = Array.isArray(migrations) ? migrations : [];
-  const migrationsHealthy = migrationRows.length === 7 && migrationRows.every((row) => row.finished_at && !row.rolled_back_at);
+  const requiredMigrations = [
+    "202605220001_website_builder_foundation",
+    "202605230002_website_builder_audit_logs",
+    "202606010001_website_builder_code_files",
+    "202607130001_mysql_saas_core",
+    "202607130002_site_audit_actions",
+    "202607140001_storage_provider_metadata",
+    "202608040001_resumable_imports",
+    "202608050001_property_query_indexes",
+  ];
+  const appliedMigrations = new Set(migrationRows.filter((row) => row.finished_at && !row.rolled_back_at).map((row) => row.migration_name));
+  const migrationsHealthy = requiredMigrations.every((migration) => appliedMigrations.has(migration));
   if (!companiesAreSynthetic || !usersBelongToSyntheticCompanies || !propertiesAreSynthetic) {
     throw new Error("O banco nao passou na verificacao de dados exclusivamente sinteticos.");
   }
@@ -118,7 +135,7 @@ async function preflight() {
       importJobs: counts.importJobs,
       importRows: counts.importRows,
       runningJobs,
-      migrationsApplied: migrationRows.length,
+      migrationsApplied: appliedMigrations.size,
       migrationsHealthy,
       exclusivelySynthetic: true,
       apiHealthy: true,
@@ -208,67 +225,88 @@ function restartRailwayService() {
 }
 
 async function measureReads(companyA, companyB, jobId, fixture) {
-  const where = { companyId: companyA.companyId, importJobId: jobId };
-  const orderBy = [{ createdAt: "asc" }, { id: "asc" }];
-  const definitions = [
-    ["first_page", () => prisma.property.findMany({ where, orderBy, take: 50, select: { id: true, code: true } })],
-    ["middle_page", () => prisma.property.findMany({ where, orderBy, skip: 250, take: 50, select: { id: true, code: true } })],
-    ["last_page", () => prisma.property.findMany({ where, orderBy, skip: 450, take: 50, select: { id: true, code: true } })],
-    ["code_search", () => prisma.property.findFirst({ where: { companyId: companyA.companyId, code: fixture.codes[124] }, select: { id: true, code: true } })],
-    ["external_id_search", () => prisma.property.findFirst({ where: { companyId: companyA.companyId, importSource: "csv", importExternalId: fixture.codes[249] }, select: { id: true } })],
-    ["detail", () => prisma.property.findFirst({ where: { companyId: companyA.companyId, importJobId: jobId, code: fixture.codes[374] }, select: { id: true, code: true, title: true, status: true } })],
-    ["purpose_sale", () => prisma.property.findMany({ where: { ...where, operation: "sale" }, take: 50, select: { id: true } })],
-    ["type_house", () => prisma.property.findMany({ where: { ...where, propertyType: "house" }, take: 50, select: { id: true } })],
-    ["company_count", () => prisma.property.count({ where: { companyId: companyA.companyId } })],
-  ];
-  const direct = {};
-  for (const [name, operation] of definitions) direct[name] = await measureOperation(operation, 5);
+  const paths = {
+    first_page: "/real-estate/properties?page=1&page_size=50&status=all",
+    middle_page: "/real-estate/properties?page=6&page_size=50&status=all",
+    last_page: "/real-estate/properties?page=11&page_size=50&status=all",
+    code_search: `/real-estate/properties/by-code/${encodeURIComponent(fixture.codes[124])}`,
+    external_id_search: `/real-estate/properties/by-external-id/${encodeURIComponent(fixture.codes[249])}?import_source=csv`,
+    purpose_sale: "/real-estate/properties?page=1&page_size=50&status=all&operation=sale",
+    type_house: "/real-estate/properties?page=1&page_size=50&status=all&property_type=house",
+    status_available: "/real-estate/properties?page=1&page_size=50&status=available",
+  };
+  const apiMetrics = {};
+  for (const [name, path] of Object.entries(paths)) apiMetrics[name] = await measureApi(path, companyA.token, 5);
 
-  const first = await definitions[0][1]();
-  const middle = await definitions[1][1]();
-  const last = await definitions[2][1]();
-  const ids = [...first, ...middle, ...last].map((row) => row.id);
-  const pagesCorrect = first.length === 50 && middle.length === 50 && last.length === 50 && new Set(ids).size === 150;
+  const first = await api(paths.first_page, { token: companyA.token });
+  const middle = await api(paths.middle_page, { token: companyA.token });
+  const last = await api(paths.last_page, { token: companyA.token });
+  const code = await api(paths.code_search, { token: companyA.token });
+  const detailId = code.payload?.property?.id;
+  if (!detailId) throw new Error("Busca por codigo nao retornou imovel para medir detalhe.");
+  apiMetrics.detail = await measureApi(`/real-estate/properties/${encodeURIComponent(detailId)}`, companyA.token, 5);
+  const pageItems = [first, middle, last].map((response) => response.payload?.items ?? []);
+  const ids = pageItems.flatMap((items) => items.map((row) => row.id));
+  const expectedTotal = 501;
+  const pagesCorrect = pageItems[0].length === 50
+    && pageItems[1].length === 50
+    && pageItems[2].length === 1
+    && new Set(ids).size === ids.length
+    && first.payload?.pagination?.total === expectedTotal
+    && last.payload?.pagination?.total_pages === 11;
 
-  const httpListSamples = [];
-  let companyAListCount = 0;
-  for (let index = 0; index < 5; index += 1) {
-    const response = await api("/real-estate/properties?status=all", { token: companyA.token });
-    httpListSamples.push(response.elapsedMs);
-    companyAListCount = Array.isArray(response.payload?.properties) ? response.payload.properties.length : 0;
-  }
-  const companyBList = await api("/real-estate/properties?status=all", { token: companyB.token });
-  const companyBProperties = Array.isArray(companyBList.payload?.properties) ? companyBList.payload.properties : [];
-  const companyBJobLeak = companyBProperties.some((property) => property.import_job_id === jobId || String(property.code || "").startsWith(fixture.runKey));
+  const companyBList = await api("/real-estate/properties?page=1&page_size=100&status=all", { token: companyB.token });
+  const companyBProperties = Array.isArray(companyBList.payload?.items) ? companyBList.payload.items : [];
+  const companyBJobLeak = companyBProperties.some((property) => String(property.code || "").startsWith(fixture.runKey));
+  const companyBDetail = await api(`/real-estate/properties/${encodeURIComponent(detailId)}`, {
+    token: companyB.token,
+    expected: [404],
+  });
 
   const explains = {
+    pagination: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id, created_at FROM properties WHERE company_id = ${companyA.companyId} ORDER BY created_at DESC, id DESC LIMIT 50`),
     code: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id FROM properties WHERE company_id = ${companyA.companyId} AND code = ${fixture.codes[124]} LIMIT 1`),
     externalId: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id FROM properties WHERE company_id = ${companyA.companyId} AND import_source = 'csv' AND import_external_id = ${fixture.codes[249]} LIMIT 1`),
     operation: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id FROM properties WHERE company_id = ${companyA.companyId} AND operation = 'sale' LIMIT 50`),
     propertyType: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id FROM properties WHERE company_id = ${companyA.companyId} AND property_type = 'house' LIMIT 50`),
     importJob: sanitizeExplain(await prisma.$queryRaw`EXPLAIN SELECT id FROM properties WHERE company_id = ${companyA.companyId} AND import_job_id = ${jobId} LIMIT 50`),
   };
-  const directSamples = Object.values(direct).flatMap((metric) => metric.samplesMs);
+  const apiSamples = Object.values(apiMetrics).flatMap((metric) => metric.samplesMs);
   return {
-    directPrismaViaPublicProxy: direct,
-    directOverall: summarize(directSamples),
+    api: apiMetrics,
+    apiOverall: summarize(apiSamples),
     pagesCorrect,
-    httpList: { ...summarize(httpListSamples), returned: companyAListCount, serverPaginationAvailable: false },
-    companyB: { status: companyBList.status, returned: companyBProperties.length, leakedJobProperties: companyBJobLeak },
+    expectedTotal,
+    companyB: {
+      listStatus: companyBList.status,
+      detailStatus: companyBDetail.status,
+      returned: companyBProperties.length,
+      leakedJobProperties: companyBJobLeak,
+    },
     explains,
   };
 }
 
-async function measureOperation(operation, repetitions) {
+async function measureApi(path, token, repetitions) {
   const samples = [];
+  const payloadSizes = [];
   let quantity = 0;
+  let total = null;
   for (let index = 0; index < repetitions; index += 1) {
-    const startedAt = performance.now();
-    const value = await operation();
-    samples.push(round(performance.now() - startedAt));
-    quantity = Array.isArray(value) ? value.length : value === null || value === undefined ? 0 : Number(value) || 1;
+    const response = await api(path, { token });
+    samples.push(response.elapsedMs);
+    payloadSizes.push(response.payloadBytes);
+    quantity = Array.isArray(response.payload?.items) ? response.payload.items.length : response.payload?.property ? 1 : 0;
+    total = response.payload?.pagination?.total ?? total;
   }
-  return { ...summarize(samples), quantity, samplesMs: samples };
+  return {
+    ...summarize(samples),
+    quantity,
+    total,
+    averagePayloadBytes: round(payloadSizes.reduce((sum, value) => sum + value, 0) / payloadSizes.length),
+    maxPayloadBytes: Math.max(...payloadSizes),
+    samplesMs: samples,
+  };
 }
 
 function sanitizeExplain(rows) {
