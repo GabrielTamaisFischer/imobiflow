@@ -64,4 +64,35 @@ As 47 midias usaram a mesma URL publica controlada. A deduplicacao por `source_u
 
 O teste de retry usou uma falha controlada injetada em uma linha ja concluida. O reprocessamento reconheceu o imovel existente e nao criou duplicata. O registro de arquivo preexistente validou preservacao no banco, mas nao representava um asset fisico anterior no Cloudinary. A limpeza fisica foi comprovada para o asset criado pelo job.
 
-O tamanho retornado pelo MySQL representa espaco alocado de tabelas e indices, por isso permaneceu igual depois do rollback. O parser ainda recebe e normaliza o arquivo em memoria na requisicao inicial, e downloads de imagem sao sequenciais. Fila, worker, paralelismo controlado e persistencia incremental de `ImportRow` sao evolucoes recomendadas antes de volumes maiores.
+O tamanho retornado pelo MySQL representa espaco alocado de tabelas e indices, por isso permaneceu igual depois do rollback. O parser ainda recebe e normaliza o arquivo em memoria na requisicao inicial. A rodada posterior adicionou concorrencia limitada somente para midias; fila, worker e persistencia incremental de `ImportRow` continuam como evolucoes recomendadas antes de volumes maiores.
+
+## Retomada apos reinicializacao — 2026-08-05
+
+Um segundo job sintetico sem imagens foi interrompido depois do primeiro lote e retomado por uma nova instancia real da API usando o mesmo MySQL e `JWT_SECRET`.
+
+| Medida | Antes de reiniciar | Depois de reiniciar | Final |
+|---|---:|---:|---:|
+| Cursor | 27 | 27 | 51 |
+| Processados | 25 | 25 | 50 |
+| Imoveis do job | 25 | 25 | 50 |
+| Status | `PARTIALLY_COMPLETED` | `PARTIALLY_COMPLETED` | `COMPLETED` |
+| Duplicados | 0 | 0 | 0 |
+
+A consulta depois do reinicio retornou HTTP 200, o segundo lote iniciou no cursor persistido e o rollback deixou zero imoveis do job. A Empresa B recebeu HTTP 404 ao consultar o job da Empresa A.
+
+## Linha de base sem imagens — 2026-08-05
+
+| Medida | Resultado |
+|---|---:|
+| Arquivo | 6.255 bytes |
+| Primeiro lote | 96.552,25 ms |
+| Segundo lote | 92.675,23 ms |
+| Inicio + lotes + relatorio | 190.678,68 ms |
+| Media por imovel, considerando os dois lotes | 3.784,55 ms |
+| Imoveis importados | 50 |
+| Duplicados | 0 |
+| Idempotencia | aprovada |
+
+Tempos agregados instrumentados do MySQL: criacao de 50 imoveis em 38.709,62 ms; 50 buscas de duplicidade em 10.244,76 ms; criacao das 50 `ImportRows` em 949,31 ms; atualizacoes de contadores em 2.309,67 ms. O numero exato de queries nao estava disponivel sem ativar log detalhado do Prisma e, portanto, nao foi estimado.
+
+Mesmo sem imagens, os dois lotes consumiram cerca de 181 segundos dentro do processamento. Isso mostra que a latencia entre a API local e o MySQL remoto de staging e um gargalo relevante e precisa ser separada do custo das midias.

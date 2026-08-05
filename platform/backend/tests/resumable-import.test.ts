@@ -11,7 +11,10 @@ import {
   selectRowsForMode,
   processNextImportBatch,
   getImportReport,
+  getImportMediaConcurrency,
+  mapWithConcurrency,
 } from "../src/services/resumable-import.js";
+import { importMetricsEnabled, mergeImportMetrics, recordImportMetric } from "../src/services/import-metrics.js";
 import { assertPublicHost, isPrivateAddress, validateImageBytes } from "../src/services/import-media.js";
 
 describe("resumable import policy", () => {
@@ -55,6 +58,44 @@ describe("resumable import policy", () => {
   it("nao permite reclamar job concluido ou cancelado", () => {
     expect(canClaimImportStatus("COMPLETED")).toBe(false);
     expect(canClaimImportStatus("CANCELED")).toBe(false);
+  });
+
+  it("limita concorrencia de midia ao intervalo seguro", () => {
+    expect(getImportMediaConcurrency(undefined)).toBe(3);
+    expect(getImportMediaConcurrency("0")).toBe(1);
+    expect(getImportMediaConcurrency("4")).toBe(4);
+    expect(getImportMediaConcurrency("500")).toBe(5);
+    expect(getImportMediaConcurrency("invalido")).toBe(3);
+  });
+
+  it("executa midias com concorrencia limitada e preserva a ordem", async () => {
+    let active = 0;
+    let peak = 0;
+    const results = await mapWithConcurrency([1, 2, 3, 4, 5, 6], 3, async (item) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return item * 2;
+    });
+    expect(peak).toBe(3);
+    expect(results).toEqual([2, 4, 6, 8, 10, 12]);
+  });
+
+  it("habilita metricas somente em staging ou teste por opt-in", () => {
+    expect(importMetricsEnabled({ NODE_ENV: "staging", IMPORT_METRICS_ENABLED: "true" })).toBe(true);
+    expect(importMetricsEnabled({ NODE_ENV: "test", IMPORT_METRICS_ENABLED: "true" })).toBe(true);
+    expect(importMetricsEnabled({ NODE_ENV: "production", IMPORT_METRICS_ENABLED: "true" })).toBe(false);
+    expect(importMetricsEnabled({ NODE_ENV: "staging", IMPORT_METRICS_ENABLED: "false" })).toBe(false);
+  });
+
+  it("agrega metricas sem incluir payloads", () => {
+    const first = { duplicate_lookup: { count: 2, total_ms: 4, max_ms: 3 } };
+    const second = { duplicate_lookup: { count: 1, total_ms: 5, max_ms: 5 } };
+    expect(mergeImportMetrics(first, second)).toEqual({ duplicate_lookup: { count: 3, total_ms: 9, max_ms: 5 } });
+    const disabled = {};
+    recordImportMetric(disabled, "file_parse", performance.now());
+    expect(disabled).toEqual({});
   });
 });
 

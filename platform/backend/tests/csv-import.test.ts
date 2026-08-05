@@ -23,6 +23,22 @@ async function zipB64(files: Record<string, string | Buffer>) {
 }
 
 describe("csv import parser", () => {
+  it("preserva virgulas internas em URLs validas de CDN", () => {
+    const preview = previewCsvImport({
+      fileName: "cloudinary.csv",
+      contentBase64: b64([
+        "Codigo;Titulo;Fotos",
+        "URL-1;Imovel CDN;https://res.cloudinary.com/demo/image/upload/w_64,h_64,c_fill/sample.jpg|https://cdn.example.com/segunda.jpg",
+      ].join("\n")),
+      importType: "properties",
+    });
+    expect(preview.valid_rows).toBe(1);
+    expect(preview.rows[0]?.mapped_data.property.media_urls).toEqual([
+      "https://res.cloudinary.com/demo/image/upload/w_64,h_64,c_fill/sample.jpg",
+      "https://cdn.example.com/segunda.jpg",
+    ]);
+  });
+
   it("mapeia CSV de imoveis e proprietarios com valores brasileiros", () => {
     const preview = previewCsvImport({
       fileName: "imoveis.csv",
