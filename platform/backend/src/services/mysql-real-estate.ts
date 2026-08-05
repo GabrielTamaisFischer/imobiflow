@@ -11,6 +11,50 @@ const propertyInclude = {
   },
 };
 
+const publicPropertySelect = {
+  id: true,
+  code: true,
+  title: true,
+  description: true,
+  propertyType: true,
+  operation: true,
+  status: true,
+  street: true,
+  number: true,
+  complement: true,
+  neighborhood: true,
+  city: true,
+  state: true,
+  country: true,
+  zipCode: true,
+  latitude: true,
+  longitude: true,
+  condominiumName: true,
+  bedrooms: true,
+  bathrooms: true,
+  suites: true,
+  parkingSpaces: true,
+  privateArea: true,
+  totalArea: true,
+  salePriceCents: true,
+  rentPriceCents: true,
+  condominiumFeeCents: true,
+  iptuCents: true,
+  featuresJson: true,
+  amenityGroupsJson: true,
+  publishedAt: true,
+  media: {
+    orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
+    select: {
+      mediaType: true,
+      url: true,
+      caption: true,
+      position: true,
+      isCover: true,
+    },
+  },
+} satisfies Prisma.PropertySelect;
+
 export const DEFAULT_PROPERTY_PAGE_SIZE = 25;
 export const MAX_PROPERTY_PAGE_SIZE = 100;
 
@@ -493,12 +537,12 @@ export async function loadMysqlPublicProperties(site: { companyId: string; setti
       status: { in: ["available", "reserved"] },
       publishedAt: { not: null },
     },
-    include: propertyInclude,
+    select: publicPropertySelect,
     orderBy: { publishedAt: "desc" },
     take: limit,
   });
 
-  return properties.map((property) => sanitizePublicProperty(serializeProperty(property), site));
+  return properties.map((property) => serializePublicProperty(property, site));
 }
 
 export async function loadMysqlPublicPropertyByReference(
@@ -513,10 +557,10 @@ export async function loadMysqlPublicPropertyByReference(
         status: { in: ["available", "reserved"] },
         publishedAt: { not: null },
       },
-      include: propertyInclude,
+      select: publicPropertySelect,
     });
     if (!property) throw publicSiteNotFound();
-    return sanitizePublicProperty(serializeProperty(property), site);
+    return serializePublicProperty(property, site);
   }
 
   const shortId = reference.match(/-([a-f0-9]{8})$/i)?.[1];
@@ -530,12 +574,12 @@ export async function loadMysqlPublicPropertyByReference(
         ...(shortId ? [{ id: { startsWith: shortId } }] : []),
       ],
     },
-    include: propertyInclude,
+    select: publicPropertySelect,
   });
   if (!property) throw publicSiteNotFound();
-  const serialized = serializeProperty(property);
+  const serialized = serializePublicProperty(property, site);
   if (!matchesPropertySlug(serialized, reference)) throw publicSiteNotFound();
-  return sanitizePublicProperty(serialized, site);
+  return serialized;
 }
 
 export async function createMysqlPublicLead(params: {
@@ -816,19 +860,50 @@ export function matchesPropertySlug(property: { id: string; code?: string | null
   );
 }
 
-function sanitizePublicProperty(property: any, site: { settingsJson: unknown }) {
+function serializePublicProperty(property: any, site: { settingsJson: unknown }) {
   const settings = isRecord(site.settingsJson) ? site.settingsJson : {};
   const showFullAddress = settings.show_full_address === true;
   const showPrices = settings.show_prices !== false;
 
   return {
-    ...property,
+    id: property.id,
+    code: property.code,
+    title: property.title,
+    description: property.description,
+    property_type: property.propertyType,
+    operation: property.operation,
+    status: property.status,
     street: showFullAddress ? property.street : null,
     number: showFullAddress ? property.number : null,
     complement: showFullAddress ? property.complement : null,
-    zip_code: showFullAddress ? property.zip_code : null,
-    sale_price_cents: showPrices ? property.sale_price_cents : null,
-    rent_price_cents: showPrices ? property.rent_price_cents : null,
+    neighborhood: property.neighborhood,
+    city: property.city,
+    state: property.state,
+    country: property.country,
+    zip_code: showFullAddress ? property.zipCode : null,
+    latitude: showFullAddress ? property.latitude : null,
+    longitude: showFullAddress ? property.longitude : null,
+    condominium_name: showFullAddress ? property.condominiumName : null,
+    bedrooms: property.bedrooms,
+    bathrooms: property.bathrooms,
+    suites: property.suites,
+    parking_spaces: property.parkingSpaces,
+    private_area: property.privateArea,
+    total_area: property.totalArea,
+    sale_price_cents: showPrices ? property.salePriceCents : null,
+    rent_price_cents: showPrices ? property.rentPriceCents : null,
+    condominium_fee_cents: showPrices ? property.condominiumFeeCents : null,
+    iptu_cents: showPrices ? property.iptuCents : null,
+    features_json: property.featuresJson ?? {},
+    amenity_groups_json: property.amenityGroupsJson ?? {},
+    published_at: toIso(property.publishedAt),
+    property_media: (property.media ?? []).map((media: any) => ({
+      media_type: media.mediaType,
+      url: media.url,
+      caption: media.caption,
+      position: media.position,
+      is_cover: media.isCover,
+    })),
   };
 }
 
