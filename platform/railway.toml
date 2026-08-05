@@ -1,7 +1,6 @@
 [build]
 builder = "RAILPACK"
 buildCommand = "npm run prisma:generate && npm --prefix backend run build"
-watchPatterns = ["/platform/backend/**", "/platform/prisma/**", "/platform/railway.toml"]
 
 [deploy]
 startCommand = "npm --prefix backend run start"
