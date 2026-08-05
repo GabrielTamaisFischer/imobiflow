@@ -3,10 +3,13 @@ import { isIP } from "node:net";
 import { buildStorageFolder, getStorageProvider } from "./storage/index.js";
 import { createStoredFileRecord } from "./storage/stored-files.js";
 import type { StorageProvider } from "./storage/types.js";
+import { recordImportMetric, type ImportMetricBag } from "./import-metrics.js";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 15_000;
+const MAX_DOWNLOAD_RETRIES = 2;
+const RETRY_BACKOFF_MS = 250;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export type ImportMediaDependencies = {
@@ -23,44 +26,83 @@ export async function importRemotePropertyImage(input: {
   importSource: string;
   sourceUrl: string;
   position: number;
+  metrics?: ImportMetricBag;
 }, dependencies: ImportMediaDependencies = {}) {
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const provider = dependencies.provider ?? getStorageProvider();
-  const response = await fetchImage(input.sourceUrl, fetchImpl, dependencies.assertPublicHost ?? assertPublicHost);
+  const downloadStarted = performance.now();
+  let response!: Response;
+  let bytes!: Uint8Array;
+  try {
+    response = await fetchImageWithRetry(input.sourceUrl, fetchImpl, dependencies.assertPublicHost ?? assertPublicHost);
+    const mimeType = normalizeMime(response.headers.get("content-type"));
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (!ALLOWED_MIME.has(mimeType)) throw mediaError("IMPORT_IMAGE_MIME", "Tipo de imagem nao permitido.");
+    if (declaredLength > MAX_IMAGE_BYTES) throw mediaError("IMPORT_IMAGE_TOO_LARGE", "Imagem excede 10 MB.");
+    bytes = await readBodyWithLimit(response, MAX_IMAGE_BYTES);
+  } finally {
+    recordImportMetric(input.metrics ?? {}, "media_download", downloadStarted);
+  }
   const mimeType = normalizeMime(response.headers.get("content-type"));
-  const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (!ALLOWED_MIME.has(mimeType)) throw mediaError("IMPORT_IMAGE_MIME", "Tipo de imagem nao permitido.");
-  if (declaredLength > MAX_IMAGE_BYTES) throw mediaError("IMPORT_IMAGE_TOO_LARGE", "Imagem excede 10 MB.");
-
-  const bytes = await readBodyWithLimit(response, MAX_IMAGE_BYTES);
-  validateImageBytes(bytes, mimeType);
+  const validationStarted = performance.now();
+  try {
+    validateImageBytes(bytes, mimeType);
+  } finally {
+    recordImportMetric(input.metrics ?? {}, "media_validate", validationStarted);
+  }
 
   const fileName = safeImageName(new URL(input.sourceUrl).pathname, mimeType);
-  const uploaded = await provider.uploadFile({
-    companyId: input.companyId,
-    entityType: "property",
-    entityId: input.propertyId,
-    purpose: "property_image",
-    fileName,
-    mimeType,
-    sizeBytes: bytes.length,
-    body: bytes,
-    folder: buildStorageFolder({ companyId: input.companyId, purpose: "property_image", propertyId: input.propertyId }),
-    metadata: { importJobId: input.importJobId, importSource: input.importSource, sourceUrl: input.sourceUrl },
-  });
+  const uploadStarted = performance.now();
+  let uploaded!: Awaited<ReturnType<StorageProvider["uploadFile"]>>;
+  try {
+    uploaded = await provider.uploadFile({
+      companyId: input.companyId,
+      entityType: "property",
+      entityId: input.propertyId,
+      purpose: "property_image",
+      fileName,
+      mimeType,
+      sizeBytes: bytes.length,
+      body: bytes,
+      folder: buildStorageFolder({ companyId: input.companyId, purpose: "property_image", propertyId: input.propertyId }),
+      metadata: { importJobId: input.importJobId, importSource: input.importSource, sourceUrl: input.sourceUrl },
+    });
+  } finally {
+    recordImportMetric(input.metrics ?? {}, "storage_upload", uploadStarted);
+  }
 
-  const stored = await createStoredFileRecord({
-    companyId: input.companyId,
-    entityType: "property",
-    entityId: input.propertyId,
-    file: uploaded,
-    uploadedBy: input.userId,
-    sourceUrl: input.sourceUrl,
-    importJobId: input.importJobId,
-    importSource: input.importSource,
-    metadata: { position: input.position },
-  });
+  const storedFileStarted = performance.now();
+  let stored!: Awaited<ReturnType<typeof createStoredFileRecord>>;
+  try {
+    stored = await createStoredFileRecord({
+      companyId: input.companyId,
+      entityType: "property",
+      entityId: input.propertyId,
+      file: uploaded,
+      uploadedBy: input.userId,
+      sourceUrl: input.sourceUrl,
+      importJobId: input.importJobId,
+      importSource: input.importSource,
+      metadata: { position: input.position },
+    });
+  } finally {
+    recordImportMetric(input.metrics ?? {}, "stored_file_create", storedFileStarted);
+  }
   return { uploaded, stored };
+}
+
+async function fetchImageWithRetry(source: string, fetchImpl: typeof fetch, assertHost: (hostname: string) => Promise<void>) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_DOWNLOAD_RETRIES; attempt += 1) {
+    try {
+      return await fetchImage(source, fetchImpl, assertHost);
+    } catch (error) {
+      lastError = error;
+      if (attempt === MAX_DOWNLOAD_RETRIES || !isRetryableDownloadError(error)) throw error;
+      await delay(RETRY_BACKOFF_MS * 2 ** attempt);
+    }
+  }
+  throw lastError;
 }
 
 async function fetchImage(source: string, fetchImpl: typeof fetch, assertHost: (hostname: string) => Promise<void>) {
@@ -77,7 +119,11 @@ async function fetchImage(source: string, fetchImpl: typeof fetch, assertHost: (
       if (current.protocol !== "https:" && current.protocol !== "http:") throw mediaError("IMPORT_IMAGE_PROTOCOL", "Protocolo nao permitido.");
       continue;
     }
-    if (!response.ok) throw mediaError("IMPORT_IMAGE_HTTP", `Download da imagem retornou HTTP ${response.status}.`);
+    if (!response.ok) {
+      throw Object.assign(mediaError("IMPORT_IMAGE_HTTP", `Download da imagem retornou HTTP ${response.status}.`), {
+        retryable: response.status === 429 || response.status >= 500,
+      });
+    }
     return response;
   }
   throw mediaError("IMPORT_IMAGE_REDIRECT", "Redirecionamentos demais.");
@@ -131,6 +177,16 @@ function safeImageName(pathname: string, mime: string) {
 
 function mediaError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
+}
+
+function isRetryableDownloadError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  if ((error as Error & { retryable?: boolean }).retryable) return true;
+  return ["AbortError", "TimeoutError", "TypeError"].includes(error.name);
+}
+
+function delay(durationMs: number) {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
 async function readBodyWithLimit(response: Response, limit: number) {

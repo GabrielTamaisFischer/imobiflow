@@ -897,7 +897,7 @@ function parseMoneyCents(value: string | null) {
 function parseUrlList(value: string | null) {
   if (!value) return [];
   return value
-    .split(/[\n,;|]+/)
+    .split(/\r?\n|[;|]+|,\s*(?=https?:\/\/)/i)
     .map((url) => url.trim())
     .filter(Boolean);
 }

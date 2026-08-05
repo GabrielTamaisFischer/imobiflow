@@ -5,10 +5,14 @@ import { importRemotePropertyImage, validateImageBytes } from "./import-media.js
 import { buildStorageFolder, getStorageProvider, getStorageProviderForName } from "./storage/index.js";
 import { createStoredFileRecord } from "./storage/stored-files.js";
 import type { StorageProviderName } from "./storage/types.js";
+import { env } from "../config/env.js";
+import { importMetricsEnabled, mergeImportMetrics, recordImportMetric, type ImportMetricBag } from "./import-metrics.js";
 
 export const DEFAULT_IMPORT_BATCH_SIZE = 25;
 export const MAX_IMPORT_BATCH_SIZE = 100;
 export const TEST_IMPORT_LIMIT = 50;
+export const DEFAULT_IMPORT_MEDIA_CONCURRENCY = 3;
+export const MAX_IMPORT_MEDIA_CONCURRENCY = 5;
 const LOCK_DURATION_MS = 2 * 60_000;
 
 export type StartImportInput = {
@@ -28,6 +32,8 @@ export type StartImportInput = {
 
 export async function startResumableImport(prisma: PrismaClient, input: StartImportInput) {
   assertFullImportConfirmed(input.mode, input.confirmFullImport);
+  const metrics: ImportMetricBag = {};
+  const parseStarted = performance.now();
   const parsed = await parseFullDataImport({
     fileName: input.fileName,
     contentBase64: input.contentBase64,
@@ -36,21 +42,25 @@ export async function startResumableImport(prisma: PrismaClient, input: StartImp
     delimiter: input.delimiter,
     mappingOverride: input.mapping,
   });
+  recordImportMetric(metrics, "file_parse", parseStarted);
   const selectedRows = selectRowsForMode(parsed.rows, input.mode);
   if (!input.allowPartial && selectedRows.some((row) => row.status === "invalid")) {
     throw Object.assign(httpError(422, "IMPORT_HAS_INVALID_ROWS", "Corrija as linhas invalidas ou habilite importacao parcial."), { preview: parsed });
   }
   const batchSize = clampImportBatchSize(input.batchSize);
+  const jobCreateStarted = performance.now();
   const job = await prisma.importJob.create({ data: {
     companyId: input.companyId, createdBy: input.userId, importType: input.importType,
     sourceType: input.sourceType, sourceName: input.fileName, mode: input.mode, status: "PENDING",
     totalRows: selectedRows.length, batchSize, nextCursor: selectedRows[0]?.row_number ?? 1,
     confirmFullImport: input.confirmFullImport, mappingJson: json(parsed.mapping),
-    metadataJson: json({ original_total_rows: parsed.total_rows, test_limit_applied: input.mode === "test" && parsed.total_rows > TEST_IMPORT_LIMIT, allow_partial: input.allowPartial }),
+    metadataJson: json({ original_total_rows: parsed.total_rows, test_limit_applied: input.mode === "test" && parsed.total_rows > TEST_IMPORT_LIMIT, allow_partial: input.allowPartial, import_metrics: {} }),
   }});
+  recordImportMetric(metrics, "import_job_create", jobCreateStarted);
 
   const stagedRows: ParsedImportRow[] = [];
   for (const row of selectedRows) stagedRows.push(await stageEmbeddedMedia(prisma, job.id, input, row));
+  const rowsCreateStarted = performance.now();
   for (let offset = 0; offset < stagedRows.length; offset += 500) {
     await prisma.importRow.createMany({ data: stagedRows.slice(offset, offset + 500).map((row) => ({
       importJobId: job.id, companyId: input.companyId, rowNumber: row.row_number,
@@ -60,11 +70,17 @@ export async function startResumableImport(prisma: PrismaClient, input: StartImp
       processedAt: row.status === "invalid" ? new Date() : null,
     })) });
   }
+  recordImportMetric(metrics, "import_rows_create", rowsCreateStarted);
+  const countersStarted = performance.now();
   await refreshJobCounters(prisma, input.companyId, job.id);
+  recordImportMetric(metrics, "counter_refresh", countersStarted);
+  await persistImportMetrics(prisma, job.id, job.metadataJson, metrics);
   return processNextImportBatch(prisma, input.companyId, input.userId, job.id);
 }
 
 export async function processNextImportBatch(prisma: PrismaClient, companyId: string, userId: string, jobId: string) {
+  const batchStarted = performance.now();
+  const metrics: ImportMetricBag = {};
   const lockToken = randomUUID();
   const now = new Date();
   const claimed = await prisma.importJob.updateMany({
@@ -87,7 +103,7 @@ export async function processNextImportBatch(prisma: PrismaClient, companyId: st
     const owned = await prisma.importRow.updateMany({ where: { id: row.id, companyId, status: "PENDING" }, data: { status: "PROCESSING" } });
     if (!owned.count) continue;
     try {
-      await processImportRow(prisma, job, row, userId);
+      await processImportRow(prisma, job, row, userId, metrics);
     } catch (error) {
       lastError = error instanceof Error ? error.message : "Falha ao importar linha.";
       await prisma.importRow.updateMany({ where: { id: row.id, companyId }, data: { status: "FAILED", errorCode: errorCode(error), errorMessage: lastError, processedAt: new Date() } });
@@ -100,7 +116,11 @@ export async function processNextImportBatch(prisma: PrismaClient, companyId: st
     nextCursor: next?.rowNumber ?? job.totalRows + 1, lockToken: null, lockExpiresAt: null, lastError,
     finishedAt: next ? null : new Date(),
   }});
+  const countersStarted = performance.now();
   await refreshJobCounters(prisma, companyId, jobId);
+  recordImportMetric(metrics, "counter_refresh", countersStarted);
+  recordImportMetric(metrics, "batch_total", batchStarted);
+  await persistImportMetrics(prisma, jobId, job.metadataJson, metrics);
   return getImportReport(prisma, companyId, jobId);
 }
 
@@ -148,12 +168,14 @@ export async function rollbackImport(prisma: PrismaClient, companyId: string, jo
   return result;
 }
 
-async function processImportRow(prisma: PrismaClient, job: Awaited<ReturnType<PrismaClient["importJob"]["findFirstOrThrow"]>>, row: Awaited<ReturnType<PrismaClient["importRow"]["findFirstOrThrow"]>>, userId: string) {
+async function processImportRow(prisma: PrismaClient, job: Awaited<ReturnType<PrismaClient["importJob"]["findFirstOrThrow"]>>, row: Awaited<ReturnType<PrismaClient["importRow"]["findFirstOrThrow"]>>, userId: string, metrics: ImportMetricBag) {
   const mapped = row.mappedDataJson as unknown as ParsedImportRow["mapped_data"];
   let ownerId: string | null = null;
   let ownerCreated = false;
   if (job.importType !== "properties") {
+    const ownerStarted = performance.now();
     const owner = await upsertOwner(prisma, job.companyId, userId, mapped.owner);
+    recordImportMetric(metrics, "owner_create", ownerStarted);
     ownerId = owner.id; ownerCreated = owner.created;
   }
   if (job.importType === "owners") {
@@ -161,13 +183,17 @@ async function processImportRow(prisma: PrismaClient, job: Awaited<ReturnType<Pr
     return;
   }
   const externalId = row.externalId;
+  const duplicateStarted = performance.now();
   const duplicate = externalId ? await prisma.property.findFirst({ where: { companyId: job.companyId, OR: [{ importSource: job.sourceType, importExternalId: externalId }, { code: externalId }] }, select: { id: true } }) : null;
+  recordImportMetric(metrics, "duplicate_lookup", duplicateStarted);
   if (duplicate) {
     await prisma.importRow.update({ where: { id: row.id }, data: { status: "DUPLICATE", action: "SKIPPED", propertyId: duplicate.id, ownerId, processedAt: new Date() } });
     return;
   }
+  const propertyStarted = performance.now();
   const property = await prisma.property.create({ data: propertyCreateData(job, userId, ownerId, mapped.property, externalId) });
-  const media = await persistMedia(prisma, job, row, property.id, userId, mapped.property);
+  recordImportMetric(metrics, "property_create", propertyStarted);
+  const media = await persistMedia(prisma, job, row, property.id, userId, mapped.property, metrics);
   await prisma.importRow.update({ where: { id: row.id }, data: { status: "IMPORTED", action: ownerCreated ? "CREATED_PROPERTY_OWNER" : "CREATED_PROPERTY", propertyId: property.id, ownerId, processedAt: new Date(), errorMessage: media.failed ? `${media.failed} foto(s) falharam.` : null } });
   await prisma.importJob.update({ where: { id: job.id }, data: { importedPhotos: { increment: media.imported }, failedPhotos: { increment: media.failed } } });
 }
@@ -191,25 +217,36 @@ function propertyCreateData(job: { id: string; companyId: string; sourceType: st
     importSource: job.sourceType, importExternalId: externalId, importJobId: job.id, importedAt: new Date() };
 }
 
-async function persistMedia(prisma: PrismaClient, job: { id: string; companyId: string; sourceType: string }, row: { id: string }, propertyId: string, userId: string, property: Record<string, unknown>) {
+async function persistMedia(prisma: PrismaClient, job: { id: string; companyId: string; sourceType: string }, row: { id: string }, propertyId: string, userId: string, property: Record<string, unknown>, metrics: ImportMetricBag) {
   let imported = 0; let failed = 0; let position = 0;
   for (const item of arrayRecords(property.media_files)) {
     const secureUrl = readString(item.secure_url); const publicId = readString(item.public_id);
     if (!secureUrl || !publicId) { failed += 1; continue; }
     const stored = await prisma.storedFile.updateMany({ where: { companyId: job.companyId, importJobId: job.id, publicId }, data: { entityType: "property", entityId: propertyId } });
     if (!stored.count) { failed += 1; continue; }
-    await prisma.propertyMedia.create({ data: { companyId: job.companyId, propertyId, mediaType: "photo", url: secureUrl, position, storagePath: publicId, mimeType: readString(item.mime_type), fileSize: readNumber(item.size_bytes), isCover: position === 0 } }); imported += 1; position += 1;
+    const mediaCreateStarted = performance.now();
+    await prisma.propertyMedia.create({ data: { companyId: job.companyId, propertyId, mediaType: "photo", url: secureUrl, position, storagePath: publicId, mimeType: readString(item.mime_type), fileSize: readNumber(item.size_bytes), isCover: position === 0 } });
+    recordImportMetric(metrics, "property_media_create", mediaCreateStarted); imported += 1; position += 1;
   }
-  for (const sourceUrl of arrayStrings(property.media_urls)) {
+  const sourceUrls = [...new Set(arrayStrings(property.media_urls))];
+  const mediaResults = await mapWithConcurrency(sourceUrls, getImportMediaConcurrency(), async (sourceUrl, sourceIndex) => {
     try {
+      const dedupStarted = performance.now();
       const existing = await prisma.storedFile.findFirst({ where: { companyId: job.companyId, sourceUrl }, orderBy: { createdAt: "desc" } });
+      recordImportMetric(metrics, "media_dedup_lookup", dedupStarted);
       if (existing) {
-        await prisma.propertyMedia.create({ data: { companyId: job.companyId, propertyId, mediaType: "photo", url: existing.secureUrl, position, storagePath: existing.publicId, mimeType: existing.mimeType, fileSize: existing.sizeBytes, isCover: position === 0 } });
-        imported += 1; position += 1; continue;
+        return { ok: true as const, file: existing, sourceIndex };
       }
-      const { uploaded } = await importRemotePropertyImage({ companyId: job.companyId, userId, propertyId, importJobId: job.id, importSource: job.sourceType, sourceUrl, position });
-      await prisma.propertyMedia.create({ data: { companyId: job.companyId, propertyId, mediaType: "photo", url: uploaded.secureUrl, position, storagePath: uploaded.publicId, mimeType: uploaded.mimeType, fileSize: uploaded.sizeBytes, isCover: position === 0 } }); imported += 1; position += 1;
-    } catch { failed += 1; }
+      const { uploaded } = await importRemotePropertyImage({ companyId: job.companyId, userId, propertyId, importJobId: job.id, importSource: job.sourceType, sourceUrl, position: sourceIndex, metrics });
+      return { ok: true as const, file: { secureUrl: uploaded.secureUrl, publicId: uploaded.publicId, mimeType: uploaded.mimeType, sizeBytes: uploaded.sizeBytes }, sourceIndex };
+    } catch { return { ok: false as const, sourceIndex }; }
+  });
+  for (const result of mediaResults) {
+    if (!result.ok) { failed += 1; continue; }
+    const mediaCreateStarted = performance.now();
+    await prisma.propertyMedia.create({ data: { companyId: job.companyId, propertyId, mediaType: "photo", url: result.file.secureUrl, position, storagePath: result.file.publicId, mimeType: result.file.mimeType, fileSize: result.file.sizeBytes, isCover: position === 0 } });
+    recordImportMetric(metrics, "property_media_create", mediaCreateStarted);
+    imported += 1; position += 1;
   }
   return { imported, failed };
 }
@@ -240,6 +277,32 @@ async function refreshJobCounters(prisma: PrismaClient, companyId: string, jobId
   await prisma.importJob.updateMany({ where: { id: jobId, companyId }, data: { processedRows: (counts.IMPORTED ?? 0) + (counts.DUPLICATE ?? 0) + (counts.SKIPPED ?? 0) + (counts.FAILED ?? 0), importedRows: counts.IMPORTED ?? 0, duplicateRows: counts.DUPLICATE ?? 0, skippedRows: counts.SKIPPED ?? 0, failedRows: counts.FAILED ?? 0 } });
 }
 
+export function getImportMediaConcurrency(value: string | number | undefined = env.IMPORT_MEDIA_CONCURRENCY) {
+  const parsed = Number(value ?? DEFAULT_IMPORT_MEDIA_CONCURRENCY);
+  if (!Number.isFinite(parsed)) return DEFAULT_IMPORT_MEDIA_CONCURRENCY;
+  return Math.min(MAX_IMPORT_MEDIA_CONCURRENCY, Math.max(1, Math.floor(parsed)));
+}
+
+export async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index]!, index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(getImportMediaConcurrency(concurrency), items.length) }, runWorker));
+  return results;
+}
+
+async function persistImportMetrics(prisma: PrismaClient, jobId: string, currentMetadata: unknown, metrics: ImportMetricBag) {
+  if (!importMetricsEnabled()) return;
+  const metadata = isRecord(currentMetadata) ? currentMetadata : {};
+  const existing = isRecord(metadata.import_metrics) ? (metadata.import_metrics as ImportMetricBag) : {};
+  await prisma.importJob.update({ where: { id: jobId }, data: { metadataJson: json({ ...metadata, import_metrics: mergeImportMetrics(existing, metrics) }) } });
+}
+
 function sanitizeMapped(mapped: ParsedImportRow["mapped_data"]) { return { ...mapped, property: { ...mapped.property, media_files: arrayRecords(mapped.property.media_files).map(({ content_base64: _, ...file }) => file) } }; }
 function serializeJob(job: Record<string, unknown>) { return Object.fromEntries(Object.entries(job).map(([key, value]) => [key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), value])); }
 function videoJson(value: Record<string, unknown>) { return arrayStrings(value.video_urls ?? value.video_url).concat(arrayStrings(value.tour_urls ?? value.tour_url)).map((url) => ({ url, external: true })); }
@@ -248,6 +311,7 @@ function readString(value: unknown) { return typeof value === "string" && value.
 function readNumber(value: unknown) { const parsed = typeof value === "number" ? value : Number(value); return Number.isFinite(parsed) ? parsed : null; }
 function arrayStrings(value: unknown) { return Array.isArray(value) ? value.map(readString).filter((item): item is string => Boolean(item)) : readString(value) ? [readString(value)!] : []; }
 function arrayRecords(value: unknown): Array<Record<string, unknown>> { return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : []; }
+function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function errorCode(error: unknown) { return typeof error === "object" && error && "code" in error ? String(error.code) : "IMPORT_ROW_FAILED"; }
 function httpError(statusCode: number, code: string, message: string) { return Object.assign(new Error(message), { statusCode, code }); }
 
