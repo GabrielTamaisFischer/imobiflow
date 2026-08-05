@@ -52,7 +52,16 @@ export async function buildAccessContext(authUser: User): Promise<AccessContext>
 
   if (userError) throw userError;
   if (!appUser || !appUser.company_id || !appUser.companies) {
-    throw Object.assign(new Error("Usuário sem empresa vinculada."), { statusCode: 403 });
+    throw accessDenied(
+      "INTERNAL_USER_REQUIRED",
+      "Usuário interno ativo e vinculado a uma empresa é obrigatório.",
+    );
+  }
+  if (appUser.status !== "active") {
+    throw accessDenied("USER_INACTIVE", "Usuário interno inativo.");
+  }
+  if (appUser.companies.id !== appUser.company_id || appUser.companies.status !== "active") {
+    throw accessDenied("COMPANY_INACTIVE", "Vínculo com empresa ativa é obrigatório.");
   }
 
   const { data: rolePermissions, error: permissionsError } = await supabaseAdmin
@@ -109,4 +118,8 @@ export async function buildAccessContext(authUser: User): Promise<AccessContext>
         }
       : null,
   };
+}
+
+function accessDenied(code: string, message: string) {
+  return Object.assign(new Error(message), { statusCode: 403, code });
 }
