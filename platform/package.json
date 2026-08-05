@@ -23,6 +23,7 @@
     "import:staging:validate:500": "node scripts/run-import-staging-validation.mjs --count=500",
     "import:staging:restart-media": "node scripts/run-import-restart-media-staging.mjs",
     "import:staging:media-only": "node scripts/run-import-restart-media-staging.mjs --media-only",
+    "import:staging:railway": "node scripts/run-import-restart-media-staging.mjs --railway",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
