@@ -24,7 +24,7 @@ import {
   type PortalProvider,
   type PortalPublication,
 } from "@/product/portal-integrations";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/integracoes")({
@@ -51,7 +51,7 @@ function IntegrationsPage() {
   const module = getModuleByKey("integrations");
   const [providers, setProviders] = useState<IntegrationProviderCatalogItem[]>([]);
   const [connections, setConnections] = useState<IntegrationConnection[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [portalPublications, setPortalPublications] = useState<PortalPublication[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [isBusy, setIsBusy] = useState(true);
@@ -65,7 +65,7 @@ function IntegrationsPage() {
       const [providerResponse, connectionResponse, propertyResponse, publicationResponse] = await Promise.all([
         listIntegrationProviders(),
         listIntegrationConnections(),
-        listProperties(),
+        listAllProperties(),
         listPortalPublications(),
       ]);
       setProviders(providerResponse.providers);
@@ -183,7 +183,7 @@ function PortalPublicationsPanel({
   onChanged,
 }: {
   companyId?: string;
-  properties: Property[];
+  properties: PropertySummary[];
   publications: PortalPublication[];
   onChanged: () => void;
 }) {

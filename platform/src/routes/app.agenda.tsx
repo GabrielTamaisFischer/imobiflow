@@ -40,7 +40,7 @@ import {
   type RentalAgreement,
 } from "@/product/agenda";
 import { listLeads, type Lead } from "@/product/crm";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/agenda")({
@@ -146,7 +146,7 @@ function AgendaPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [rentals, setRentals] = useState<RentalAgreement[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [isAgendaLoading, setIsAgendaLoading] = useState(true);
   const [showAppointmentForm, setShowAppointmentForm] = useState(false);
   const [showRentalForm, setShowRentalForm] = useState(false);
@@ -163,7 +163,7 @@ function AgendaPage() {
         listAppointments(),
         listRentals(),
         listLeads(),
-        listProperties(),
+        listAllProperties(),
       ]);
       setAppointments(appointmentResponse.appointments);
       setRentals(rentalResponse.rentals);
@@ -2982,7 +2982,7 @@ function AppointmentForm({
   onCreated,
 }: {
   leads: Lead[];
-  properties: Property[];
+  properties: PropertySummary[];
   assignedTo?: string;
   onCancel: () => void;
   onCreated: (appointment: Appointment) => void;
@@ -3102,7 +3102,7 @@ function RentalForm({
   onCreated,
 }: {
   leads: Lead[];
-  properties: Property[];
+  properties: PropertySummary[];
   onCancel: () => void;
   onCreated: (rental: RentalAgreement) => void;
 }) {

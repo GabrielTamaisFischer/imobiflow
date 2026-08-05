@@ -8,10 +8,11 @@ import {
   createOwner,
   archiveOwner,
   listOwners,
-  listProperties,
+  listAllProperties,
   updateOwner,
   type OwnerInput,
   type Property,
+  type PropertySummary,
   type PropertyOwner,
 } from "@/product/real-estate";
 import { createNotificationEvent, type NotificationChannel } from "@/product/notifications";
@@ -25,7 +26,7 @@ function OwnersPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("owners");
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [isOwnersLoading, setIsOwnersLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [ownerSearch, setOwnerSearch] = useState("");
@@ -36,7 +37,7 @@ function OwnersPage() {
     setError(null);
 
     try {
-      const [ownersResponse, propertiesResponse] = await Promise.all([listOwners(), listProperties()]);
+      const [ownersResponse, propertiesResponse] = await Promise.all([listOwners(), listAllProperties()]);
       setOwners(ownersResponse.owners);
       setProperties(propertiesResponse.properties);
     } catch (ownersError) {
@@ -317,7 +318,7 @@ function OwnerCard({
   onOwnerRemoved,
 }: {
   owner: PropertyOwner;
-  linkedProperties: Property[];
+  linkedProperties: PropertySummary[];
   onOwnerUpdated: (owner: PropertyOwner) => void;
   onOwnerRemoved: (ownerId: string) => void;
 }) {
@@ -516,7 +517,7 @@ function OwnerCard({
   );
 }
 
-function OwnerDetailsModal({ owner, linkedProperties, onClose }: { owner: PropertyOwner; linkedProperties: Property[]; onClose: () => void }) {
+function OwnerDetailsModal({ owner, linkedProperties, onClose }: { owner: PropertyOwner; linkedProperties: PropertySummary[]; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl">

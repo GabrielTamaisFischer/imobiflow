@@ -15,7 +15,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type * as React from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
@@ -25,15 +25,20 @@ import {
   createOwner,
   createProperty,
   deletePropertyMedia,
+  getProperty,
   listOwners,
   listProperties,
   reorderPropertyMedia,
   updateProperty,
   uploadPropertyMedia,
+  toPropertySummary,
   type OwnerInput,
   type Property,
   type PropertyInput,
   type PropertyOwner,
+  type PropertyPagination,
+  type PropertySummary,
+  type PropertySummaryMedia,
 } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
@@ -89,6 +94,10 @@ const statusLabels: Record<Property["status"], string> = {
   inactive: "Inativo",
   archived: "Arquivado",
 };
+const propertyStatusOptions = [
+  ["not_archived", "Todos ativos"],
+  ...Object.entries(statusLabels),
+] as const;
 
 const topographyOptions = ["Aclive", "Declive", "Plano"];
 const fieldClass =
@@ -189,41 +198,78 @@ const descriptionTemplates = [
 function PropertiesPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("properties");
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [isPropertiesLoading, setIsPropertiesLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [propertySearch, setPropertySearch] = useState("");
+  const deferredPropertySearch = useDeferredValue(propertySearch);
+  const [propertyPage, setPropertyPage] = useState(1);
+  const [propertyStatus, setPropertyStatus] = useState<Property["status"] | "not_archived">("not_archived");
+  const [propertyOperation, setPropertyOperation] = useState<Property["operation"] | "">("");
+  const [propertyType, setPropertyType] = useState<Property["property_type"] | "">("");
+  const [pagination, setPagination] = useState<PropertyPagination>({
+    page: 1,
+    page_size: 25,
+    total: 0,
+    total_pages: 0,
+    has_next: false,
+    has_previous: false,
+  });
+  const [reloadVersion, setReloadVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  async function refreshProperties() {
-    setIsPropertiesLoading(true);
-    setError(null);
-
-    try {
-      const [propertiesResponse, ownersResponse] = await Promise.all([listProperties(), listOwners()]);
-      setProperties(propertiesResponse.properties);
-      setOwners(ownersResponse.owners);
-    } catch (propertiesError) {
-      setError(propertiesError instanceof Error ? propertiesError.message : "Não foi possível carregar imóveis.");
-    } finally {
-      setIsPropertiesLoading(false);
-    }
-  }
-
   useEffect(() => {
-    if (!isLoading && session) void refreshProperties();
+    if (isLoading || !session) return;
+    let canceled = false;
+    void listOwners()
+      .then((response) => {
+        if (!canceled) setOwners(response.owners);
+      })
+      .catch((ownersError) => {
+        if (!canceled) {
+          setError(ownersError instanceof Error ? ownersError.message : "Não foi possível carregar proprietários.");
+        }
+      });
+    return () => {
+      canceled = true;
+    };
   }, [isLoading, session]);
 
-  const filteredProperties = useMemo(() => {
-    const term = propertySearch.trim().toLowerCase();
-    if (!term) return properties;
-    return properties.filter((property) =>
-      [property.code, property.title, property.city, property.neighborhood, property.property_owners?.name]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(term)),
-    );
-  }, [properties, propertySearch]);
+  useEffect(() => {
+    if (isLoading || !session) return;
+    let canceled = false;
+    setIsPropertiesLoading(true);
+    setError(null);
+    void listProperties({
+      page: propertyPage,
+      pageSize: 25,
+      status: propertyStatus,
+      operation: propertyOperation || undefined,
+      propertyType: propertyType || undefined,
+      search: deferredPropertySearch || undefined,
+    })
+      .then((response) => {
+        if (canceled) return;
+        setProperties(response.items);
+        setPagination(response.pagination);
+      })
+      .catch((propertiesError) => {
+        if (!canceled) {
+          setError(propertiesError instanceof Error ? propertiesError.message : "Não foi possível carregar imóveis.");
+        }
+      })
+      .finally(() => {
+        if (!canceled) setIsPropertiesLoading(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [deferredPropertySearch, isLoading, propertyOperation, propertyPage, propertyStatus, propertyType, reloadVersion, session]);
+
+  function reloadProperties() {
+    setReloadVersion((current) => current + 1);
+  }
 
   if (isLoading) {
     return (
@@ -263,9 +309,10 @@ function PropertiesPage() {
           owners={owners}
           currentUserId={session?.access.appUser?.id}
           onCancel={() => setShowForm(false)}
-          onCreated={(property, owner) => {
-            setProperties((current) => [property, ...current]);
+          onCreated={(_property, owner) => {
             if (owner) setOwners((current) => [owner, ...current]);
+            setPropertyPage(1);
+            reloadProperties();
             setShowForm(false);
           }}
         />
@@ -277,17 +324,47 @@ function PropertiesPage() {
         </div>
       ) : null}
 
-      {properties.length ? (
-        <div className="mb-4 rounded-lg border border-border bg-card p-4">
-          <label className="block text-sm font-medium">
+      {pagination.total > 0 || propertySearch || propertyOperation || propertyType || propertyStatus !== "not_archived" ? (
+        <div className="mb-4 grid gap-3 rounded-lg border border-border bg-card p-4 md:grid-cols-2 xl:grid-cols-4">
+          <label className="block text-sm font-medium md:col-span-2 xl:col-span-1">
             Pesquisar imóvel
             <input
               value={propertySearch}
-              onChange={(event) => setPropertySearch(event.target.value)}
+              onChange={(event) => {
+                setPropertySearch(event.target.value);
+                setPropertyPage(1);
+              }}
               className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Pesquise por código, título, proprietário, bairro ou cidade"
+              placeholder="Código, título, bairro ou cidade"
             />
           </label>
+          <FilterSelect
+            label="Finalidade"
+            value={propertyOperation}
+            onChange={(value) => {
+              setPropertyOperation(value as typeof propertyOperation);
+              setPropertyPage(1);
+            }}
+            options={operationOptions}
+          />
+          <FilterSelect
+            label="Tipo"
+            value={propertyType}
+            onChange={(value) => {
+              setPropertyType(value as typeof propertyType);
+              setPropertyPage(1);
+            }}
+            options={propertyTypeOptions}
+          />
+          <FilterSelect
+            label="Status"
+            value={propertyStatus}
+            onChange={(value) => {
+              setPropertyStatus(value as typeof propertyStatus);
+              setPropertyPage(1);
+            }}
+            options={propertyStatusOptions}
+          />
         </div>
       ) : null}
 
@@ -296,7 +373,7 @@ function PropertiesPage() {
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           Carregando imóveis...
         </section>
-      ) : properties.length === 0 ? (
+      ) : pagination.total === 0 && !propertySearch && !propertyOperation && !propertyType && propertyStatus === "not_archived" ? (
         <EmptyState
           icon={Home}
           title="Nenhum imóvel cadastrado"
@@ -304,7 +381,7 @@ function PropertiesPage() {
           actionLabel="Cadastrar imóvel"
           onAction={() => setShowForm(true)}
         />
-      ) : filteredProperties.length === 0 ? (
+      ) : properties.length === 0 ? (
         <EmptyState
           icon={Home}
           title="Nenhum imóvel encontrado"
@@ -312,16 +389,19 @@ function PropertiesPage() {
         />
       ) : (
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filteredProperties.map((property) => (
+          {properties.map((property) => (
             <PropertyCard
               key={property.id}
               property={property}
               owners={owners}
               onPropertyUpdated={(updatedProperty) => {
-                setProperties((current) => current.map((item) => (item.id === updatedProperty.id ? updatedProperty : item)));
+                setProperties((current) =>
+                  current.map((item) => (item.id === updatedProperty.id ? toPropertySummary(updatedProperty) : item)),
+                );
               }}
               onPropertyRemoved={(propertyId) => {
                 setProperties((current) => current.filter((item) => item.id !== propertyId));
+                reloadProperties();
               }}
               onMediaUploaded={(media) => {
                 setProperties((current) =>
@@ -339,9 +419,56 @@ function PropertiesPage() {
               }}
             />
           ))}
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between md:col-span-2 xl:col-span-3">
+            <p className="text-sm text-muted-foreground">
+              {pagination.total} imóvel{pagination.total === 1 ? "" : "is"} · página {pagination.page} de {Math.max(pagination.total_pages, 1)} · até {pagination.page_size} por página
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!pagination.has_previous || isPropertiesLoading}
+                onClick={() => setPropertyPage((current) => Math.max(1, current - 1))}
+                className="h-9 rounded-md border border-border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Anterior
+              </button>
+              <button
+                type="button"
+                disabled={!pagination.has_next || isPropertiesLoading}
+                onClick={() => setPropertyPage((current) => current + 1)}
+                className="h-9 rounded-md border border-border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Próxima
+              </button>
+            </div>
+          </div>
         </section>
       )}
     </ModulePage>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<readonly [string, string]>;
+}) {
+  return (
+    <label className="block text-sm font-medium">
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} className={`${fieldClass} mt-2`}>
+        <option value="">Todos</option>
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>{optionLabel}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -1155,12 +1282,12 @@ function PropertyCard({
   onMediaUploaded,
   onMediaChanged,
 }: {
-  property: Property;
+  property: PropertySummary;
   owners: PropertyOwner[];
   onPropertyUpdated: (property: Property) => void;
   onPropertyRemoved: (propertyId: string) => void;
   onMediaUploaded: (media: NonNullable<Property["property_media"]>[number]) => void;
-  onMediaChanged: (propertyId: string, media: NonNullable<Property["property_media"]>) => void;
+  onMediaChanged: (propertyId: string, media: PropertySummaryMedia[]) => void;
 }) {
   const location = [property.neighborhood, property.city, property.state].filter(Boolean).join(", ");
   const salePrice = formatCurrency(property.sale_price_cents);
@@ -1168,8 +1295,24 @@ function PropertyCard({
   const coverMedia = getPropertyCoverMedia(property);
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [detailProperty, setDetailProperty] = useState<Property | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
+
+  async function openProperty(mode: "report" | "edit") {
+    setIsActionLoading(true);
+    setActionError(null);
+    try {
+      const response = await getProperty(property.id);
+      setDetailProperty(response.property);
+      if (mode === "report") setIsReportOpen(true);
+      else setIsEditOpen(true);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível carregar o imóvel.");
+    } finally {
+      setIsActionLoading(false);
+    }
+  }
 
   async function handleStatus(status: Property["status"]) {
     setIsActionLoading(true);
@@ -1241,8 +1384,8 @@ function PropertyCard({
         ) : null}
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <ActionButton icon={Eye} label="Visualizar" onClick={() => setIsReportOpen(true)} />
-        <ActionButton icon={Pencil} label="Editar" onClick={() => setIsEditOpen(true)} />
+        <ActionButton icon={Eye} label="Visualizar" onClick={() => void openProperty("report")} disabled={isActionLoading} />
+        <ActionButton icon={Pencil} label="Editar" onClick={() => void openProperty("edit")} disabled={isActionLoading} />
         <ActionButton
           icon={FileText}
           label={property.status === "available" ? "Desativar" : "Ativar"}
@@ -1253,20 +1396,27 @@ function PropertyCard({
       </div>
       {actionError ? <p className="mt-2 text-xs text-destructive">{actionError}</p> : null}
       </div>
-      {isReportOpen ? (
+      {isReportOpen && detailProperty ? (
         <PropertyReportModal
-          property={property}
+          property={detailProperty}
           onClose={() => setIsReportOpen(false)}
-          onMediaUploaded={onMediaUploaded}
-          onMediaChanged={(media) => onMediaChanged(property.id, media)}
+          onMediaUploaded={(media) => {
+            setDetailProperty((current) => current ? { ...current, property_media: [media, ...(current.property_media ?? [])] } : current);
+            onMediaUploaded(media);
+          }}
+          onMediaChanged={(media) => {
+            setDetailProperty((current) => current ? { ...current, property_media: media } : current);
+            onMediaChanged(property.id, media);
+          }}
         />
       ) : null}
-      {isEditOpen ? (
+      {isEditOpen && detailProperty ? (
         <EditPropertyDialog
-          property={property}
+          property={detailProperty}
           owners={owners}
           onClose={() => setIsEditOpen(false)}
           onSaved={(updated) => {
+            setDetailProperty(updated);
             onPropertyUpdated(updated);
             setIsEditOpen(false);
           }}
@@ -1304,7 +1454,7 @@ function ActionButton({
   );
 }
 
-function getPropertyCoverMedia(property: Property) {
+function getPropertyCoverMedia(property: Pick<PropertySummary, "property_media">) {
   const media = property.property_media ?? [];
   return (
     media.find((item) => item.is_cover && item.media_type !== "video") ??

@@ -19,7 +19,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ModulePage } from "@/components/app/module-page";
 import { Button } from "@/components/ui/button";
 import { getModuleByKey } from "@/product/app-modules";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type PropertySummary } from "@/product/real-estate";
 import { defaultSiteTemplateKey, siteTemplates, type SiteTemplate, type SiteTemplateKey } from "@/product/site-templates";
 import {
   getSiteSettings,
@@ -63,7 +63,7 @@ function SitePage() {
   const [showImportPanel, setShowImportPanel] = useState(false);
   const [importForm, setImportForm] = useState({ source: "local", name: "", slug: "", reference: "", previewUrl: "", fileName: "", githubToken: "" });
   const [selectedImportFiles, setSelectedImportFiles] = useState<File[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [leads, setLeads] = useState<SiteLead[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +89,7 @@ function SitePage() {
     try {
       const [siteResponse, propertyResponse, leadsResponse] = await Promise.all([
         getSiteSettings(),
-        listProperties(),
+        listAllProperties(),
         listSiteLeads(),
       ]);
       setSite(siteResponse.site);

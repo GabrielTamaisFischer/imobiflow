@@ -31,7 +31,7 @@ import {
   type InspectionRoom,
 } from "@/product/inspections";
 import { getModuleByKey } from "@/product/app-modules";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/vistorias")({
@@ -162,7 +162,7 @@ function InspectionsPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("inspections");
   const [inspections, setInspections] = useState<Inspection[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [roomsByInspection, setRoomsByInspection] = useState<Record<string, InspectionRoom[]>>({});
   const [itemsByInspection, setItemsByInspection] = useState<Record<string, InspectionItem[]>>({});
   const [mediaByInspection, setMediaByInspection] = useState<Record<string, InspectionMedia[]>>({});
@@ -177,7 +177,7 @@ function InspectionsPage() {
     try {
       const [inspectionsResponse, propertiesResponse] = await Promise.all([
         listInspections(),
-        listProperties(),
+        listAllProperties(),
       ]);
       setInspections(inspectionsResponse.inspections);
       setProperties(propertiesResponse.properties);
@@ -375,7 +375,7 @@ function InspectionForm({
   onCancel,
   onCreated,
 }: {
-  properties: Property[];
+  properties: PropertySummary[];
   onCancel: () => void;
   onCreated: (inspection: Inspection) => void | Promise<void>;
 }) {
@@ -577,9 +577,9 @@ function Field({
   );
 }
 
-function propertySupportsInspection(property: Property) {
-  const commercialTerms = property.commercial_terms_json ?? {};
-  const publicationSettings = property.publication_settings_json ?? {};
+function propertySupportsInspection(property: Property | PropertySummary) {
+  const commercialTerms = "commercial_terms_json" in property ? property.commercial_terms_json ?? {} : {};
+  const publicationSettings = "publication_settings_json" in property ? property.publication_settings_json ?? {} : {};
   const operationValue = String(property.operation ?? "").toLowerCase();
   const operationHints = [
     operationValue,

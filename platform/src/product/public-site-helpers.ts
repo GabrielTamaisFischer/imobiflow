@@ -1,4 +1,6 @@
-import type { Property } from "./real-estate";
+import type { Property, PropertySummary } from "./real-estate";
+
+type PropertyCardData = Property | PropertySummary;
 
 export const magnificentHeroImage = "/site-templates/magnifico-hero.jpg";
 
@@ -18,20 +20,20 @@ export function slugify(value: string) {
   return normalized || "imovel";
 }
 
-export function getPropertySlug(property: Property) {
+export function getPropertySlug(property: PropertyCardData) {
   const base = [property.code, property.title].filter(Boolean).join("-");
   return `${slugify(base || property.id)}-${property.id.slice(0, 8)}`;
 }
 
-export function getPropertyDetailUrl(siteSlug: string, property: Property) {
+export function getPropertyDetailUrl(siteSlug: string, property: PropertyCardData) {
   return `/site/${encodeURIComponent(siteSlug)}/imoveis/${encodeURIComponent(getPropertySlug(property))}`;
 }
 
-export function getBuilderPreviewPropertyDetailUrl(websiteId: string, property: Property) {
+export function getBuilderPreviewPropertyDetailUrl(websiteId: string, property: PropertyCardData) {
   return `/app/site/builder/preview/${encodeURIComponent(websiteId)}/imovel/${encodeURIComponent(getPropertySlug(property))}`;
 }
 
-export function matchesPropertySlug(property: Property, propertySlug: string) {
+export function matchesPropertySlug(property: PropertyCardData, propertySlug: string) {
   return (
     getPropertySlug(property) === propertySlug ||
     property.id === propertySlug ||
@@ -39,7 +41,7 @@ export function matchesPropertySlug(property: Property, propertySlug: string) {
   );
 }
 
-export function getPropertyImages(property: Property) {
+export function getPropertyImages(property: PropertyCardData) {
   return (
     property.property_media
       ?.filter((media) => media.media_type === "photo" || media.media_type === "tour")
@@ -49,7 +51,7 @@ export function getPropertyImages(property: Property) {
   );
 }
 
-export function getPropertyCoverUrl(property: Property) {
+export function getPropertyCoverUrl(property: PropertyCardData) {
   return getPropertyImages(property)[0] ?? null;
 }
 
@@ -80,7 +82,7 @@ export function formatCurrencyFromCents(value: number) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value / 100);
 }
 
-export function formatPropertyPrice(property: Property) {
+export function formatPropertyPrice(property: PropertyCardData) {
   const sale = property.sale_price_cents ? formatCurrencyFromCents(property.sale_price_cents) : null;
   const rent = property.rent_price_cents ? `${formatCurrencyFromCents(property.rent_price_cents)}/mês` : null;
 
@@ -95,7 +97,7 @@ export function formatArea(value: number | null | undefined) {
   return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value)} m²`;
 }
 
-export function formatPublicAddress(property: Property, showFullAddress = false) {
+export function formatPublicAddress(property: PropertyCardData, showFullAddress = false) {
   const publicParts = [property.neighborhood, property.city, property.state].filter(Boolean);
   if (!showFullAddress) return publicParts.join(", ") || "Localização sob consulta";
 

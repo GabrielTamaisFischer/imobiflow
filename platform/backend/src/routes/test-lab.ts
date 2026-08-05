@@ -222,13 +222,6 @@ testLabRouter.delete(
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
-      const properties = await prisma().property.findMany({
-        where: { companyId, code: { startsWith: "QA-" } },
-        select: { id: true, ownerId: true },
-      });
-      const propertyIds = properties.map((property) => property.id);
-      const ownerIds = [...new Set(properties.map((property) => property.ownerId).filter(isString))];
-
       const cleared = {
         properties: 0,
         owners: 0,
@@ -241,8 +234,18 @@ testLabRouter.delete(
         leads: 0,
         site_leads: 0,
       };
+      const ownerIds = new Set<string>();
 
-      if (propertyIds.length > 0) {
+      while (true) {
+        const properties = await prisma().property.findMany({
+          where: { companyId, code: { startsWith: "QA-" } },
+          select: { id: true, ownerId: true },
+          orderBy: { id: "asc" },
+          take: 100,
+        });
+        if (properties.length === 0) break;
+        const propertyIds = properties.map((property) => property.id);
+        properties.map((property) => property.ownerId).filter(isString).forEach((ownerId) => ownerIds.add(ownerId));
         cleared.site_leads += (await prisma().siteLead.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } })).count;
         cleared.appointments += (await prisma().appointment.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } })).count;
         cleared.media += (await prisma().propertyMedia.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } })).count;
@@ -252,8 +255,8 @@ testLabRouter.delete(
 
       cleared.leads += (await prisma().lead.deleteMany({ where: { companyId, source: "qa-test-lab" } })).count;
 
-      if (ownerIds.length > 0) {
-        cleared.owners += (await prisma().propertyOwner.deleteMany({ where: { companyId, id: { in: ownerIds } } })).count;
+      if (ownerIds.size > 0) {
+        cleared.owners += (await prisma().propertyOwner.deleteMany({ where: { companyId, id: { in: [...ownerIds] } } })).count;
       }
 
       await markQaSiteClean(companyId);

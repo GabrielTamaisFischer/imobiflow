@@ -15,7 +15,8 @@ import {
 import {
   createOwner,
   createProperty,
-  listProperties,
+  getProperty,
+  listAllProperties,
   uploadPropertyMedia,
   type OwnerInput,
   type Property,
@@ -587,11 +588,14 @@ export async function runPreviewTestLab(): Promise<TestLabRunResult> {
     },
   };
 
-  const propertyByCode = new Map((await listProperties()).properties.map((property) => [property.code, property]));
+  const propertySummaryByCode = new Map((await listAllProperties()).properties.map((property) => [property.code, property]));
+  const propertyByCode = new Map<string | null, Property>();
 
   for (const scenario of plan.properties) {
-    const existingProperty = propertyByCode.get(scenario.code);
-    if (existingProperty) {
+    const existingSummary = propertySummaryByCode.get(scenario.code);
+    if (existingSummary) {
+      const existingProperty = (await getProperty(existingSummary.id)).property;
+      propertyByCode.set(scenario.code, existingProperty);
       result.skipped.properties += 1;
       result.created.media += await ensureScenarioMedia(existingProperty, scenario);
       continue;

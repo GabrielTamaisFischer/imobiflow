@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 
 type PropertyInput = Record<string, any>;
@@ -10,6 +10,74 @@ const propertyInclude = {
     orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
   },
 };
+
+export const DEFAULT_PROPERTY_PAGE_SIZE = 25;
+export const MAX_PROPERTY_PAGE_SIZE = 100;
+
+export type PropertyListInput = {
+  page: number;
+  pageSize: number;
+  status?: string;
+  operation?: string;
+  propertyType?: string;
+  code?: string;
+  importSource?: string;
+  importExternalId?: string;
+  search?: string;
+};
+
+const propertyListSelect = {
+  id: true,
+  ownerId: true,
+  code: true,
+  title: true,
+  propertyType: true,
+  operation: true,
+  status: true,
+  street: true,
+  number: true,
+  complement: true,
+  neighborhood: true,
+  city: true,
+  state: true,
+  country: true,
+  zipCode: true,
+  condominiumName: true,
+  bedrooms: true,
+  bathrooms: true,
+  suites: true,
+  parkingSpaces: true,
+  privateArea: true,
+  totalArea: true,
+  salePriceCents: true,
+  rentPriceCents: true,
+  condominiumFeeCents: true,
+  iptuCents: true,
+  publishedAt: true,
+  importSource: true,
+  importExternalId: true,
+  createdAt: true,
+  updatedAt: true,
+  owner: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  media: {
+    orderBy: [{ isCover: "desc" as const }, { position: "asc" as const }, { createdAt: "asc" as const }],
+    take: 1,
+    select: {
+      id: true,
+      mediaType: true,
+      url: true,
+      caption: true,
+      position: true,
+      isCover: true,
+      createdAt: true,
+    },
+  },
+} satisfies Prisma.PropertySelect;
 
 export function prisma() {
   return getPrisma();
@@ -101,17 +169,136 @@ export async function archiveMysqlOwner(companyId: string, ownerId: string) {
   return serializeOwner(owner);
 }
 
-export async function listMysqlProperties(companyId: string, status?: string) {
-  const properties = await prisma().property.findMany({
+export async function listMysqlProperties(
+  companyId: string,
+  input: PropertyListInput,
+  database: PrismaClient = prisma(),
+) {
+  const where = buildPropertyListWhere(companyId, input);
+  const [total, properties] = await database.$transaction([
+    database.property.count({ where }),
+    database.property.findMany({
+      where,
+      select: propertyListSelect,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+  ]);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / input.pageSize);
+
+  return {
+    items: properties.map(serializePropertySummary),
+    pagination: {
+      page: input.page,
+      page_size: input.pageSize,
+      total,
+      total_pages: totalPages,
+      has_next: input.page < totalPages,
+      has_previous: input.page > 1 && total > 0,
+    },
+  };
+}
+
+export async function listMysqlPropertyContent(
+  companyId: string,
+  input: PropertyListInput,
+  database: PrismaClient = prisma(),
+) {
+  const where = buildPropertyListWhere(companyId, input);
+  const [total, properties] = await database.$transaction([
+    database.property.count({ where }),
+    database.property.findMany({
+      where,
+      include: propertyInclude,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: (input.page - 1) * input.pageSize,
+      take: input.pageSize,
+    }),
+  ]);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / input.pageSize);
+  return {
+    items: properties.map(serializeProperty),
+    pagination: {
+      page: input.page,
+      page_size: input.pageSize,
+      total,
+      total_pages: totalPages,
+      has_next: input.page < totalPages,
+      has_previous: input.page > 1 && total > 0,
+    },
+  };
+}
+
+export function buildPropertyListWhere(companyId: string, input: PropertyListInput): Prisma.PropertyWhereInput {
+  const statusFilter = input.status && input.status !== "all"
+    ? input.status === "not_archived" ? { not: "archived" } : input.status
+    : undefined;
+  const search = input.search?.trim();
+
+  return {
+    companyId,
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(input.operation ? { operation: input.operation } : {}),
+    ...(input.propertyType ? { propertyType: input.propertyType } : {}),
+    ...(input.code ? { code: input.code } : {}),
+    ...(input.importSource ? { importSource: input.importSource } : {}),
+    ...(input.importExternalId ? { importExternalId: input.importExternalId } : {}),
+    ...(search
+      ? {
+          OR: [
+            { code: { contains: search } },
+            { title: { contains: search } },
+            { city: { contains: search } },
+            { neighborhood: { contains: search } },
+          ],
+        }
+      : {}),
+  };
+}
+
+export async function getMysqlProperty(companyId: string, propertyId: string, database: PrismaClient = prisma()) {
+  const property = await database.property.findFirst({
+    where: { id: propertyId, companyId },
+    include: propertyInclude,
+  });
+  if (!property) throw propertyNotFound();
+  return serializeProperty(property);
+}
+
+export async function getMysqlPropertyByCode(companyId: string, code: string, database: PrismaClient = prisma()) {
+  const property = await database.property.findFirst({
+    where: { companyId, code },
+    include: propertyInclude,
+  });
+  if (!property) throw propertyNotFound();
+  return serializeProperty(property);
+}
+
+export async function getMysqlPropertyByExternalId(
+  companyId: string,
+  externalId: string,
+  importSource?: string,
+  database: PrismaClient = prisma(),
+) {
+  const properties = await database.property.findMany({
     where: {
       companyId,
-      ...(status && status !== "all" ? { status } : {}),
+      importExternalId: externalId,
+      ...(importSource ? { importSource } : {}),
     },
     include: propertyInclude,
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: importSource ? 1 : 2,
   });
-
-  return properties.map(serializeProperty);
+  if (properties.length === 0) throw propertyNotFound();
+  if (!importSource && properties.length > 1) {
+    throw Object.assign(new Error("Informe import_source para desambiguar o identificador externo."), {
+      statusCode: 400,
+      code: "IMPORT_SOURCE_REQUIRED",
+    });
+  }
+  return serializeProperty(properties[0]);
 }
 
 export async function createMysqlProperty(companyId: string, userId: string, input: PropertyInput) {
@@ -318,14 +505,11 @@ export async function loadMysqlPublicPropertyByReference(
   site: { companyId: string; settingsJson: unknown },
   reference: string,
 ) {
-  const where = isUuid(reference)
-    ? { id: reference, companyId: site.companyId }
-    : { companyId: site.companyId };
-
   if (isUuid(reference)) {
     const property = await prisma().property.findFirst({
       where: {
-        ...where,
+        id: reference,
+        companyId: site.companyId,
         status: { in: ["available", "reserved"] },
         publishedAt: { not: null },
       },
@@ -335,19 +519,23 @@ export async function loadMysqlPublicPropertyByReference(
     return sanitizePublicProperty(serializeProperty(property), site);
   }
 
-  const properties = await prisma().property.findMany({
+  const shortId = reference.match(/-([a-f0-9]{8})$/i)?.[1];
+  const property = await prisma().property.findFirst({
     where: {
       companyId: site.companyId,
       status: { in: ["available", "reserved"] },
       publishedAt: { not: null },
+      OR: [
+        { code: reference },
+        ...(shortId ? [{ id: { startsWith: shortId } }] : []),
+      ],
     },
     include: propertyInclude,
-    orderBy: { publishedAt: "desc" },
-    take: 500,
   });
-  const property = properties.map(serializeProperty).find((item) => matchesPropertySlug(item, reference));
   if (!property) throw publicSiteNotFound();
-  return sanitizePublicProperty(property, site);
+  const serialized = serializeProperty(property);
+  if (!matchesPropertySlug(serialized, reference)) throw publicSiteNotFound();
+  return sanitizePublicProperty(serialized, site);
 }
 
 export async function createMysqlPublicLead(params: {
@@ -534,6 +722,61 @@ export function serializeProperty(property: any) {
   };
 }
 
+export function serializePropertySummary(property: any) {
+  return {
+    id: property.id,
+    owner_id: property.ownerId,
+    code: property.code,
+    title: property.title,
+    property_type: property.propertyType,
+    operation: property.operation,
+    status: property.status,
+    street: property.street,
+    number: property.number,
+    complement: property.complement,
+    neighborhood: property.neighborhood,
+    city: property.city,
+    state: property.state,
+    country: property.country,
+    zip_code: property.zipCode,
+    condominium_name: property.condominiumName,
+    bedrooms: property.bedrooms,
+    bathrooms: property.bathrooms,
+    suites: property.suites,
+    parking_spaces: property.parkingSpaces,
+    private_area: property.privateArea,
+    total_area: property.totalArea,
+    sale_price_cents: property.salePriceCents,
+    rent_price_cents: property.rentPriceCents,
+    condominium_fee_cents: property.condominiumFeeCents,
+    iptu_cents: property.iptuCents,
+    published_at: toIso(property.publishedAt),
+    import_source: property.importSource,
+    import_external_id: property.importExternalId,
+    created_at: toIso(property.createdAt),
+    updated_at: toIso(property.updatedAt),
+    property_owners: property.owner
+      ? {
+          id: property.owner.id,
+          name: property.owner.name,
+        }
+      : null,
+    property_media: (property.media ?? []).map(serializeMediaSummary),
+  };
+}
+
+function serializeMediaSummary(media: any) {
+  return {
+    id: media.id,
+    media_type: media.mediaType,
+    url: media.url,
+    caption: media.caption,
+    position: media.position,
+    is_cover: media.isCover,
+    created_at: toIso(media.createdAt),
+  };
+}
+
 export function serializeMedia(media: any) {
   return {
     id: media.id,
@@ -550,6 +793,13 @@ export function serializeMedia(media: any) {
     is_cover: media.isCover,
     created_at: toIso(media.createdAt),
   };
+}
+
+function propertyNotFound() {
+  return Object.assign(new Error("Imóvel não encontrado."), {
+    statusCode: 404,
+    code: "PROPERTY_NOT_FOUND",
+  });
 }
 
 export function getPropertySlug(property: { id: string; code?: string | null; title: string }) {

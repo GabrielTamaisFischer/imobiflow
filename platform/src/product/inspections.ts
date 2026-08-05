@@ -1,7 +1,7 @@
 import { apiRequest } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
 import { compactPreviewMediaUrl, safeSetPreviewItem } from "./preview-storage";
-import { listProperties, type Property } from "./real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "./real-estate";
 
 const previewInspectionsKey = "imobiflow.preview.inspections";
 const previewRoomsKey = "imobiflow.preview.inspection_rooms";
@@ -492,7 +492,7 @@ function readPreviewInspections() {
 }
 
 async function readPreviewInspectionsWithProperties() {
-  const { properties } = await listProperties();
+  const { properties } = await listAllProperties();
   return readPreviewInspections().map((inspection) => ({
     ...inspection,
     properties: mapProperty(properties.find((property) => property.id === inspection.property_id)),
@@ -569,7 +569,7 @@ function writePreviewSignatures(signatures: InspectionSignature[]) {
 
 async function createPreviewInspection(input: InspectionInput): Promise<Inspection> {
   const now = new Date().toISOString();
-  const { properties } = await listProperties();
+  const { properties } = await listAllProperties();
   const property = properties.find((item) => item.id === input.property_id);
   const inspection: Inspection = {
     id: window.crypto.randomUUID(),
@@ -614,7 +614,7 @@ async function createPreviewInspection(input: InspectionInput): Promise<Inspecti
   return inspection;
 }
 
-function mapProperty(property?: Property) {
+function mapProperty(property?: Property | PropertySummary) {
   if (!property) return null;
 
   return {

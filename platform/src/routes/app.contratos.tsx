@@ -11,7 +11,7 @@ import {
 } from "@/product/contracts";
 import { getModuleByKey } from "@/product/app-modules";
 import { createNotificationEvent, type NotificationChannel } from "@/product/notifications";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/contratos")({
@@ -42,7 +42,7 @@ function ContractsPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("contracts");
   const [contracts, setContracts] = useState<Contract[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [isContractsLoading, setIsContractsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +54,7 @@ function ContractsPage() {
     try {
       const [contractsResponse, propertiesResponse] = await Promise.all([
         listContracts(),
-        listProperties(),
+        listAllProperties(),
       ]);
       setContracts(contractsResponse.contracts);
       setProperties(propertiesResponse.properties);
@@ -154,7 +154,7 @@ function ContractForm({
   onCancel,
   onCreated,
 }: {
-  properties: Property[];
+  properties: PropertySummary[];
   onCancel: () => void;
   onCreated: (contract: Contract) => void;
 }) {

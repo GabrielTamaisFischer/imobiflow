@@ -10,7 +10,7 @@ import {
   operationLabel,
   propertyTypeLabel,
 } from "@/product/public-site-helpers";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
 import {
   getWebsiteBuilderWebsite,
   listWebsiteBuilderDomains,
@@ -49,7 +49,7 @@ function WebsiteBuilderPreviewPage() {
   const [website, setWebsite] = useState<PreviewWebsite | null>(null);
   const [seo, setSeo] = useState<WebsiteBuilderSeo[]>([]);
   const [domains, setDomains] = useState<WebsiteBuilderDomain[]>([]);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [viewport, setViewport] = useState<PreviewViewport>("desktop");
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +62,7 @@ function WebsiteBuilderPreviewPage() {
       getWebsiteBuilderWebsite(websiteId),
       listWebsiteBuilderSeo(websiteId),
       listWebsiteBuilderDomains(websiteId),
-      listProperties(),
+      listAllProperties(),
     ])
       .then(([websiteResponse, seoResponse, domainResponse, propertiesResponse]) => {
         const nextWebsite = websiteResponse.website as PreviewWebsite;

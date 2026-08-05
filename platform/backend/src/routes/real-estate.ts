@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import {
   requireActiveSubscription,
@@ -15,9 +15,15 @@ import {
   createMysqlProperty,
   createMysqlPropertyMedia,
   deleteMysqlPropertyMedia,
+  DEFAULT_PROPERTY_PAGE_SIZE,
+  getMysqlProperty,
+  getMysqlPropertyByCode,
+  getMysqlPropertyByExternalId,
   listMysqlOwners,
   listMysqlProperties,
+  listMysqlPropertyContent,
   listMysqlPropertyMedia,
+  MAX_PROPERTY_PAGE_SIZE,
   reorderMysqlPropertyMedia,
   updateMysqlOwner,
   updateMysqlProperty,
@@ -40,6 +46,19 @@ import type { RequestWithAccess } from "../types/access.js";
 export const realEstateRouter = Router();
 
 realEstateRouter.use(requireAuth, requireCompany, requireActiveSubscription);
+
+function invalidPropertyQuery() {
+  return Object.assign(new Error("Parâmetros de consulta de imóveis inválidos."), {
+    statusCode: 400,
+    code: "INVALID_PROPERTY_QUERY",
+  });
+}
+
+function parsePropertyReference(value: unknown, maxLength: number) {
+  const parsed = z.string().trim().min(1).max(maxLength).safeParse(value);
+  if (!parsed.success) throw invalidPropertyQuery();
+  return parsed.data;
+}
 
 const ownerSchema = z.object({
   owner_type: z.enum(["individual", "company"]).default("individual"),
@@ -117,6 +136,90 @@ const mediaOrderSchema = z.object({
   ),
 });
 
+export const propertyListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(MAX_PROPERTY_PAGE_SIZE).default(DEFAULT_PROPERTY_PAGE_SIZE),
+  status: z.string().trim().min(1).max(40).optional(),
+  operation: z.string().trim().min(1).max(40).optional(),
+  property_type: z.string().trim().min(1).max(40).optional(),
+  code: z.string().trim().min(1).max(40).optional(),
+  import_source: z.string().trim().min(1).max(80).optional(),
+  import_external_id: z.string().trim().min(1).max(180).optional(),
+  search: z.string().trim().min(1).max(120).optional(),
+});
+
+const propertyExternalIdQuerySchema = z.object({
+  import_source: z.string().trim().min(1).max(80).optional(),
+});
+
+export function parsePropertyListQuery(query: unknown) {
+  const parsed = propertyListQuerySchema.safeParse(query);
+  if (!parsed.success) throw invalidPropertyQuery();
+  return {
+    page: parsed.data.page,
+    pageSize: parsed.data.page_size,
+    status: parsed.data.status,
+    operation: parsed.data.operation,
+    propertyType: parsed.data.property_type,
+    code: parsed.data.code,
+    importSource: parsed.data.import_source,
+    importExternalId: parsed.data.import_external_id,
+    search: parsed.data.search,
+  };
+}
+
+export function createListPropertiesHandler(
+  service: typeof listMysqlProperties = listMysqlProperties,
+): RequestHandler {
+  return async (request: RequestWithAccess, response, next) => {
+    try {
+      response.json(await service(request.access!.company.id, parsePropertyListQuery(request.query)));
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+export function createGetPropertyHandler(service: typeof getMysqlProperty = getMysqlProperty): RequestHandler {
+  return async (request: RequestWithAccess, response, next) => {
+    try {
+      response.json({ property: await service(request.access!.company.id, String(request.params.id)) });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+export function createGetPropertyByCodeHandler(
+  service: typeof getMysqlPropertyByCode = getMysqlPropertyByCode,
+): RequestHandler {
+  return async (request: RequestWithAccess, response, next) => {
+    try {
+      const code = parsePropertyReference(request.params.code, 40);
+      response.json({ property: await service(request.access!.company.id, code) });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+export function createGetPropertyByExternalIdHandler(
+  service: typeof getMysqlPropertyByExternalId = getMysqlPropertyByExternalId,
+): RequestHandler {
+  return async (request: RequestWithAccess, response, next) => {
+    try {
+      const externalId = parsePropertyReference(request.params.externalId, 180);
+      const parsedQuery = propertyExternalIdQuerySchema.safeParse(request.query);
+      if (!parsedQuery.success) throw invalidPropertyQuery();
+      response.json({
+        property: await service(request.access!.company.id, externalId, parsedQuery.data.import_source),
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
 realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
@@ -154,14 +257,25 @@ realEstateRouter.delete("/owners/:id", requirePermission("owners.manage"), async
   }
 });
 
-realEstateRouter.get("/properties", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
+realEstateRouter.get("/properties", requirePermission("properties.view"), createListPropertiesHandler());
+
+realEstateRouter.get("/properties/content", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
   try {
-    const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    res.json({ properties: await listMysqlProperties(req.access!.company.id, status) });
+    res.json(await listMysqlPropertyContent(req.access!.company.id, parsePropertyListQuery(req.query)));
   } catch (error) {
     next(error);
   }
 });
+
+realEstateRouter.get("/properties/by-code/:code", requirePermission("properties.view"), createGetPropertyByCodeHandler());
+
+realEstateRouter.get(
+  "/properties/by-external-id/:externalId",
+  requirePermission("properties.view"),
+  createGetPropertyByExternalIdHandler(),
+);
+
+realEstateRouter.get("/properties/:id", requirePermission("properties.view"), createGetPropertyHandler());
 
 realEstateRouter.post("/properties", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {

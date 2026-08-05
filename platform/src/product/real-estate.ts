@@ -97,6 +97,75 @@ export type PropertyMedia = {
   created_at: string;
 };
 
+export type PropertySummaryMedia = Pick<
+  PropertyMedia,
+  "id" | "media_type" | "url" | "caption" | "position" | "is_cover" | "created_at"
+>;
+
+export type PropertySummary = Pick<
+  Property,
+  | "id"
+  | "owner_id"
+  | "code"
+  | "title"
+  | "property_type"
+  | "operation"
+  | "status"
+  | "street"
+  | "number"
+  | "complement"
+  | "neighborhood"
+  | "city"
+  | "state"
+  | "country"
+  | "zip_code"
+  | "condominium_name"
+  | "bedrooms"
+  | "bathrooms"
+  | "suites"
+  | "parking_spaces"
+  | "private_area"
+  | "total_area"
+  | "sale_price_cents"
+  | "rent_price_cents"
+  | "condominium_fee_cents"
+  | "iptu_cents"
+  | "published_at"
+  | "created_at"
+  | "updated_at"
+> & {
+  import_source?: string | null;
+  import_external_id?: string | null;
+  property_owners?: Pick<NonNullable<Property["property_owners"]>, "id" | "name"> | null;
+  property_media?: PropertySummaryMedia[];
+};
+
+export type PropertyPagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  has_previous: boolean;
+};
+
+export type PropertyPage = {
+  items: PropertySummary[];
+  pagination: PropertyPagination;
+};
+
+export type PropertyListFilters = {
+  page?: number;
+  pageSize?: number;
+  status?: Property["status"] | "all" | "not_archived";
+  operation?: Property["operation"];
+  propertyType?: Property["property_type"];
+  code?: string;
+  importSource?: string;
+  importExternalId?: string;
+  search?: string;
+};
+
 export type OwnerInput = {
   owner_type: PropertyOwner["owner_type"];
   client_type?: PropertyOwner["client_type"];
@@ -227,16 +296,88 @@ export async function archiveOwner(ownerId: string) {
   });
 }
 
-export async function listProperties() {
+export async function listProperties(filters: PropertyListFilters = {}): Promise<PropertyPage> {
   if (isPreviewRealEstate()) {
-    return { properties: readPreviewProperties().filter((property) => property.status !== "archived") };
+    const matching = filterPreviewProperties(readPreviewProperties(), filters);
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? 25;
+    const totalPages = matching.length === 0 ? 0 : Math.ceil(matching.length / pageSize);
+    return {
+      items: matching.slice((page - 1) * pageSize, page * pageSize).map(toPropertySummary),
+      pagination: {
+        page,
+        page_size: pageSize,
+        total: matching.length,
+        total_pages: totalPages,
+        has_next: page < totalPages,
+        has_previous: page > 1 && matching.length > 0,
+      },
+    };
   }
 
-  const response = await apiRequest<{ properties: Property[] }>("/real-estate/properties?status=all", {
+  return apiRequest<PropertyPage>(`/real-estate/properties?${buildPropertyListQuery(filters)}`, {
     token: getStoredToken() ?? undefined,
   });
+}
 
-  return { properties: response.properties.filter((property) => property.status !== "archived") };
+export async function listAllProperties(filters: Omit<PropertyListFilters, "page" | "pageSize"> = {}) {
+  const properties: PropertySummary[] = [];
+  let page = 1;
+  do {
+    const response = await listProperties({ ...filters, page, pageSize: 100 });
+    properties.push(...response.items);
+    if (!response.pagination.has_next) break;
+    page += 1;
+  } while (true);
+  return { properties };
+}
+
+export async function listAllPropertyDetails(filters: Omit<PropertyListFilters, "page" | "pageSize"> = {}) {
+  if (isPreviewRealEstate()) {
+    return { properties: filterPreviewProperties(readPreviewProperties(), filters) };
+  }
+  const properties: Property[] = [];
+  let page = 1;
+  do {
+    const response = await apiRequest<{ items: Property[]; pagination: PropertyPagination }>(
+      `/real-estate/properties/content?${buildPropertyListQuery({ ...filters, page, pageSize: 100 })}`,
+      { token: getStoredToken() ?? undefined },
+    );
+    properties.push(...response.items);
+    if (!response.pagination.has_next) break;
+    page += 1;
+  } while (true);
+  return { properties };
+}
+
+export async function getProperty(propertyId: string) {
+  if (isPreviewRealEstate()) {
+    const property = readPreviewProperties().find((item) => item.id === propertyId);
+    if (!property) throw new Error("Imóvel não encontrado.");
+    return { property };
+  }
+  return apiRequest<{ property: Property }>(`/real-estate/properties/${encodeURIComponent(propertyId)}`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function getPropertyByCode(code: string) {
+  if (isPreviewRealEstate()) {
+    const property = readPreviewProperties().find((item) => item.code === code);
+    if (!property) throw new Error("Imóvel não encontrado.");
+    return { property };
+  }
+  return apiRequest<{ property: Property }>(`/real-estate/properties/by-code/${encodeURIComponent(code)}`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function getPropertyByExternalId(externalId: string, importSource?: string) {
+  const query = importSource ? `?import_source=${encodeURIComponent(importSource)}` : "";
+  return apiRequest<{ property: Property }>(
+    `/real-estate/properties/by-external-id/${encodeURIComponent(externalId)}${query}`,
+    { token: getStoredToken() ?? undefined },
+  );
 }
 
 export async function createProperty(input: PropertyInput) {
@@ -352,6 +493,82 @@ export async function reorderPropertyMedia(
     body: JSON.stringify({ media }),
     token: getStoredToken() ?? undefined,
   });
+}
+
+export function buildPropertyListQuery(filters: PropertyListFilters = {}) {
+  const query = new URLSearchParams({
+    page: String(filters.page ?? 1),
+    page_size: String(filters.pageSize ?? 25),
+    status: filters.status ?? "not_archived",
+  });
+  if (filters.operation) query.set("operation", filters.operation);
+  if (filters.propertyType) query.set("property_type", filters.propertyType);
+  if (filters.code?.trim()) query.set("code", filters.code.trim());
+  if (filters.importSource?.trim()) query.set("import_source", filters.importSource.trim());
+  if (filters.importExternalId?.trim()) query.set("import_external_id", filters.importExternalId.trim());
+  if (filters.search?.trim()) query.set("search", filters.search.trim());
+  return query.toString();
+}
+
+export function toPropertySummary(property: Property): PropertySummary {
+  return {
+    id: property.id,
+    owner_id: property.owner_id,
+    code: property.code,
+    title: property.title,
+    property_type: property.property_type,
+    operation: property.operation,
+    status: property.status,
+    street: property.street,
+    number: property.number,
+    complement: property.complement,
+    neighborhood: property.neighborhood,
+    city: property.city,
+    state: property.state,
+    country: property.country,
+    zip_code: property.zip_code,
+    condominium_name: property.condominium_name,
+    bedrooms: property.bedrooms,
+    bathrooms: property.bathrooms,
+    suites: property.suites,
+    parking_spaces: property.parking_spaces,
+    private_area: property.private_area,
+    total_area: property.total_area,
+    sale_price_cents: property.sale_price_cents,
+    rent_price_cents: property.rent_price_cents,
+    condominium_fee_cents: property.condominium_fee_cents,
+    iptu_cents: property.iptu_cents,
+    published_at: property.published_at,
+    import_source: null,
+    import_external_id: null,
+    created_at: property.created_at,
+    updated_at: property.updated_at,
+    property_owners: property.property_owners
+      ? { id: property.property_owners.id, name: property.property_owners.name }
+      : null,
+    property_media: (property.property_media ?? []).slice(0, 1).map((media) => ({
+      id: media.id,
+      media_type: media.media_type,
+      url: media.url,
+      caption: media.caption,
+      position: media.position,
+      is_cover: media.is_cover,
+      created_at: media.created_at,
+    })),
+  };
+}
+
+function filterPreviewProperties(properties: Property[], filters: PropertyListFilters) {
+  const status = filters.status ?? "not_archived";
+  const search = filters.search?.trim().toLocaleLowerCase("pt-BR");
+  return properties
+    .filter((property) => status === "all" || (status === "not_archived" ? property.status !== "archived" : property.status === status))
+    .filter((property) => !filters.operation || property.operation === filters.operation)
+    .filter((property) => !filters.propertyType || property.property_type === filters.propertyType)
+    .filter((property) => !filters.code || property.code === filters.code)
+    .filter((property) => !search || [property.code, property.title, property.city, property.neighborhood]
+      .some((value) => value?.toLocaleLowerCase("pt-BR").includes(search)))
+    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
 }
 
 function readPreviewOwners() {

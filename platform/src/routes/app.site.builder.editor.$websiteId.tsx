@@ -26,7 +26,7 @@ import {
 import { type CSSProperties, FormEvent, useEffect, useRef, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { getBuilderPreviewPropertyDetailUrl } from "@/product/public-site-helpers";
-import { listProperties, type Property } from "@/product/real-estate";
+import { listAllPropertyDetails, type Property } from "@/product/real-estate";
 import { getSiteSettings } from "@/product/sites";
 import {
   createWebsiteBuilderPage,
@@ -1940,7 +1940,7 @@ function WebsiteBuilderVisualEditorWorkspace() {
 
   async function loadPublishedProperties() {
     try {
-      const response = await listProperties();
+      const response = await listAllPropertyDetails();
       setSiteProperties(
         response.properties
           .filter((property) => property.status === "available" || Boolean(property.published_at))

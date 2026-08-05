@@ -1,6 +1,6 @@
 import { apiRequest } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
-import { listProperties, type Property } from "./real-estate";
+import { listAllProperties, type Property, type PropertySummary } from "./real-estate";
 
 const previewContractsKey = "imobiflow.preview.contracts";
 const previewContractPartiesKey = "imobiflow.preview.contract_parties";
@@ -148,7 +148,7 @@ function writePreviewParties(parties: ContractParty[]) {
 }
 
 async function readPreviewContractsWithProperties() {
-  const { properties } = await listProperties();
+  const { properties } = await listAllProperties();
 
   return readPreviewContracts().map((contract) => ({
     ...contract,
@@ -158,7 +158,7 @@ async function readPreviewContractsWithProperties() {
 
 async function createPreviewContract(input: ContractInput): Promise<Contract> {
   const now = new Date().toISOString();
-  const { properties } = await listProperties();
+  const { properties } = await listAllProperties();
   const property = properties.find((item) => item.id === input.property_id);
   const contract: Contract = {
     id: window.crypto.randomUUID(),
@@ -223,7 +223,7 @@ async function createPreviewContract(input: ContractInput): Promise<Contract> {
   return contractWithParties;
 }
 
-function buildPropertySummary(property?: Property) {
+function buildPropertySummary(property?: Property | PropertySummary) {
   if (!property) return null;
 
   return {

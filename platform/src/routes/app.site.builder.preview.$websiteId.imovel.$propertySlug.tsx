@@ -13,7 +13,7 @@ import {
   operationLabel,
   propertyTypeLabel,
 } from "@/product/public-site-helpers";
-import { listProperties, type Property, type PropertyMedia } from "@/product/real-estate";
+import { getProperty, listAllProperties, type Property, type PropertyMedia, type PropertySummary } from "@/product/real-estate";
 import { createPublicSiteLead } from "@/product/sites";
 import { getWebsiteBuilderWebsite, type WebsiteBuilderWebsite } from "@/product/website-builder";
 import { useSessionGuard } from "@/product/use-session-guard";
@@ -26,7 +26,8 @@ function BuilderPreviewPropertyPage() {
   const { websiteId, propertySlug } = Route.useParams();
   const { isLoading, session } = useSessionGuard();
   const [website, setWebsite] = useState<WebsiteBuilderWebsite | null>(null);
-  const [properties, setProperties] = useState<Property[]>([]);
+  const [properties, setProperties] = useState<PropertySummary[]>([]);
+  const [property, setProperty] = useState<Property | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeImage, setActiveImage] = useState(0);
   const [leadForm, setLeadForm] = useState({
@@ -41,7 +42,7 @@ function BuilderPreviewPropertyPage() {
     if (isLoading || !session) return;
 
     setError(null);
-    void Promise.all([getWebsiteBuilderWebsite(websiteId), listProperties()])
+    void Promise.all([getWebsiteBuilderWebsite(websiteId), listAllProperties()])
       .then(([websiteResponse, propertiesResponse]) => {
         setWebsite(websiteResponse.website);
         setProperties(
@@ -55,7 +56,24 @@ function BuilderPreviewPropertyPage() {
       });
   }, [isLoading, session, websiteId]);
 
-  const property = useMemo(() => properties.find((item) => matchesPropertySlug(item, propertySlug)) ?? null, [properties, propertySlug]);
+  const propertySummary = useMemo(
+    () => properties.find((item) => matchesPropertySlug(item, propertySlug)) ?? null,
+    [properties, propertySlug],
+  );
+  useEffect(() => {
+    if (!propertySummary) return;
+    let canceled = false;
+    void getProperty(propertySummary.id)
+      .then((response) => {
+        if (!canceled) setProperty(response.property);
+      })
+      .catch((loadError) => {
+        if (!canceled) setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar o imóvel.");
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [propertySummary]);
   const relatedProperties = useMemo(() => {
     if (!property) return [];
     return properties
@@ -124,6 +142,7 @@ function BuilderPreviewPropertyPage() {
   const address = formatPublicAddress(property, true) || formatPublicAddress(property, false);
   const mapUrl = property.latitude && property.longitude ? `https://www.google.com/maps?q=${property.latitude},${property.longitude}` : "";
   const mapEmbed = property.latitude && property.longitude ? `https://maps.google.com/maps?q=${property.latitude},${property.longitude}&z=15&output=embed` : "";
+  const leadProperty = property;
 
   async function submitLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -131,8 +150,8 @@ function BuilderPreviewPropertyPage() {
     try {
       await createPublicSiteLead(website?.slug ?? websiteId, {
         ...leadForm,
-        property_id: property.id,
-        message: `${leadForm.message}\n\nImóvel: ${property.title}${property.code ? ` (${property.code})` : ""}`,
+        property_id: leadProperty.id,
+        message: `${leadForm.message}\n\nImóvel: ${leadProperty.title}${leadProperty.code ? ` (${leadProperty.code})` : ""}`,
       });
       setLeadStatus("Interesse registrado e vinculado ao imóvel.");
     } catch (submitError) {
