@@ -157,6 +157,8 @@ model Property {
   @@index([companyId, city, neighborhood])
   @@index([companyId, importSource, importExternalId])
   @@index([companyId, importJobId])
+  @@index([companyId, createdAt, id])
+  @@index([companyId, propertyType])
   @@map("properties")
 }
 
