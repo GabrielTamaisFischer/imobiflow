@@ -260,7 +260,7 @@ function signatureFixture(overrides: Record<string, unknown> = {}) {
     ip_address: null,
     signed_user_agent: null,
     signed_payload: {},
-    expires_at: "2026-08-12T12:00:00.000Z",
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     created_at: "2026-08-05T12:00:00.000Z",
     updated_at: "2026-08-05T12:00:00.000Z",
     ...overrides,
