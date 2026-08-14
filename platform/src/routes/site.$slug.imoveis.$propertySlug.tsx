@@ -39,7 +39,7 @@ import {
   formatPropertyPrice,
   formatPublicAddress,
   getFeatureList,
-  getPropertyDetailUrl,
+  getPropertySlug,
   getPropertyImages,
   magnificentHeroImage,
   operationLabel,
@@ -199,6 +199,7 @@ function PublicPropertyPage() {
 
   return (
     <main
+      data-public-page="property"
       className="min-h-screen bg-[#070707] text-white"
       style={{ "--site-primary": primary } as CSSProperties}
     >
@@ -646,16 +647,10 @@ function RelatedSection({ properties, slug, showPrices }: { properties: Property
 function RelatedCard({ property, slug, showPrices }: { property: Property; slug: string; showPrices: boolean }) {
   const images = getPropertyImages(property);
   const cover = images[0] ?? magnificentHeroImage;
-  const detailUrl = getPropertyDetailUrl(slug, property);
-
   return (
-    <a
-      href={detailUrl}
-      onClick={(event) => {
-        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        event.preventDefault();
-        window.location.assign(detailUrl);
-      }}
+    <Link
+      to="/site/$slug/imoveis/$propertySlug"
+      params={{ slug, propertySlug: getPropertySlug(property) }}
       className="group block overflow-hidden rounded-3xl border border-white/10 bg-black/24 transition hover:-translate-y-1 hover:border-[var(--site-primary)]"
     >
       <img src={cover} alt={property.title} className="h-44 w-full object-cover transition duration-700 group-hover:scale-105" />
@@ -665,7 +660,7 @@ function RelatedCard({ property, slug, showPrices }: { property: Property; slug:
         <p className="mt-2 text-sm text-white/55">{formatPublicAddress(property)}</p>
         <p className="mt-3 font-semibold">{showPrices ? formatPropertyPrice(property) : "Valor sob consulta"}</p>
       </div>
-    </a>
+    </Link>
   );
 }
 

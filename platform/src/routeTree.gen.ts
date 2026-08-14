@@ -44,6 +44,7 @@ import { Route as AppCrmRouteImport } from './routes/app.crm'
 import { Route as AppContratosRouteImport } from './routes/app.contratos'
 import { Route as AppConfiguracoesRouteImport } from './routes/app.configuracoes'
 import { Route as AppAgendaRouteImport } from './routes/app.agenda'
+import { Route as SiteSlugIndexRouteImport } from './routes/site.$slug.index'
 import { Route as PortalProprietarioTokenRouteImport } from './routes/portal.proprietario.$token'
 import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquilino.$token'
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
@@ -229,6 +230,11 @@ const AppAgendaRoute = AppAgendaRouteImport.update({
   path: '/agenda',
   getParentRoute: () => AppRoute,
 } as any)
+const SiteSlugIndexRoute = SiteSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SiteSlugRoute,
+} as any)
 const PortalProprietarioTokenRoute = PortalProprietarioTokenRouteImport.update({
   id: '/portal/proprietario/$token',
   path: '/portal/proprietario/$token',
@@ -321,6 +327,7 @@ export interface FileRoutesByFullPath {
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug/': typeof SiteSlugIndexRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
   '/app/site/builder/editor/$websiteId': typeof AppSiteBuilderEditorWebsiteIdRouteWithChildren
   '/app/site/builder/preview/$websiteId': typeof AppSiteBuilderPreviewWebsiteIdRouteWithChildren
@@ -360,12 +367,12 @@ export interface FileRoutesByTo {
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
-  '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app': typeof AppIndexRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug': typeof SiteSlugIndexRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
   '/app/site/builder/editor/$websiteId': typeof AppSiteBuilderEditorWebsiteIdRouteWithChildren
   '/app/site/builder/preview/$websiteId': typeof AppSiteBuilderPreviewWebsiteIdRouteWithChildren
@@ -413,6 +420,7 @@ export interface FileRoutesById {
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug/': typeof SiteSlugIndexRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
   '/app/site/builder/editor/$websiteId': typeof AppSiteBuilderEditorWebsiteIdRouteWithChildren
   '/app/site/builder/preview/$websiteId': typeof AppSiteBuilderPreviewWebsiteIdRouteWithChildren
@@ -461,6 +469,7 @@ export interface FileRouteTypes {
     | '/app/vistorias/$inspectionId'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug/'
     | '/site/$slug/imoveis/$propertySlug'
     | '/app/site/builder/editor/$websiteId'
     | '/app/site/builder/preview/$websiteId'
@@ -500,12 +509,12 @@ export interface FileRouteTypes {
     | '/app/testes'
     | '/app/vistorias'
     | '/assinar-vistoria/$token'
-    | '/site/$slug'
     | '/app'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug'
     | '/site/$slug/imoveis/$propertySlug'
     | '/app/site/builder/editor/$websiteId'
     | '/app/site/builder/preview/$websiteId'
@@ -552,6 +561,7 @@ export interface FileRouteTypes {
     | '/app/vistorias/$inspectionId'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug/'
     | '/site/$slug/imoveis/$propertySlug'
     | '/app/site/builder/editor/$websiteId'
     | '/app/site/builder/preview/$websiteId'
@@ -829,6 +839,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgendaRouteImport
       parentRoute: typeof AppRoute
     }
+    '/site/$slug/': {
+      id: '/site/$slug/'
+      path: '/'
+      fullPath: '/site/$slug/'
+      preLoaderRoute: typeof SiteSlugIndexRouteImport
+      parentRoute: typeof SiteSlugRoute
+    }
     '/portal/proprietario/$token': {
       id: '/portal/proprietario/$token'
       path: '/portal/proprietario/$token'
@@ -1007,10 +1024,12 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface SiteSlugRouteChildren {
+  SiteSlugIndexRoute: typeof SiteSlugIndexRoute
   SiteSlugImoveisPropertySlugRoute: typeof SiteSlugImoveisPropertySlugRoute
 }
 
 const SiteSlugRouteChildren: SiteSlugRouteChildren = {
+  SiteSlugIndexRoute: SiteSlugIndexRoute,
   SiteSlugImoveisPropertySlugRoute: SiteSlugImoveisPropertySlugRoute,
 }
 
