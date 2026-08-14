@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
+import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
 
 type PropertyInput = Record<string, any>;
 
@@ -42,6 +43,8 @@ const publicPropertySelect = {
   iptuCents: true,
   featuresJson: true,
   amenityGroupsJson: true,
+  videosJson: true,
+  siteFeatured: true,
   publishedAt: true,
   media: {
     orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
@@ -159,16 +162,31 @@ async function ensureOwnerBelongsToCompany(ownerId: string, companyId: string) {
   return owner.id;
 }
 
-export async function listMysqlOwners(companyId: string, status = "active") {
+export async function listMysqlOwners(companyId: string, status = "active", search?: string) {
+  const normalizedSearch = search?.trim();
   const owners = await prisma().propertyOwner.findMany({
-    where: { companyId, status },
+    where: {
+      companyId,
+      status,
+      ...(normalizedSearch ? {
+        OR: [
+          { name: { contains: normalizedSearch } },
+          { document: { contains: normalizeBrazilianDocument(normalizedSearch) || normalizedSearch } },
+          { email: { contains: normalizedSearch } },
+          { phone: { contains: normalizedSearch } },
+          { whatsapp: { contains: normalizedSearch } },
+        ],
+      } : {}),
+    },
     orderBy: { createdAt: "desc" },
+    take: 100,
   });
 
   return owners.map(serializeOwner);
 }
 
 export async function createMysqlOwner(companyId: string, userId: string, input: PropertyInput) {
+  const document = await ensureOwnerDocumentAvailable(companyId, input.document);
   const owner = await prisma().propertyOwner.create({
     data: {
       companyId,
@@ -176,7 +194,7 @@ export async function createMysqlOwner(companyId: string, userId: string, input:
       ownerType: input.owner_type ?? "individual",
       clientType: input.client_type ?? "proprietario",
       name: input.name,
-      document: emptyToNull(input.document),
+      document,
       email: emptyToNull(input.email),
       phone: emptyToNull(input.phone),
       whatsapp: emptyToNull(input.whatsapp),
@@ -195,9 +213,17 @@ export async function createMysqlOwner(companyId: string, userId: string, input:
 
 export async function updateMysqlOwner(companyId: string, ownerId: string, input: PropertyInput) {
   await ensureOwnerBelongsToCompany(ownerId, companyId);
+  const current = await prisma().propertyOwner.findFirstOrThrow({ where: { id: ownerId, companyId } });
+  const ownerType = (input.owner_type ?? current.ownerType) as "individual" | "company";
+  const document = "document" in input
+    ? await ensureOwnerDocumentAvailable(companyId, input.document, ownerId)
+    : current.document;
+  if (document && !isValidBrazilianDocument(document, ownerType)) {
+    throw Object.assign(new Error("CPF/CNPJ inválido para o tipo de pessoa."), { statusCode: 422, code: "INVALID_OWNER_DOCUMENT" });
+  }
   const owner = await prisma().propertyOwner.update({
     where: { id: ownerId },
-    data: cleanOwnerUpdate(input),
+    data: { ...cleanOwnerUpdate(input), ...(document !== undefined ? { document } : {}) },
   });
 
   return serializeOwner(owner);
@@ -242,6 +268,22 @@ export async function listMysqlProperties(
       has_previous: input.page > 1 && total > 0,
     },
   };
+}
+
+export async function ensureOwnerDocumentAvailable(companyId: string, rawDocument: unknown, exceptOwnerId?: string) {
+  const document = normalizeBrazilianDocument(typeof rawDocument === "string" ? rawDocument : "");
+  if (!document) return null;
+  const duplicate = await prisma().propertyOwner.findFirst({
+    where: { companyId, document, ...(exceptOwnerId ? { id: { not: exceptOwnerId } } : {}) },
+    select: { id: true },
+  });
+  if (duplicate) {
+    throw Object.assign(new Error("Já existe um proprietário com este CPF/CNPJ nesta empresa."), {
+      statusCode: 409,
+      code: "DUPLICATE_OWNER_DOCUMENT",
+    });
+  }
+  return document;
 }
 
 export async function listMysqlPropertyContent(
@@ -354,6 +396,7 @@ export async function createMysqlProperty(companyId: string, userId: string, inp
   const property = await prisma().property.create({
     data: {
       ...(propertyDataFromInput(input) as any),
+      title: input.title?.trim() || "Rascunho sem título",
       companyId,
       ownerId,
       createdBy: uuidOrNull(userId),
@@ -364,8 +407,8 @@ export async function createMysqlProperty(companyId: string, userId: string, inp
   });
 
   if (ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
-
-  return serializeProperty(property);
+  await syncMysqlPropertyPublication(companyId, property.id);
+  return getMysqlProperty(companyId, property.id);
 }
 
 export async function updateMysqlProperty(companyId: string, propertyId: string, input: PropertyInput) {
@@ -383,7 +426,8 @@ export async function updateMysqlProperty(companyId: string, propertyId: string,
   });
 
   if (input.owner_id !== undefined && ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
-  return serializeProperty(property);
+  await syncMysqlPropertyPublication(companyId, property.id);
+  return getMysqlProperty(companyId, property.id);
 }
 
 export async function archiveMysqlProperty(companyId: string, propertyId: string) {
@@ -456,8 +500,20 @@ export async function createMysqlPropertyMedia(
       isCover: Boolean(input.is_cover),
     },
   });
-
+  await syncMysqlPropertyPublication(companyId, propertyId);
   return serializeMedia(media);
+}
+
+export async function setMysqlPropertyMediaCover(companyId: string, propertyId: string, mediaId: string) {
+  await ensurePropertyBelongsToCompany(propertyId, companyId);
+  const target = await prisma().propertyMedia.findFirst({ where: { id: mediaId, companyId, propertyId, mediaType: "photo" } });
+  if (!target) throw propertyNotFound();
+  await prisma().$transaction([
+    prisma().propertyMedia.updateMany({ where: { companyId, propertyId }, data: { isCover: false } }),
+    prisma().propertyMedia.update({ where: { id: mediaId }, data: { isCover: true } }),
+  ]);
+  await syncMysqlPropertyPublication(companyId, propertyId);
+  return listMysqlPropertyMedia(companyId, propertyId);
 }
 
 export async function reorderMysqlPropertyMedia(
@@ -478,6 +534,41 @@ export async function reorderMysqlPropertyMedia(
 export async function deleteMysqlPropertyMedia(companyId: string, propertyId: string, mediaId: string) {
   await ensurePropertyBelongsToCompany(propertyId, companyId);
   await prisma().propertyMedia.deleteMany({ where: { id: mediaId, companyId, propertyId } });
+  await syncMysqlPropertyPublication(companyId, propertyId);
+}
+
+export async function syncMysqlPropertyPublication(companyId: string, propertyId: string) {
+  const property = await prisma().property.findFirst({
+    where: { id: propertyId, companyId },
+    include: { media: { where: { mediaType: "photo", isCover: true }, select: { id: true }, take: 1 } },
+  });
+  if (!property) throw propertyNotFound();
+  const publication: Record<string, unknown> = isRecord(property.publicationSettingsJson)
+    ? property.publicationSettingsJson as Record<string, unknown>
+    : {};
+  const commercial: Record<string, unknown> = isRecord(property.commercialTermsJson)
+    ? property.commercialTermsJson as Record<string, unknown>
+    : {};
+  const seasonPrice = Number(commercial.season_price_cents ?? 0);
+  const hasPrice = property.operation === "sale"
+    ? Boolean(property.salePriceCents)
+    : property.operation === "rent"
+      ? Boolean(property.rentPriceCents)
+      : property.operation === "season"
+        ? seasonPrice > 0
+        : Boolean(property.salePriceCents || property.rentPriceCents);
+  const ready = Boolean(
+    property.ownerId && property.title && property.title !== "Rascunho sem título" && property.description?.trim()
+    && property.zipCode && property.city && property.state && hasPrice && property.media.length
+    && ["available", "reserved"].includes(property.status),
+  );
+  const shouldPublish = publication.site_enabled === true && ready;
+  const publishedAt = shouldPublish ? (property.publishedAt ?? new Date()) : null;
+  const siteFeatured = shouldPublish && publication.site_featured === true;
+  if ((property.publishedAt?.getTime() ?? null) !== (publishedAt?.getTime() ?? null) || property.siteFeatured !== siteFeatured) {
+    await prisma().property.update({ where: { id: propertyId }, data: { publishedAt, siteFeatured } });
+  }
+  return { ready, published: shouldPublish };
 }
 
 export async function ensureMysqlCompanySite(companyId: string, userId: string, batchId?: string) {
@@ -525,7 +616,7 @@ export async function getMysqlPublishedSite(slug: string) {
     where: { companyId: site.companyId },
     orderBy: { createdAt: "desc" },
   });
-  if (!subscription || !["active", "trial"].includes(subscription.status)) throw publicSiteNotFound();
+  if (!subscription || !["ACTIVE", "TRIAL"].includes(subscription.status.toUpperCase())) throw publicSiteNotFound();
 
   return { site, company: site.company };
 }
@@ -538,7 +629,7 @@ export async function loadMysqlPublicProperties(site: { companyId: string; setti
       publishedAt: { not: null },
     },
     select: publicPropertySelect,
-    orderBy: { publishedAt: "desc" },
+    orderBy: [{ siteFeatured: "desc" }, { publishedAt: "desc" }, { id: "desc" }],
     take: limit,
   });
 
@@ -795,6 +886,7 @@ export function serializePropertySummary(property: any) {
     condominium_fee_cents: property.condominiumFeeCents,
     iptu_cents: property.iptuCents,
     published_at: toIso(property.publishedAt),
+    site_featured: property.siteFeatured === true,
     import_source: property.importSource,
     import_external_id: property.importExternalId,
     created_at: toIso(property.createdAt),
@@ -896,6 +988,8 @@ function serializePublicProperty(property: any, site: { settingsJson: unknown })
     iptu_cents: showPrices ? property.iptuCents : null,
     features_json: property.featuresJson ?? {},
     amenity_groups_json: property.amenityGroupsJson ?? {},
+    videos_json: Array.isArray(property.videosJson) ? property.videosJson : [],
+    site_featured: property.siteFeatured === true,
     published_at: toIso(property.publishedAt),
     property_media: (property.media ?? []).map((media: any) => ({
       media_type: media.mediaType,

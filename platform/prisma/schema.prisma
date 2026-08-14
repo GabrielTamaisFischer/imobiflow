@@ -333,6 +333,7 @@ model PropertyOwner {
   properties          Property[]
 
   @@index([companyId, status])
+  @@index([companyId, document])
   @@map("property_owners")
 }
 
@@ -380,6 +381,7 @@ model Property {
   suites                  Int?
   parkingSpaces           Int?            @map("parking_spaces")
   publishedAt             DateTime?       @map("published_at")
+  siteFeatured            Boolean         @default(false) @map("site_featured")
   importSource            String?         @map("import_source") @db.VarChar(80)
   importExternalId        String?         @map("import_external_id") @db.VarChar(180)
   importJobId             String?         @map("import_job_id") @db.Char(36)
@@ -402,6 +404,7 @@ model Property {
   @@index([companyId, importJobId])
   @@index([companyId, createdAt, id])
   @@index([companyId, propertyType])
+  @@index([companyId, status, siteFeatured, publishedAt])
   @@map("properties")
 }
 

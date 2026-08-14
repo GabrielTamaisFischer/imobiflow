@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   Bath,
   BedDouble,
@@ -40,8 +40,16 @@ import {
 } from "@/product/public-site-helpers";
 
 export const Route = createFileRoute("/site/$slug")({
-  component: PublicCompanySite,
+  component: PublicCompanySiteRoute,
 });
+
+function PublicCompanySiteRoute() {
+  const isPropertyDetail = useRouterState({
+    select: (state) => state.matches.some((match) => match.routeId === "/site/$slug/imoveis/$propertySlug"),
+  });
+
+  return isPropertyDetail ? <Outlet /> : <PublicCompanySite />;
+}
 
 function PublicCompanySite() {
   const { slug } = Route.useParams();
@@ -64,12 +72,13 @@ function PublicCompanySite() {
 
   const properties = data?.properties?.length ? data.properties : data?.featured_properties ?? [];
   const availableProperties = properties.filter((property) => property.status === "available" || property.published_at);
-  const featuredProperties = availableProperties.length ? availableProperties : properties;
+  const catalogProperties = availableProperties.length ? availableProperties : properties;
+  const featuredProperties = catalogProperties.filter((property) => property.site_featured === true);
 
   const filteredProperties = useMemo(() => {
     const term = normalizeSearch(search);
 
-    return featuredProperties.filter((property) => {
+    return catalogProperties.filter((property) => {
       const haystack = normalizeSearch(
         [
           property.code,
@@ -88,7 +97,7 @@ function PublicCompanySite() {
 
       return matchesSearch && matchesOperation;
     });
-  }, [featuredProperties, operationFilter, search]);
+  }, [catalogProperties, operationFilter, search]);
 
   if (error) {
     return (
@@ -124,8 +133,7 @@ function PublicCompanySite() {
 
   const site = data.site;
   const primary = site.primary_color || "#c8a24b";
-  const heroProperty = featuredProperties.find((property) => getPropertyCoverUrl(property)) ?? featuredProperties[0] ?? null;
-  const heroImage = heroProperty ? getPropertyCoverUrl(heroProperty) ?? magnificentHeroImage : magnificentHeroImage;
+  const heroImage = site.settings_json.hero_image_url || magnificentHeroImage;
   const showPrices = site.settings_json.show_prices !== false;
   const style = { "--site-primary": primary } as CSSProperties;
   const surfaceClass = isDark ? "bg-[#070707] text-white" : "bg-[#f7f2e8] text-neutral-950";
@@ -239,6 +247,7 @@ function PublicCompanySite() {
               <option value="all">Todas</option>
               <option value="sale">Comprar</option>
               <option value="rent">Alugar</option>
+              <option value="season">Temporada</option>
               <option value="both">Venda e locação</option>
             </select>
             <a className="inline-flex h-12 items-center justify-center rounded-xl bg-black px-4 text-sm font-semibold text-white transition hover:bg-[var(--site-primary)] hover:text-black" href="#imoveis">
@@ -247,12 +256,26 @@ function PublicCompanySite() {
           </div>
 
           <div className="mt-8 grid max-w-4xl gap-3 sm:grid-cols-3">
-            <HeroStat value={featuredProperties.length} label="imóveis publicados" />
+            <HeroStat value={catalogProperties.length} label="imóveis publicados" />
             <HeroStat value={saleProperties.length} label="opções para compra" />
             <HeroStat value={rentProperties.length} label="opções para locação" />
           </div>
         </div>
       </section>
+
+      {featuredProperties.length ? (
+        <PropertyCarouselSection
+          id="destaques"
+          eyebrow="Destaques"
+          title="Imóveis destacados pela imobiliária"
+          properties={featuredProperties}
+          slug={slug}
+          showPrices={showPrices}
+          showFullAddress={Boolean(site.settings_json.show_full_address)}
+          glassClass={glassClass}
+          mutedClass={mutedClass}
+        />
+      ) : null}
 
       <section id="imoveis" className="mx-auto max-w-7xl px-5 py-20">
         <SectionHeading

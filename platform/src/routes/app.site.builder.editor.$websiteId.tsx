@@ -7762,8 +7762,7 @@ function libraryBlockHtml(item: BuilderLibraryItem, properties: Property[], webs
   }
 
   if (item.id === "hero-real-estate-complete") {
-    const heroProperty = (properties[0] ?? {}) as unknown as Record<string, string | number | null | undefined>;
-    const heroImage = String(heroProperty.imageUrl || heroProperty.mainImage || heroProperty.photo || "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1800&q=85");
+    const heroImage = "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1800&q=85";
     return `<section id="topo" data-imobiflow-block="hero" data-editable="true" style="position:relative;min-height:92vh;overflow:hidden;background:#070707;color:#fff;">
       <div data-editable="true" style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.86),rgba(0,0,0,.38),rgba(0,0,0,.72)),url('${escapeHtml(heroImage)}') center/cover no-repeat;"></div>
       <div data-editable="true" style="position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:120px 6vw 80px;display:grid;gap:34px;">
@@ -7830,8 +7829,7 @@ function libraryBlockHtml(item: BuilderLibraryItem, properties: Property[], webs
   }
 
   if (normalized.includes("hero")) {
-    const heroImage =
-      firstProperty ? propertyCoverUrl(firstProperty) || "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1800&q=85" : "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1800&q=85";
+    const heroImage = "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1800&q=85";
     return `<section id="${blockId}" data-imobiflow-name="${safeName}" data-editable="true" style="${sectionStyle}min-height:720px;display:flex;align-items:center;background:#080806;">
       <div data-editable="true" data-imobiflow-background-image="true" style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(8,8,6,.90),rgba(8,8,6,.42)),radial-gradient(circle at 80% 16%,rgba(212,175,55,.34),transparent 32%),url('${escapeHtml(heroImage)}');background-size:cover;background-position:center;"></div>
       <div data-editable="true" style="${innerStyle}">

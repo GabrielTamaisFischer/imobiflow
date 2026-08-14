@@ -32,6 +32,7 @@ export type CompanySite = {
     template_key?: SiteTemplateKey;
     featured_property_ids?: string[];
     favorite_template_keys?: SiteTemplateKey[];
+    hero_image_url?: string;
   };
   seo_json: Record<string, unknown>;
   published_at: string | null;

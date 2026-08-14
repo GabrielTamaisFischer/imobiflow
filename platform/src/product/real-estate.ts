@@ -34,8 +34,8 @@ export type Property = {
   code: string | null;
   title: string;
   description: string | null;
-  property_type: "apartment" | "house" | "commercial" | "land" | "rural" | "other";
-  operation: "sale" | "rent" | "both";
+  property_type: PropertyType;
+  operation: "sale" | "rent" | "season" | "both";
   status: "draft" | "available" | "reserved" | "sold" | "rented" | "inactive" | "archived";
   street: string | null;
   number: string | null;
@@ -70,6 +70,7 @@ export type Property = {
   publication_settings_json: Record<string, unknown>;
   description_template_key: string | null;
   published_at: string | null;
+  site_featured?: boolean;
   created_at: string;
   updated_at: string;
   property_owners?: {
@@ -96,6 +97,13 @@ export type PropertyMedia = {
   is_cover: boolean;
   created_at: string;
 };
+
+export type PropertyType =
+  | "apartment" | "industrial_area" | "garage_box" | "house" | "commercial_house"
+  | "condo_house" | "village_house" | "farm_house" | "penthouse" | "office"
+  | "farm" | "flat" | "warehouse" | "haras" | "hotel" | "industry" | "kitnet"
+  | "loft" | "mall_store" | "store" | "land_condo" | "motel" | "inn" | "building"
+  | "ranch" | "townhouse" | "studio" | "land" | "commercial" | "rural" | "other";
 
 export type PropertySummaryMedia = Pick<
   PropertyMedia,
@@ -320,6 +328,15 @@ export async function listProperties(filters: PropertyListFilters = {}): Promise
   });
 }
 
+export async function searchOwners(search: string) {
+  if (isPreviewRealEstate()) {
+    const query = search.trim().toLocaleLowerCase("pt-BR");
+    return { owners: readPreviewOwners().filter((owner) => [owner.name, owner.document, owner.email, owner.phone, owner.whatsapp].filter(Boolean).join(" ").toLocaleLowerCase("pt-BR").includes(query)) };
+  }
+  const query = new URLSearchParams({ search });
+  return apiRequest<{ owners: PropertyOwner[] }>(`/real-estate/owners?${query.toString()}`, { token: getStoredToken() ?? undefined });
+}
+
 export async function listAllProperties(filters: Omit<PropertyListFilters, "page" | "pageSize"> = {}) {
   const properties: PropertySummary[] = [];
   let page = 1;
@@ -491,6 +508,21 @@ export async function reorderPropertyMedia(
   return apiRequest<{ media: PropertyMedia[] }>(`/real-estate/properties/${propertyId}/media-order`, {
     method: "PATCH",
     body: JSON.stringify({ media }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function setPropertyMediaCover(propertyId: string, mediaId: string) {
+  if (isPreviewRealEstate()) {
+    const properties = readPreviewProperties();
+    const property = properties.find((item) => item.id === propertyId);
+    const media = (property?.property_media ?? []).map((item) => ({ ...item, is_cover: item.id === mediaId }));
+    writePreviewProperties(properties.map((item) => item.id === propertyId ? { ...item, property_media: media } : item));
+    return { media };
+  }
+  return apiRequest<{ media: PropertyMedia[] }>(`/real-estate/properties/${propertyId}/media-cover`, {
+    method: "PATCH",
+    body: JSON.stringify({ media_id: mediaId }),
     token: getStoredToken() ?? undefined,
   });
 }

@@ -56,8 +56,14 @@ export function getPropertyCoverUrl(property: PropertyCardData) {
 }
 
 export function propertyTypeLabel(type: Property["property_type"]) {
-  const labels: Record<Property["property_type"], string> = {
+  const labels: Partial<Record<Property["property_type"], string>> = {
     apartment: "Apartamento",
+    industrial_area: "Área industrial", garage_box: "Box/Garagem", commercial_house: "Casa comercial",
+    condo_house: "Casa de condomínio", village_house: "Casa de vila", farm_house: "Chácara",
+    penthouse: "Cobertura", office: "Sala comercial", farm: "Fazenda", flat: "Flat",
+    warehouse: "Galpão", haras: "Haras", hotel: "Hotel", industry: "Indústria", kitnet: "Kitnet",
+    loft: "Loft", mall_store: "Loja em shopping", store: "Loja/Salão", land_condo: "Loteamento",
+    motel: "Motel", inn: "Pousada/Chalé", building: "Prédio", ranch: "Sítio", townhouse: "Sobrado", studio: "Studio",
     house: "Casa",
     commercial: "Comercial",
     land: "Terreno",
@@ -72,6 +78,7 @@ export function operationLabel(operation: Property["operation"]) {
   const labels: Record<Property["operation"], string> = {
     sale: "Venda",
     rent: "Locação",
+    season: "Temporada",
     both: "Venda e locação",
   };
 
@@ -85,9 +92,13 @@ export function formatCurrencyFromCents(value: number) {
 export function formatPropertyPrice(property: PropertyCardData) {
   const sale = property.sale_price_cents ? formatCurrencyFromCents(property.sale_price_cents) : null;
   const rent = property.rent_price_cents ? `${formatCurrencyFromCents(property.rent_price_cents)}/mês` : null;
+  const season = "commercial_terms_json" in property
+    ? Number((property as Property).commercial_terms_json?.season_price_cents ?? 0)
+    : 0;
 
   if (property.operation === "both") return [sale, rent].filter(Boolean).join(" ou ") || "Valor sob consulta";
   if (property.operation === "rent") return rent || "Valor sob consulta";
+  if (property.operation === "season") return season ? `${formatCurrencyFromCents(season)}/temporada` : "Valor sob consulta";
 
   return sale || "Valor sob consulta";
 }

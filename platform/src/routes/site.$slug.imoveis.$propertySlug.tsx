@@ -24,7 +24,7 @@ import {
   Video,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   createPublicSiteLead,
   getPublicSiteProperties,
@@ -119,7 +119,13 @@ function PublicPropertyPage() {
   const properties = data?.properties?.length ? data.properties : data?.featured_properties ?? [];
   const media = useMemo(() => sortMedia(property?.property_media ?? []), [property?.property_media]);
   const photos = useMemo(() => getPhotoMedia(property, media), [media, property]);
-  const videos = useMemo(() => media.filter(isVideoMedia), [media]);
+  const videos = useMemo(() => {
+    const uploaded = media.filter(isVideoMedia);
+    const linked = (property?.videos_json ?? [])
+      .map((item) => typeof item.url === "string" && /^https?:\/\//i.test(item.url) ? ({ media_type: "video", url: item.url, caption: "Vídeo externo" } as PropertyMedia) : null)
+      .filter((item): item is PropertyMedia => Boolean(item));
+    return [...uploaded, ...linked];
+  }, [media, property?.videos_json]);
   const tours = useMemo(() => media.filter(isTourMedia), [media]);
   const currentImage = activeImage ?? photos[0]?.url ?? magnificentHeroImage;
   const primary = site?.primary_color || "#c8a24b";
@@ -673,7 +679,7 @@ function Highlight({ icon: Icon, title, text }: { icon: LucideIcon; title: strin
   );
 }
 
-function Badge({ children }: { children: string | number }) {
+function Badge({ children }: { children: ReactNode }) {
   return <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-sm text-white/72 backdrop-blur-xl">{children}</span>;
 }
 
@@ -728,19 +734,30 @@ function toEmbedUrl(url: string) {
 }
 
 function buildMapQuery(property: ExtendedProperty, showFullAddress: boolean) {
-  const lat = Number(property.latitude);
-  const lng = Number(property.longitude);
-  if (Number.isFinite(lat) && Number.isFinite(lng)) return `${lat},${lng}`;
+  const coordinates = getCoordinates(property);
+  if (coordinates) return `${coordinates.lat},${coordinates.lng}`;
 
   const address = formatPublicAddress(property, showFullAddress);
   return address && address !== "Localizacao sob consulta" ? address : null;
 }
 
 function buildWazeUrl(property: ExtendedProperty, mapQuery: string | null) {
-  const lat = Number(property.latitude);
-  const lng = Number(property.longitude);
-  if (Number.isFinite(lat) && Number.isFinite(lng)) return `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+  const coordinates = getCoordinates(property);
+  if (coordinates) return `https://waze.com/ul?ll=${coordinates.lat},${coordinates.lng}&navigate=yes`;
   return mapQuery ? `https://waze.com/ul?q=${encodeURIComponent(mapQuery)}&navigate=yes` : null;
+}
+
+function getCoordinates(property: ExtendedProperty) {
+  const rawLatitude = property.latitude as unknown;
+  const rawLongitude = property.longitude as unknown;
+  if (rawLatitude === null || rawLatitude === undefined || rawLatitude === "") return null;
+  if (rawLongitude === null || rawLongitude === undefined || rawLongitude === "") return null;
+
+  const lat = Number(rawLatitude);
+  const lng = Number(rawLongitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
 }
 
 function getContactPhone(property: ExtendedProperty | null, site: PublicPropertyResponse["site"] | undefined) {

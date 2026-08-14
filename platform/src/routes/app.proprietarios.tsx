@@ -3,6 +3,8 @@ import { Building2, Copy, Eye, Loader2, Mail, MessageCircle, Pencil, Phone, Plus
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
+import { OwnerFields } from "@/components/real-estate/owner-fields";
+import { ownerInputFromForm } from "@/product/owner-form";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   createOwner,
@@ -195,15 +197,7 @@ function OwnerForm({
 
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const input: OwnerInput = {
-      owner_type: String(form.get("owner_type") ?? "individual") as OwnerInput["owner_type"],
-      name: String(form.get("name") ?? ""),
-      document: String(form.get("document") ?? ""),
-      email: String(form.get("email") ?? ""),
-      phone: String(form.get("phone") ?? ""),
-      whatsapp: String(form.get("whatsapp") ?? ""),
-      notes: String(form.get("notes") ?? ""),
-    };
+    const input = ownerInputFromForm(form);
 
     try {
       const response = await createOwner(input);
@@ -235,33 +229,8 @@ function OwnerForm({
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <label className="space-y-1 text-sm">
-          <span className="font-medium">Tipo</span>
-          <select
-            name="owner_type"
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-            defaultValue="individual"
-          >
-            <option value="individual">Pessoa física</option>
-            <option value="company">Pessoa jurídica</option>
-          </select>
-        </label>
-        <Field label="Nome" name="name" required />
-        <Field label="CPF/CNPJ" name="document" />
-        <Field label="E-mail" name="email" type="email" />
-        <Field label="Telefone" name="phone" format="phone" />
-        <Field label="WhatsApp" name="whatsapp" format="phone" />
+        <OwnerFields />
       </div>
-
-      <label className="mt-3 block space-y-1 text-sm">
-        <span className="font-medium">Observações</span>
-        <textarea
-          name="notes"
-          rows={4}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-          placeholder="Preferências, dados de repasse, restrições e informações internas."
-        />
-      </label>
 
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
 
@@ -566,15 +535,7 @@ function OwnerEditModal({ owner, onClose, onSaved }: { owner: PropertyOwner; onC
     setIsSaving(true);
     setError(null);
     const form = new FormData(event.currentTarget);
-    const input: Partial<OwnerInput> = {
-      owner_type: String(form.get("owner_type") ?? "individual") as OwnerInput["owner_type"],
-      name: String(form.get("name") ?? ""),
-      document: String(form.get("document") ?? ""),
-      email: String(form.get("email") ?? ""),
-      phone: String(form.get("phone") ?? ""),
-      whatsapp: String(form.get("whatsapp") ?? ""),
-      notes: String(form.get("notes") ?? ""),
-    };
+    const input: Partial<OwnerInput> = ownerInputFromForm(form);
     try {
       const response = await updateOwner(owner.id, input);
       onSaved(response.owner);
@@ -595,24 +556,9 @@ function OwnerEditModal({ owner, onClose, onSaved }: { owner: PropertyOwner; onC
           </div>
           <button type="button" onClick={onClose} className="rounded-md border border-border px-3 py-1 text-sm">Cancelar</button>
         </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="space-y-1 text-sm">
-            <span className="font-medium">Tipo</span>
-            <select name="owner_type" defaultValue={owner.owner_type} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring">
-              <option value="individual">Pessoa física</option>
-              <option value="company">Pessoa jurídica</option>
-            </select>
-          </label>
-          <Field label="Nome" name="name" defaultValue={owner.name} required />
-          <Field label="CPF/CNPJ" name="document" defaultValue={owner.document ?? ""} />
-          <Field label="E-mail" name="email" type="email" defaultValue={owner.email ?? ""} />
-          <Field label="Telefone" name="phone" defaultValue={owner.phone ?? ""} format="phone" />
-          <Field label="WhatsApp" name="whatsapp" defaultValue={owner.whatsapp ?? ""} format="phone" />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <OwnerFields defaults={owner} />
         </div>
-        <label className="mt-3 block space-y-1 text-sm">
-          <span className="font-medium">Observações</span>
-          <textarea name="notes" rows={4} defaultValue={owner.notes ?? ""} className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring" />
-        </label>
         {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
         <div className="mt-4 flex justify-end">
           <button type="submit" disabled={isSaving} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:opacity-60">

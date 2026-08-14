@@ -19,6 +19,8 @@ import { type FormEvent, useDeferredValue, useEffect, useMemo, useState } from "
 import type * as React from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
+import { OwnerFields } from "@/components/real-estate/owner-fields";
+import { ownerInputFromForm } from "@/product/owner-form";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   archiveProperty,
@@ -29,10 +31,10 @@ import {
   listOwners,
   listProperties,
   reorderPropertyMedia,
+  setPropertyMediaCover,
   updateProperty,
   uploadPropertyMedia,
   toPropertySummary,
-  type OwnerInput,
   type Property,
   type PropertyInput,
   type PropertyOwner,
@@ -486,9 +488,13 @@ function PropertyForm({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedOwnerId, setSelectedOwnerId] = useState("");
+  const [ownerSearch, setOwnerSearch] = useState("");
+  const [propertyCepStatus, setPropertyCepStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
   const [description, setDescription] = useState("");
   const [templateIndex, setTemplateIndex] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
+  const [formOperation, setFormOperation] = useState<Property["operation"]>("sale");
+  const [pricePreview, setPricePreview] = useState<CommercialPriceCalculation>(() => calculateCommercialPrices(new FormData()));
   const [formReadiness, setFormReadiness] = useState<ReadinessItem[]>(() =>
     buildFormPublicationChecklist(new FormData(), "", ""),
   );
@@ -497,19 +503,39 @@ function PropertyForm({
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
   const [tourFiles, setTourFiles] = useState<File[]>([]);
   const currentStep = propertyFormSteps[stepIndex] ?? propertyFormSteps[0];
-  const progress = Math.round(((stepIndex + 1) / propertyFormSteps.length) * 100);
+  const progress = Math.round((formReadiness.filter((item) => item.ready).length / formReadiness.length) * 100);
 
   const selectedOwner = useMemo(
     () => owners.find((owner) => owner.id === selectedOwnerId),
     [owners, selectedOwnerId],
   );
+  const visibleOwners = useMemo(() => {
+    const query = ownerSearch.trim().toLocaleLowerCase("pt-BR").replace(/\D/g, "");
+    const textQuery = ownerSearch.trim().toLocaleLowerCase("pt-BR");
+    if (!textQuery) return owners;
+    return owners.filter((owner) => {
+      const searchable = [owner.name, owner.document, owner.email, owner.phone, owner.whatsapp]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase("pt-BR");
+      return searchable.includes(textQuery) || (query && searchable.replace(/\D/g, "").includes(query));
+    });
+  }, [ownerSearch, owners]);
 
   async function fillAddressByCep(input: HTMLInputElement, prefix: "owner" | "property") {
     const cep = input.value.replace(/\D/g, "");
-    if (cep.length !== 8) return;
+    if (cep.length !== 8) {
+      if (prefix === "property") setPropertyCepStatus(cep.length ? "error" : "idle");
+      return;
+    }
 
     try {
-      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      if (prefix === "property") setPropertyCepStatus("loading");
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 6000);
+      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { signal: controller.signal });
+      window.clearTimeout(timeout);
+      if (!response.ok) throw new Error("CEP indisponível");
       const data = (await response.json()) as {
         erro?: boolean;
         logradouro?: string;
@@ -517,7 +543,7 @@ function PropertyForm({
         localidade?: string;
         uf?: string;
       };
-      if (data.erro) return;
+      if (data.erro) throw new Error("CEP não encontrado");
 
       const form = input.form;
       if (!form) return;
@@ -526,9 +552,13 @@ function PropertyForm({
       setInputValue(form, `${prefix}_city`, data.localidade ?? "", true);
       setInputValue(form, `${prefix}_state`, data.uf ?? "", true);
       setInputValue(form, `${prefix}_country`, "Brasil", true);
+      if (prefix === "property") {
+        setPropertyCepStatus("found");
+        (form.elements.namedItem("property_number") as HTMLInputElement | null)?.focus();
+      }
       refreshReadiness(form);
     } catch {
-      // CEP é um apoio operacional; falha de rede não deve bloquear o cadastro.
+      if (prefix === "property") setPropertyCepStatus("error");
     }
   }
 
@@ -583,26 +613,7 @@ function PropertyForm({
       let createdOwner: PropertyOwner | undefined;
 
       if (!ownerId && text(form, "owner_name")) {
-        const ownerInput: OwnerInput = {
-          owner_type: text(form, "owner_type") === "company" ? "company" : "individual",
-          client_type: text(form, "client_type") as OwnerInput["client_type"],
-          name: text(form, "owner_name"),
-          email: text(form, "owner_email"),
-          phone: text(form, "owner_phone"),
-          whatsapp: text(form, "owner_whatsapp"),
-          residential_phone: text(form, "owner_residential_phone"),
-          commercial_phone: text(form, "owner_commercial_phone"),
-          address_json: {
-            zip_code: text(form, "owner_zip_code"),
-            state: text(form, "owner_state"),
-            city: text(form, "owner_city"),
-            neighborhood: text(form, "owner_neighborhood"),
-            street: text(form, "owner_street"),
-            number: text(form, "owner_number"),
-            complement: text(form, "owner_complement"),
-            country: text(form, "owner_country") || "Brasil",
-          },
-        };
+        const ownerInput = ownerInputFromForm(form, "owner_");
         const ownerResponse = await createOwner(ownerInput);
         ownerId = ownerResponse.owner.id;
         createdOwner = ownerResponse.owner;
@@ -658,7 +669,8 @@ function PropertyForm({
         videoFiles,
         tourFiles,
       });
-      onCreated({ ...response.property, property_media: uploadedMedia }, createdOwner);
+      const refreshed = uploadedMedia.length ? await getProperty(response.property.id) : response;
+      onCreated({ ...refreshed.property, property_media: uploadedMedia.length ? uploadedMedia : refreshed.property.property_media }, createdOwner);
       formElement.reset();
       setDescription("");
       setMainPhoto(null);
@@ -675,7 +687,12 @@ function PropertyForm({
   return (
     <form
       onSubmit={handleSubmit}
-      onChange={(event) => refreshReadiness(event.currentTarget)}
+      onChange={(event) => {
+        const form = new FormData(event.currentTarget);
+        refreshReadiness(event.currentTarget);
+        setFormOperation(normalizeOperation(text(form, "operation")));
+        setPricePreview(calculateCommercialPrices(form));
+      }}
       className="mb-4 rounded-lg border border-border bg-card p-4"
     >
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -720,6 +737,7 @@ function PropertyForm({
       </div>
 
       <FormSection step={0} activeStep={stepIndex} title="1. Proprietário" description="Cadastre um novo proprietário ou vincule um proprietário já existente.">
+        <Field label="Buscar proprietário" name="owner_search" placeholder="Nome, CPF/CNPJ, e-mail ou telefone" onInput={(event) => setOwnerSearch(event.currentTarget.value)} />
         <label className="space-y-1 text-sm">
           <span className="font-medium">Proprietário existente</span>
           <select
@@ -733,7 +751,7 @@ function PropertyForm({
             className={fieldClass}
           >
             <option value="">Adicionar proprietário neste cadastro</option>
-            {owners.map((owner) => (
+            {visibleOwners.map((owner) => (
               <option key={owner.id} value={owner.id}>
                 {owner.name}
               </option>
@@ -741,36 +759,7 @@ function PropertyForm({
           </select>
         </label>
         {!selectedOwner ? (
-          <>
-            <Field label="Nome*" name="owner_name" required />
-            <SelectField label="Tipo de cliente*" name="client_type" options={[
-              ["comprador", "Comprador"],
-              ["construtor", "Construtor"],
-              ["investidor", "Investidor"],
-              ["locatario", "Locatário"],
-              ["proprietario", "Proprietário"],
-            ]} />
-            <SelectField label="Pessoa" name="owner_type" options={[["individual", "Pessoa física"], ["company", "Pessoa jurídica"]]} />
-            <Field label="Telefone residencial" name="owner_residential_phone" format="phone" inputMode="tel" />
-            <Field label="Telefone comercial" name="owner_commercial_phone" format="phone" inputMode="tel" />
-            <Field label="Telefone celular / WhatsApp*" name="owner_whatsapp" required format="phone" inputMode="tel" />
-            <Field label="E-mail*" name="owner_email" type="email" required />
-            <Field
-              label="CEP"
-              name="owner_zip_code"
-              format="cep"
-              inputMode="numeric"
-              onInput={(event) => void handleCepInput(event, "owner")}
-              onBlur={(event) => void handleCepBlur(event, "owner")}
-            />
-            <Field label="UF" name="owner_state" maxLength={2} />
-            <Field label="Cidade" name="owner_city" />
-            <Field label="Bairro" name="owner_neighborhood" />
-            <Field label="Logradouro" name="owner_street" />
-            <Field label="Número" name="owner_number" />
-            <Field label="Complemento" name="owner_complement" />
-            <Field label="País" name="owner_country" defaultValue="Brasil" />
-          </>
+          <OwnerFields prefix="owner_" nameRequired={false} />
         ) : (
           <div className="rounded-md border border-border bg-background p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
             Proprietário vinculado: <strong className="text-foreground">{selectedOwner.name}</strong>. O código do imóvel ficará ligado a este cadastro.
@@ -780,16 +769,18 @@ function PropertyForm({
 
       <FormSection step={1} activeStep={stepIndex} title="2. Localização do imóvel" description="Endereço, coordenadas, condomínio e referências de acesso.">
         <Field label="Código imóvel" name="code" placeholder="Automático se deixar vazio" />
-        <Field label="Título*" name="title" required />
+        <Field label="Título" name="title" placeholder="Pode ser preenchido depois no rascunho" />
         <Field
-          label="CEP*"
+          label="CEP"
           name="property_zip_code"
-          required
           format="cep"
           inputMode="numeric"
           onInput={(event) => void handleCepInput(event, "property")}
           onBlur={(event) => void handleCepBlur(event, "property")}
         />
+        <p className={`self-end pb-2 text-xs ${propertyCepStatus === "error" ? "text-destructive" : "text-muted-foreground"}`}>
+          {propertyCepStatus === "loading" ? "Consultando CEP…" : propertyCepStatus === "found" ? "Endereço encontrado; informe o número." : propertyCepStatus === "error" ? "CEP não encontrado. Preencha manualmente." : "Preenchimento automático opcional."}
+        </p>
         <Field label="Endereço" name="property_street" />
         <Field label="Número" name="property_number" />
         <Field label="Complemento" name="property_complement" />
@@ -804,7 +795,7 @@ function PropertyForm({
       </FormSection>
 
       <FormSection step={2} activeStep={stepIndex} title="3. Captação" description="Informações operacionais para placa, chaves, exclusividade e parceria.">
-        <Field label="Captador*" name="captor_name" required />
+        <Field label="Captador" name="captor_name" />
         <Field label="Local das chaves" name="key_location" />
         <Field label="Nome do zelador ou porteiro" name="doorman_name" />
         <Field label="Telefone do zelador ou porteiro" name="doorman_phone" format="phone" inputMode="tel" />
@@ -872,9 +863,9 @@ function PropertyForm({
       </FormSection>
 
       <FormSection step={5} activeStep={stepIndex} title="6. Valores" description="Valores, taxas e regra comercial de comissão/acréscimo/desconto.">
-        <Field label="Valor de venda" name="sale_price" inputMode="decimal" format="money" />
-        <Field label="Valor de locação/mês" name="rent_price" inputMode="decimal" format="money" />
-        <Field label="Valor de temporada" name="season_price" inputMode="decimal" format="money" />
+        {formOperation === "sale" || formOperation === "both" ? <Field label="Valor original de venda" name="sale_price" inputMode="decimal" format="money" /> : null}
+        {formOperation === "rent" || formOperation === "both" ? <Field label="Valor original de locação/mês" name="rent_price" inputMode="decimal" format="money" /> : null}
+        {formOperation === "season" ? <Field label="Valor de temporada" name="season_price" inputMode="decimal" format="money" /> : null}
         <Field label="Valor do condomínio" name="condominium_fee" inputMode="decimal" format="money" />
         <Field label="Valor do IPTU" name="iptu" inputMode="decimal" format="money" />
         <SelectField label="IPTU" name="iptu_period" options={[["monthly", "Mensal"], ["yearly", "Anual"]]} />
@@ -884,6 +875,15 @@ function PropertyForm({
         <SelectField label="Regra comercial" name="commercial_rule_type" options={[["none", "Nenhuma"], ["percent", "Percentual"], ["fixed", "Valor fixo"]]} />
         <SelectField label="Aplicação da regra" name="commercial_rule_mode" options={[["add", "Adicionar ao valor"], ["subtract", "Tirar do valor"]]} />
         <Field label="% ou valor fixo" name="commercial_rule_value" inputMode="decimal" format="decimal" />
+        <div className="rounded-md border border-primary/25 bg-primary/5 p-3 text-sm md:col-span-2 xl:col-span-4">
+          <p className="font-semibold">Cálculo comercial em tempo real</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {(formOperation === "sale" || formOperation === "both") ? <p>Venda: {formatCurrency(pricePreview.original_sale_price_cents ?? null) || "não informada"} → <strong>{formatCurrency(pricePreview.sale_price_cents ?? null) || "não informada"}</strong></p> : null}
+            {(formOperation === "rent" || formOperation === "both") ? <p>Locação: {formatCurrency(pricePreview.original_rent_price_cents ?? null) || "não informada"} → <strong>{formatCurrency(pricePreview.rent_price_cents ?? null) || "não informada"}</strong></p> : null}
+            {formOperation === "season" ? <p>Temporada: <strong>{formatCurrency(pricePreview.season_price_cents ?? null) || "não informada"}</strong></p> : null}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">O valor original e o ajuste ficam preservados; cards e site exibem o valor final calculado.</p>
+        </div>
       </FormSection>
 
       <FormSection step={6} activeStep={stepIndex} title="7. Detalhes adicionais" description="Infraestrutura, lazer, piso, serviços, estrutura rural e culturas.">
@@ -962,16 +962,21 @@ function PropertyForm({
       </FormSection>
 
       <FormSection step={10} activeStep={stepIndex} title="11. Liberações" description="Controle onde o imóvel poderá aparecer depois de aprovado.">
-        {["ZAP Imóveis", "OLX", "Viva Real", "Facebook", "Instagram"].map((item) => (
-          <Checkbox key={item} name="publication_channels" value={item} label={item} />
-        ))}
+        <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 md:col-span-2 xl:col-span-4">
+          <strong>Portais e redes ainda não estão configurados para publicação automática.</strong>
+          <p className="mt-1">ZAP, OLX, Viva Real, Facebook e Instagram serão liberados somente após credenciais, validação e readiness do anúncio. Nenhum canal será marcado como publicado por esta tela.</p>
+          <a href="/app/integracoes" className="mt-2 inline-flex font-semibold underline">Ver integrações e requisitos</a>
+        </div>
         <SelectField label="Será destaque no site?" name="site_featured" options={[["no", "Não"], ["yes", "Sim"]]} />
         <SelectField label="Imóvel liberado no site?" name="site_enabled" options={[["no", "Não"], ["yes", "Sim"]]} />
-        <SelectField label="Será banner no site?" name="site_banner" options={[["no", "Não"], ["yes", "Sim"]]} />
+        <input type="hidden" name="site_banner" value="no" />
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground md:col-span-2">
+          Banner indisponível neste template. A imagem principal do imóvel nunca substituirá o hero institucional.
+        </div>
       </FormSection>
 
       <FormSection step={11} activeStep={stepIndex} title="12. Revisão final" description="Confira os pontos mínimos antes de salvar como rascunho ou preparar publicação.">
-        <PublicationChecklist items={formReadiness} />
+        <PublicationChecklist items={formReadiness} onGoToStep={setStepIndex} />
       </FormSection>
 
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
@@ -1015,6 +1020,7 @@ type ReadinessItem = {
   label: string;
   ready: boolean;
   detail: string;
+  step?: number;
 };
 
 function FormSection({
@@ -1045,7 +1051,7 @@ function FormSection({
   );
 }
 
-function PublicationChecklist({ items }: { items: ReadinessItem[] }) {
+function PublicationChecklist({ items, onGoToStep }: { items: ReadinessItem[]; onGoToStep?: (step: number) => void }) {
   const readyCount = items.filter((item) => item.ready).length;
 
   return (
@@ -1072,6 +1078,11 @@ function PublicationChecklist({ items }: { items: ReadinessItem[] }) {
                 {item.ready ? "OK" : "Pendente"}
               </span>
             </div>
+            {!item.ready && item.step !== undefined && onGoToStep ? (
+              <button type="button" onClick={() => onGoToStep(item.step!)} className="mt-2 text-xs font-semibold text-primary underline">
+                Corrigir nesta etapa
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -1695,8 +1706,8 @@ function EditPropertyDialog({
           </EditSection>
 
           <EditSection title="4. Dados primários">
-            <SelectField label="Tipo" name="property_type" defaultValue={property.property_type} options={[["apartment", "Apartamento"], ["house", "Casa"], ["commercial", "Comercial"], ["land", "Terreno"], ["rural", "Rural"], ["other", "Outro"]]} />
-            <SelectField label="Transação" name="operation" defaultValue={property.operation} options={[["sale", "Venda"], ["rent", "Locação"], ["both", "Venda e locação"]]} />
+            <SelectField label="Tipo" name="property_type" defaultValue={property.property_type} options={propertyTypeOptions.map(([value, label]) => [value, label])} />
+            <SelectField label="Transação" name="operation" defaultValue={property.operation} options={operationOptions.map(([value, label]) => [value, label])} />
             <Field label="Dormitórios" name="bedrooms" defaultValue={property.bedrooms?.toString() ?? ""} inputMode="numeric" />
             <Field label="Suítes" name="suites" defaultValue={property.suites?.toString() ?? ""} inputMode="numeric" />
             <Field label="Banheiros" name="bathrooms" defaultValue={property.bathrooms?.toString() ?? ""} inputMode="numeric" />
@@ -1737,12 +1748,10 @@ function EditPropertyDialog({
             <TextArea label="Descrição" name="description" defaultValue={property.description ?? ""} />
             <SelectField label="Liberado no site?" name="site_enabled" defaultValue={publication.site_enabled ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
             <SelectField label="Destaque no site?" name="site_featured" defaultValue={publication.site_featured ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Banner no site?" name="site_banner" defaultValue={publication.site_banner ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="ZAP Imóveis" name="portal_zap" defaultValue={publication.portal_zap ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="OLX" name="portal_olx" defaultValue={publication.portal_olx ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Viva Real" name="portal_viva_real" defaultValue={publication.portal_viva_real ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Facebook" name="social_facebook" defaultValue={publication.social_facebook ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Instagram" name="social_instagram" defaultValue={publication.social_instagram ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
+            <input type="hidden" name="site_banner" value="no" />
+            <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 md:col-span-2 xl:col-span-4">
+              Banner e publicação automática em portais/redes estão indisponíveis. Configure e valide cada integração antes de publicar; esta edição não cria status fictício.
+            </div>
           </EditSection>
         </div>
         {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
@@ -1769,6 +1778,7 @@ function EditSection({ title, children }: { title: string; children: React.React
 function PropertyPublicationSummary({ property }: { property: Property }) {
   const items = buildPropertyPublicationChecklist(property);
   const readyCount = items.filter((item) => item.ready).length;
+  const requested = property.publication_settings_json?.site_enabled === true;
 
   return (
     <div className="mt-4 rounded-md border border-border bg-background p-3">
@@ -1785,6 +1795,9 @@ function PropertyPublicationSummary({ property }: { property: Property }) {
           </p>
         ))}
       </div>
+      <p className={`mt-3 rounded-md p-2 text-xs font-medium ${property.published_at ? "bg-emerald-500/10 text-emerald-700" : requested ? "bg-amber-500/10 text-amber-800" : "bg-muted text-muted-foreground"}`}>
+        {property.published_at ? "Publicado no site e pronto para acesso público." : requested ? "Liberação solicitada; publicação aguardando os itens pendentes." : "Não liberado no site."}
+      </p>
     </div>
   );
 }
@@ -1834,6 +1847,16 @@ function PropertyMediaManager({
     }
   }
 
+  async function setCover(mediaId: string) {
+    setError(null);
+    try {
+      const response = await setPropertyMediaCover(property.id, mediaId);
+      onMediaChanged(response.media);
+    } catch (coverError) {
+      setError(coverError instanceof Error ? coverError.message : "Não foi possível definir a capa.");
+    }
+  }
+
   return (
     <div className="mt-4 rounded-md border border-border bg-background p-3">
       <p className="text-xs font-semibold uppercase text-muted-foreground">Mídias do imóvel</p>
@@ -1855,8 +1878,13 @@ function PropertyMediaManager({
             )}
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium">{item.media_type === "tour" ? "Tour 360" : item.media_type === "video" ? "Vídeo" : "Foto"}</p>
-              <p className="text-xs text-muted-foreground">Arraste para mudar a ordem</p>
+              <p className="text-xs text-muted-foreground">{item.is_cover ? "Capa atual" : "Arraste para mudar a ordem"}</p>
             </div>
+            {item.media_type === "photo" && !item.is_cover ? (
+              <button type="button" onClick={() => void setCover(item.id)} className="h-8 rounded-md border border-border px-2 text-xs font-medium hover:bg-accent">
+                Definir capa
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void removeMedia(item.id)}
@@ -1997,6 +2025,7 @@ function buildFormPublicationChecklist(form: FormData, description: string, sele
   return [
     {
       label: "Proprietário vinculado",
+      step: 0,
       ready: hasOwner,
       detail: hasOwner ? "O imóvel será ligado ao cadastro do proprietário." : "Selecione ou cadastre um proprietário.",
     },
@@ -2007,31 +2036,37 @@ function buildFormPublicationChecklist(form: FormData, description: string, sele
     },
     {
       label: "Tipo e transação",
+      step: 3,
       ready: Boolean(text(form, "property_type") && operation),
       detail: "Define filtros, portais, CRM, contratos e descrição.",
     },
     {
       label: "Localização mínima",
+      step: 1,
       ready: hasLocation,
       detail: hasLocation ? "CEP, cidade e UF informados." : "Informe CEP, cidade e UF para publicação.",
     },
     {
       label: "Valor conforme transação",
+      step: 5,
       ready: hasValue,
       detail: hasValue ? "Valor principal preenchido." : "Informe venda, locação ou temporada conforme a transação.",
     },
     {
       label: "Descrição",
+      step: 8,
       ready: hasDescription,
       detail: hasDescription ? "Texto pronto para ficha e portais." : "Gere por modelo local ou escreva a descrição.",
     },
     {
       label: "Foto principal",
+      step: 9,
       ready: hasMainPhoto,
       detail: hasMainPhoto ? "Foto principal selecionada para upload." : "Selecione a foto principal na etapa Imagens.",
     },
     {
       label: "Status disponível",
+      step: 3,
       ready: text(form, "status") === "available",
       detail: "Para publicar, o imóvel precisa estar disponível.",
     },
@@ -2042,6 +2077,7 @@ function buildPropertyPublicationChecklist(property: Property): ReadinessItem[] 
   const hasValue =
     (property.operation === "sale" && Boolean(property.sale_price_cents)) ||
     (property.operation === "rent" && Boolean(property.rent_price_cents)) ||
+    (property.operation === "season" && Boolean(property.commercial_terms_json?.season_price_cents)) ||
     (property.operation === "both" && (Boolean(property.sale_price_cents) || Boolean(property.rent_price_cents)));
   const hasLocation = Boolean(property.zip_code && property.city && property.state);
   const hasCover = Boolean(property.property_media?.some((media) => media.is_cover) ?? property.property_media?.length);
@@ -2410,10 +2446,12 @@ function formatMoneyTyping(value: string) {
 }
 
 function formatDecimalTyping(value: string) {
-  const normalized = value.replace(/\./g, "").replace(/[^\d,]/g, "");
-  const [integerRaw = "", decimalRaw] = normalized.split(",");
+  const normalized = value.replace(/[^\d.,]/g, "");
+  const separatorIndex = Math.max(normalized.lastIndexOf(","), normalized.lastIndexOf("."));
+  const integerRaw = (separatorIndex >= 0 ? normalized.slice(0, separatorIndex) : normalized).replace(/\D/g, "");
+  const decimalRaw = separatorIndex >= 0 ? normalized.slice(separatorIndex + 1).replace(/\D/g, "") : undefined;
   const integer = integerRaw.replace(/^0+(?=\d)/, "");
-  const formattedInteger = (integer || "0").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const formattedInteger = integer || "0";
   const decimal = decimalRaw !== undefined ? `,${decimalRaw.slice(0, 2)}` : "";
   return `${formattedInteger}${decimal}`;
 }
@@ -2435,16 +2473,13 @@ function labelFor(options: ReadonlyArray<readonly [string, string]>, value: stri
 }
 
 function normalizePropertyType(value: string): PropertyInput["property_type"] {
-  if (value === "house") return "house";
-  if (value === "land") return "land";
-  if (["farm", "farm_house", "haras", "ranch"].includes(value)) return "rural";
-  if (["office", "store", "warehouse", "industrial_area", "commercial_house"].includes(value)) return "commercial";
-  if (value === "other") return "other";
-  return "apartment";
+  return propertyTypeOptions.some(([key]) => key === value)
+    ? value as PropertyInput["property_type"]
+    : "other";
 }
 
 function normalizeOperation(value: string): PropertyInput["operation"] {
-  if (value === "rent" || value === "season") return "rent";
+  if (value === "rent" || value === "season") return value;
   if (value === "both") return "both";
   return "sale";
 }
@@ -2457,12 +2492,9 @@ function parseInteger(value: FormDataEntryValue | null) {
 
 function parseDecimal(value: FormDataEntryValue | null) {
   if (!value || String(value).trim() === "") return undefined;
-  const parsed = Number(
-    String(value ?? "")
-      .replace(/\./g, "")
-      .replace(",", ".")
-      .replace(/[^\d.-]/g, ""),
-  );
+  const raw = String(value ?? "").trim();
+  const normalized = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
+  const parsed = Number(normalized.replace(/[^\d.-]/g, ""));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 

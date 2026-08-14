@@ -146,7 +146,7 @@ const featureGroups = {
   culturas: ["Cana de açúcar", "Citrus", "Fruticultura", "Grãos", "Pastagem", "Pecuária"],
 };
 
-const realImagePools: Record<PropertyInput["property_type"], string[]> = {
+const realImagePools: Partial<Record<PropertyInput["property_type"], string[]>> = {
   apartment: [
     "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1400&q=82",
     "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1400&q=82",
@@ -205,7 +205,7 @@ const inspectionRoomSeedImages: Record<string, string> = {
     "https://images.unsplash.com/photo-1582407947304-fd86f028f716?auto=format&fit=crop&w=1200&q=82",
 };
 
-const propertyImageQueries: Record<PropertyInput["property_type"], string[]> = {
+const propertyImageQueries: Partial<Record<PropertyInput["property_type"], string[]>> = {
   apartment: [
     "apartment interior",
     "modern apartment",
@@ -797,8 +797,8 @@ async function ensureScenarioMedia(property: Property, scenario: TestPropertySce
 }
 
 export function getScenarioImages(scenario: Pick<TestPropertyScenario, "normalized_type" | "key">) {
-  const pool = realImagePools[scenario.normalized_type] ?? realImagePools.other;
-  const queries = propertyImageQueries[scenario.normalized_type] ?? propertyImageQueries.other;
+  const pool = realImagePools[scenario.normalized_type] ?? realImagePools.other!;
+  const queries = propertyImageQueries[scenario.normalized_type] ?? propertyImageQueries.other!;
   const offset = hashString(scenario.key) % pool.length;
   const queryOffset = hashString(`${scenario.key}:${scenario.normalized_type}`) % queries.length;
 

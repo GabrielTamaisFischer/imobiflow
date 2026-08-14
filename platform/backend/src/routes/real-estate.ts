@@ -25,6 +25,7 @@ import {
   listMysqlPropertyMedia,
   MAX_PROPERTY_PAGE_SIZE,
   reorderMysqlPropertyMedia,
+  setMysqlPropertyMediaCover,
   updateMysqlOwner,
   updateMysqlProperty,
 } from "../services/mysql-real-estate.js";
@@ -41,6 +42,7 @@ import {
   findStoredFileForEntity,
 } from "../services/storage/stored-files.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
+import { isValidBrazilianDocument } from "../services/brazilian-document.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const realEstateRouter = Router();
@@ -60,7 +62,7 @@ function parsePropertyReference(value: unknown, maxLength: number) {
   return parsed.data;
 }
 
-const ownerSchema = z.object({
+const ownerFields = {
   owner_type: z.enum(["individual", "company"]).default("individual"),
   client_type: z.enum(["comprador", "construtor", "investidor", "locatario", "proprietario"]).default("proprietario"),
   name: z.string().min(2),
@@ -72,15 +74,22 @@ const ownerSchema = z.object({
   commercial_phone: z.string().max(32).optional().or(z.literal("")),
   address_json: z.record(z.unknown()).optional().default({}),
   notes: z.string().max(4000).optional().or(z.literal("")),
-});
+};
+const validateOwnerDocument = (owner: { document?: string; owner_type: "individual" | "company" }, context: z.RefinementCtx) => {
+  if (owner.document && !isValidBrazilianDocument(owner.document, owner.owner_type)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["document"], message: "CPF/CNPJ inválido para o tipo de pessoa." });
+  }
+};
+export const ownerSchema = z.object(ownerFields).superRefine(validateOwnerDocument);
+const ownerUpdateSchema = z.object(ownerFields).partial();
 
-const propertySchema = z.object({
+const propertyFields = {
   owner_id: z.string().uuid().optional().or(z.literal("")),
   code: z.string().max(40).optional().or(z.literal("")),
-  title: z.string().min(2),
+  title: z.string().max(220).optional().or(z.literal("")),
   description: z.string().max(8000).optional().or(z.literal("")),
-  property_type: z.enum(["apartment", "house", "commercial", "land", "rural", "other"]).default("apartment"),
-  operation: z.enum(["sale", "rent", "both"]).default("sale"),
+  property_type: z.enum(["apartment", "industrial_area", "garage_box", "house", "commercial_house", "condo_house", "village_house", "farm_house", "penthouse", "office", "farm", "flat", "warehouse", "haras", "hotel", "industry", "kitnet", "loft", "mall_store", "store", "land_condo", "motel", "inn", "building", "ranch", "townhouse", "studio", "land", "commercial", "rural", "other"]).default("apartment"),
+  operation: z.enum(["sale", "rent", "season", "both"]).default("sale"),
   status: z.enum(["draft", "available", "reserved", "sold", "rented", "inactive", "archived"]).default("draft"),
   street: z.string().max(160).optional().or(z.literal("")),
   number: z.string().max(40).optional().or(z.literal("")),
@@ -114,7 +123,20 @@ const propertySchema = z.object({
   videos_json: z.array(z.record(z.unknown())).optional(),
   publication_settings_json: z.record(z.unknown()).optional(),
   description_template_key: z.string().max(80).optional().or(z.literal("")),
-});
+};
+const validateProperty = (property: { suites?: number; bedrooms?: number; state?: string; zip_code?: string }, context: z.RefinementCtx) => {
+  if (property.suites !== undefined && property.bedrooms !== undefined && property.suites > property.bedrooms) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["suites"], message: "Suítes não podem exceder dormitórios." });
+  }
+  if (property.state && !/^[A-Za-z]{2}$/.test(property.state)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["state"], message: "UF deve conter duas letras." });
+  }
+  if (property.zip_code && property.zip_code.replace(/\D/g, "").length !== 8) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["zip_code"], message: "CEP deve conter oito dígitos." });
+  }
+};
+export const propertySchema = z.object(propertyFields).superRefine(validateProperty);
+const propertyUpdateSchema = z.object(propertyFields).partial().superRefine(validateProperty);
 
 const mediaUploadSchema = z.object({
   file_name: z.string().min(1).max(180),
@@ -135,6 +157,8 @@ const mediaOrderSchema = z.object({
     }),
   ),
 });
+
+const mediaCoverSchema = z.object({ media_id: z.string().uuid() });
 
 export const propertyListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -224,7 +248,8 @@ realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: Re
   try {
     const companyId = req.access!.company.id;
     const status = typeof req.query.status === "string" ? req.query.status : "active";
-    res.json({ owners: await listMysqlOwners(companyId, status) });
+    const search = typeof req.query.search === "string" ? req.query.search.slice(0, 120) : undefined;
+    res.json({ owners: await listMysqlOwners(companyId, status, search) });
   } catch (error) {
     next(error);
   }
@@ -241,7 +266,7 @@ realEstateRouter.post("/owners", requirePermission("owners.manage"), async (req:
 
 realEstateRouter.patch("/owners/:id", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
-    const owner = await updateMysqlOwner(req.access!.company.id, String(req.params.id), ownerSchema.partial().parse(req.body));
+    const owner = await updateMysqlOwner(req.access!.company.id, String(req.params.id), ownerUpdateSchema.parse(req.body));
     res.json({ owner });
   } catch (error) {
     next(error);
@@ -295,7 +320,7 @@ realEstateRouter.patch("/properties/:id", requirePermission("properties.manage")
     const property = await updateMysqlProperty(
       req.access!.company.id,
       String(req.params.id),
-      propertySchema.partial().parse(req.body),
+      propertyUpdateSchema.parse(req.body),
     );
     res.json({ property });
   } catch (error) {
@@ -385,6 +410,16 @@ realEstateRouter.patch("/properties/:id/media-order", requirePermission("propert
   try {
     const input = mediaOrderSchema.parse(req.body);
     const media = await reorderMysqlPropertyMedia(req.access!.company.id, String(req.params.id), input.media);
+    res.json({ media });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.patch("/properties/:id/media-cover", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = mediaCoverSchema.parse(req.body);
+    const media = await setMysqlPropertyMediaCover(req.access!.company.id, String(req.params.id), input.media_id);
     res.json({ media });
   } catch (error) {
     next(error);
