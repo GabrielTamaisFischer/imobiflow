@@ -37,14 +37,17 @@ export function Navbar() {
 
         <div className="flex items-center gap-3">
           <ThemeToggle />
-          <a href="/entrar" className="hidden text-sm text-muted-foreground transition hover:text-foreground sm:block">
+          <a
+            href="/entrar"
+            className="hidden text-sm text-muted-foreground transition hover:text-foreground sm:block"
+          >
             Entrar
           </a>
           <a
-            href="/cadastro"
+            href="/planos"
             className="hidden rounded-full bg-gradient-brand px-4 py-2 text-sm font-semibold text-primary-foreground shadow-glow transition hover:brightness-110 sm:inline-flex"
           >
-            Teste grátis
+            Ver planos
           </a>
           <button
             className="md:hidden rounded-md p-2 text-muted-foreground"
@@ -60,15 +63,28 @@ export function Navbar() {
         <div className="border-t border-border/60 bg-background/95 px-6 py-4 md:hidden">
           <nav className="flex flex-col gap-3 text-sm">
             {links.map((l) => (
-              <a key={l.href} href={l.href} onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
+              <a
+                key={l.href}
+                href={l.href}
+                onClick={() => setOpen(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
                 {l.label}
               </a>
             ))}
-            <a href="/entrar" onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
+            <a
+              href="/entrar"
+              onClick={() => setOpen(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
               Entrar
             </a>
-            <a href="/cadastro" onClick={() => setOpen(false)} className="mt-2 rounded-full bg-gradient-brand px-4 py-2 text-center text-sm font-semibold text-primary-foreground">
-              Teste grátis
+            <a
+              href="/planos"
+              onClick={() => setOpen(false)}
+              className="mt-2 rounded-full bg-gradient-brand px-4 py-2 text-center text-sm font-semibold text-primary-foreground"
+            >
+              Ver planos
             </a>
           </nav>
         </div>

@@ -1,6 +1,7 @@
 import type { User } from "@supabase/supabase-js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import type { AccessContext, SubscriptionStatus } from "../types/access.js";
+export { isSubscriptionAllowed } from "./subscription-access.js";
 
 type UserRow = {
   id: string;
@@ -19,27 +20,6 @@ type UserRow = {
     name: string;
   } | null;
 };
-
-const blockingStatuses = new Set<SubscriptionStatus>([
-  "expired",
-  "cancelled",
-  "past_due",
-  "inactive",
-]);
-
-export function isSubscriptionAllowed(
-  status?: SubscriptionStatus | null,
-  expiresAt?: string | null,
-) {
-  if (!status || blockingStatuses.has(status)) return false;
-  if (status === "pending") return false;
-
-  if (status === "trial" && expiresAt) {
-    return new Date(expiresAt).getTime() > Date.now();
-  }
-
-  return status === "active" || status === "trial";
-}
 
 export async function buildAccessContext(authUser: User): Promise<AccessContext> {
   const { data: appUser, error: userError } = await supabaseAdmin
@@ -91,7 +71,11 @@ export async function buildAccessContext(authUser: User): Promise<AccessContext>
   }>;
 
   return {
-    authUser,
+    authUser: {
+      id: authUser.id,
+      email: authUser.email ?? appUser.email,
+      name: appUser.name,
+    },
     appUser: {
       id: appUser.id,
       company_id: appUser.company_id,
@@ -115,6 +99,7 @@ export async function buildAccessContext(authUser: User): Promise<AccessContext>
           status: subscription.status,
           plan_slug: subscription.plans?.slug ?? null,
           expires_at: subscription.expires_at,
+          grace_ends_at: null,
         }
       : null,
   };

@@ -7,11 +7,21 @@ import { Button } from "@/components/ui/button";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   cancelInvitation,
+  changePassword,
+  createRole,
+  deleteRole,
+  getCompany,
   inviteUser,
   listInvitations,
+  listPermissions,
+  listRoles,
   listUsers,
   reissueInvitation,
+  updateCompany,
+  updateUser,
   type AppUserSummary,
+  type CompanyIdentity,
+  type CompanyRole,
   type UserInvitation,
 } from "@/product/auth";
 import {
@@ -43,24 +53,26 @@ function SettingsPage() {
   const [gatewayAccounts, setGatewayAccounts] = useState<PaymentGatewayAccount[]>([]);
   const [users, setUsers] = useState<AppUserSummary[]>([]);
   const [invitations, setInvitations] = useState<UserInvitation[]>([]);
+  const [company, setCompany] = useState<CompanyIdentity | null>(null);
+  const [roles, setRoles] = useState<CompanyRole[]>([]);
   const [isSettingsLoading, setIsSettingsLoading] = useState(true);
   const [showGatewayForm, setShowGatewayForm] = useState(false);
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gatewayError, setGatewayError] = useState<string | null>(null);
 
   async function refreshSettings() {
     setIsSettingsLoading(true);
     setError(null);
+    setGatewayError(null);
 
     try {
-      const [gatewayResponse, usersResponse, invitationsResponse] = await Promise.all([
-        listPaymentGatewayAccounts(),
-        listUsers(),
-        listInvitations(),
-      ]);
-      setGatewayAccounts(gatewayResponse.gateway_accounts);
+      const [usersResponse, invitationsResponse, companyResponse, rolesResponse] =
+        await Promise.all([listUsers(), listInvitations(), getCompany(), listRoles()]);
       setUsers(usersResponse.users);
       setInvitations(invitationsResponse.invitations);
+      setCompany(companyResponse.company);
+      setRoles(rolesResponse.roles);
     } catch (settingsError) {
       setError(
         settingsError instanceof Error
@@ -69,6 +81,17 @@ function SettingsPage() {
       );
     } finally {
       setIsSettingsLoading(false);
+    }
+
+    try {
+      const gatewayResponse = await listPaymentGatewayAccounts();
+      setGatewayAccounts(gatewayResponse.gateway_accounts);
+    } catch (gatewaySettingsError) {
+      setGatewayError(
+        gatewaySettingsError instanceof Error
+          ? gatewaySettingsError.message
+          : "Nao foi possivel carregar os gateways financeiros.",
+      );
     }
   }
 
@@ -88,17 +111,25 @@ function SettingsPage() {
 
   return (
     <ModulePage session={session} module={module}>
+      {company ? (
+        <CompanyIdentityForm company={company} onSaved={() => void refreshSettings()} />
+      ) : null}
+
+      <PasswordChangeForm />
+
       <section className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-sm font-semibold">Usuários e permissões</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Convide membros para a mesma empresa com cargo operacional. A API valida assinatura ativa e permissão
-            users.manage antes de criar qualquer convite.
+            Convide membros para a mesma empresa com cargo operacional. A API valida assinatura
+            ativa e permissão users.manage antes de criar qualquer convite.
           </p>
         </div>
       </section>
 
       <InviteUserForm
+        actorRole={session?.access.appUser?.role ?? ""}
+        roles={roles}
         onCreated={(inviteUrl) => {
           setLastInviteUrl(inviteUrl);
           void refreshSettings();
@@ -113,19 +144,25 @@ function SettingsPage() {
       ) : null}
 
       {isSettingsLoading ? null : (
-        <UsersAndInvitations
-          users={users}
-          invitations={invitations}
-          onChanged={() => void refreshSettings()}
-          onInviteUrl={setLastInviteUrl}
-        />
+        <>
+          <UsersAndInvitations
+            users={users}
+            invitations={invitations}
+            roles={roles}
+            actorRole={session?.access.appUser?.role ?? ""}
+            onChanged={() => void refreshSettings()}
+            onInviteUrl={setLastInviteUrl}
+          />
+          <RoleManagement roles={roles} onChanged={() => void refreshSettings()} />
+        </>
       )}
 
       <section className="mb-4 mt-6 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-sm font-semibold">Gateways financeiros</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Prepare Asaas, PJBank, Iugu, Mercado Pago, Stripe ou outro provedor para PIX, boleto e webhooks.
+            Prepare Asaas, PJBank, Iugu, Mercado Pago, Stripe ou outro provedor para PIX, boleto e
+            webhooks.
           </p>
         </div>
         <Button
@@ -140,7 +177,8 @@ function SettingsPage() {
 
       {session?.access.subscription?.plan_slug === "preview" ? (
         <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
-          Modo visualização ativo: a configuração real do gateway exige backend publicado e sessão autenticada.
+          Modo visualização ativo: a configuração real do gateway exige backend publicado e sessão
+          autenticada.
         </div>
       ) : null}
 
@@ -152,6 +190,12 @@ function SettingsPage() {
             void refreshSettings();
           }}
         />
+      ) : null}
+
+      {gatewayError ? (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
+          Gateways financeiros indisponiveis: {gatewayError}
+        </div>
       ) : null}
 
       {error ? (
@@ -184,22 +228,181 @@ function SettingsPage() {
   );
 }
 
-type InviteRole = "admin" | "manager" | "broker" | "financial" | "inspector" | "legal";
+function CompanyIdentityForm({
+  company,
+  onSaved,
+}: {
+  company: CompanyIdentity;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+    name: company.name,
+    document: company.document ?? "",
+    phone: company.phone ?? "",
+    email: company.email ?? "",
+  });
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-const inviteRoleLabels: Record<InviteRole, string> = {
-  admin: "Administrador",
-  manager: "Gerente",
-  broker: "Corretor",
-  financial: "Financeiro",
-  inspector: "Vistoriador",
-  legal: "Jurídico/Contratos",
-};
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await updateCompany(form);
+      setMessage("Dados da empresa atualizados.");
+      onSaved();
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Nao foi possivel atualizar a empresa.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
 
-function InviteUserForm({ onCreated }: { onCreated: (inviteUrl: string) => void }) {
-  const [form, setForm] = useState<{ email: string; name: string; roleSystemKey: InviteRole }>({
+  return (
+    <form
+      method="post"
+      onSubmit={submit}
+      className="mb-4 rounded-lg border border-border bg-card p-4"
+    >
+      <h2 className="text-sm font-semibold">Empresa</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Dados da imobiliaria vinculada a esta sessao.
+      </p>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <label className="text-sm">
+          Nome
+          <input
+            required
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+        <label className="text-sm">
+          E-mail
+          <input
+            type="email"
+            value={form.email}
+            onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+        <label className="text-sm">
+          Documento
+          <input
+            value={form.document}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, document: event.target.value }))
+            }
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+        <label className="text-sm">
+          Telefone
+          <input
+            value={form.phone}
+            onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+      </div>
+      {message ? <p className="mt-3 text-sm text-primary">{message}</p> : null}
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+      <Button type="submit" disabled={loading} className="mt-4">
+        {loading ? "Salvando..." : "Salvar empresa"}
+      </Button>
+    </form>
+  );
+}
+
+function PasswordChangeForm() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await changePassword(currentPassword, newPassword);
+      setMessage(response.message);
+      setCurrentPassword("");
+      setNewPassword("");
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error ? submitError.message : "Nao foi possivel alterar a senha.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <form
+      method="post"
+      onSubmit={submit}
+      className="mb-4 rounded-lg border border-border bg-card p-4"
+    >
+      <h2 className="text-sm font-semibold">Seguranca da conta</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        A troca revoga todas as sessoes e exige um novo login.
+      </p>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <label className="text-sm">
+          Senha atual
+          <input
+            type="password"
+            required
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+        <label className="text-sm">
+          Nova senha
+          <input
+            type="password"
+            minLength={12}
+            maxLength={128}
+            required
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+      </div>
+      {message ? <p className="mt-3 text-sm text-primary">{message}</p> : null}
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+      <Button type="submit" disabled={loading} className="mt-4">
+        {loading ? "Alterando..." : "Alterar senha"}
+      </Button>
+    </form>
+  );
+}
+
+function InviteUserForm({
+  onCreated,
+  actorRole,
+  roles,
+}: {
+  onCreated: (inviteUrl: string) => void;
+  actorRole: string;
+  roles: CompanyRole[];
+}) {
+  const [form, setForm] = useState<{ email: string; name: string; roleId: string }>({
     email: "",
     name: "",
-    roleSystemKey: "broker",
+    roleId: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,19 +416,26 @@ function InviteUserForm({ onCreated }: { onCreated: (inviteUrl: string) => void 
       const response = await inviteUser({
         email: form.email,
         name: form.name || undefined,
-        roleSystemKey: form.roleSystemKey,
+        roleId: form.roleId || undefined,
+        roleSystemKey: form.roleId ? undefined : "broker",
       });
       onCreated(response.invite_url);
       setForm((current) => ({ ...current, email: "", name: "" }));
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Não foi possível gerar o convite.");
+      setError(
+        submitError instanceof Error ? submitError.message : "Não foi possível gerar o convite.",
+      );
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-4 rounded-lg border border-border bg-card p-4">
+    <form
+      method="post"
+      onSubmit={handleSubmit}
+      className="mb-4 rounded-lg border border-border bg-card p-4"
+    >
       <div className="grid gap-3 md:grid-cols-[1fr_1fr_220px_auto] md:items-end">
         <label className="text-sm">
           <span className="font-medium">E-mail</span>
@@ -252,22 +462,27 @@ function InviteUserForm({ onCreated }: { onCreated: (inviteUrl: string) => void 
         <label className="text-sm">
           <span className="font-medium">Cargo</span>
           <select
-            value={form.roleSystemKey}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, roleSystemKey: event.target.value as InviteRole }))
-            }
+            value={form.roleId}
+            onChange={(event) => setForm((current) => ({ ...current, roleId: event.target.value }))}
             className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
           >
-            {Object.entries(inviteRoleLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
+            <option value="">Corretor (padrao)</option>
+            {roles
+              .filter((role) => role.system_key !== "owner" || actorRole === "owner")
+              .map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
           </select>
         </label>
 
         <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+          {isSubmitting ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <UserPlus className="mr-2 h-4 w-4" />
+          )}
           Convidar
         </Button>
       </div>
@@ -277,14 +492,144 @@ function InviteUserForm({ onCreated }: { onCreated: (inviteUrl: string) => void 
   );
 }
 
+function RoleManagement({ roles, onChanged }: { roles: CompanyRole[]; onChanged: () => void }) {
+  const [permissions, setPermissions] = useState<Array<{ key: string; description: string }>>([]);
+  const [name, setName] = useState("");
+  const [permissionKeys, setPermissionKeys] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    void listPermissions()
+      .then((response) => setPermissions(response.permissions))
+      .catch((loadError) =>
+        setError(
+          loadError instanceof Error ? loadError.message : "Nao foi possivel carregar permissoes.",
+        ),
+      );
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await createRole({ name, permissionKeys });
+      setName("");
+      setPermissionKeys([]);
+      onChanged();
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error ? submitError.message : "Nao foi possivel criar o papel.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function remove(roleId: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      await deleteRole(roleId);
+      onChanged();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : "Nao foi possivel excluir o papel.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="mb-4 rounded-lg border border-border bg-card p-4">
+      <h3 className="text-sm font-semibold">Papeis e permissoes</h3>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Os papeis padrao sao protegidos. Papeis personalizados podem combinar permissoes da empresa.
+      </p>
+      <form
+        method="post"
+        onSubmit={submit}
+        className="mt-4 grid gap-3 md:grid-cols-[240px_1fr_auto] md:items-end"
+      >
+        <label className="text-sm">
+          Nome do papel
+          <input
+            required
+            minLength={2}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"
+          />
+        </label>
+        <label className="text-sm">
+          Permissoes
+          <select
+            multiple
+            required
+            value={permissionKeys}
+            onChange={(event) =>
+              setPermissionKeys(
+                Array.from(event.currentTarget.selectedOptions, (option) => option.value),
+              )
+            }
+            className="mt-1 min-h-24 w-full rounded-md border border-input bg-background px-3 py-2"
+          >
+            {permissions.map((permission) => (
+              <option key={permission.key} value={permission.key}>
+                {permission.description} ({permission.key})
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button type="submit" disabled={loading || permissionKeys.length === 0}>
+          Criar papel
+        </Button>
+      </form>
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        {roles.map((role) => (
+          <div
+            key={role.id}
+            className="flex items-center justify-between rounded-md border border-border p-3 text-sm"
+          >
+            <div>
+              <p className="font-medium">{role.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {role.permissions.length} permissoes · {role.users_count} usuarios
+              </p>
+            </div>
+            {!role.is_system ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={loading}
+                onClick={() => void remove(role.id)}
+              >
+                Excluir
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function UsersAndInvitations({
   users,
   invitations,
+  roles,
+  actorRole,
   onChanged,
   onInviteUrl,
 }: {
   users: AppUserSummary[];
   invitations: UserInvitation[];
+  roles: CompanyRole[];
+  actorRole: string;
   onChanged: () => void;
   onInviteUrl: (inviteUrl: string) => void;
 }) {
@@ -294,20 +639,18 @@ function UsersAndInvitations({
         <h3 className="text-sm font-semibold">Usuários ativos da empresa</h3>
         <div className="mt-4 space-y-3">
           {users.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhum usuário encontrado para esta empresa.</p>
+            <p className="text-sm text-muted-foreground">
+              Nenhum usuário encontrado para esta empresa.
+            </p>
           ) : (
             users.map((user) => (
-              <div key={user.id} className="rounded-md border border-border p-3 text-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium">{user.name}</p>
-                    <p className="mt-1 text-muted-foreground">{user.email}</p>
-                  </div>
-                  <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
-                    {user.roles?.name ?? user.status}
-                  </span>
-                </div>
-              </div>
+              <UserIdentityCard
+                key={user.id}
+                user={user}
+                roles={roles}
+                actorRole={actorRole}
+                onChanged={onChanged}
+              />
             ))
           )}
         </div>
@@ -330,6 +673,83 @@ function UsersAndInvitations({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function UserIdentityCard({
+  user,
+  roles,
+  actorRole,
+  onChanged,
+}: {
+  user: AppUserSummary;
+  roles: CompanyRole[];
+  actorRole: string;
+  onChanged: () => void;
+}) {
+  const [roleId, setRoleId] = useState(user.role_id);
+  const [status, setStatus] = useState<AppUserSummary["status"]>(user.status);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function save() {
+    setLoading(true);
+    setError(null);
+    try {
+      await updateUser(user.id, { roleId, status });
+      onChanged();
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error ? saveError.message : "Nao foi possivel atualizar o usuario.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-border p-3 text-sm">
+      <p className="font-medium">{user.name}</p>
+      <p className="mt-1 text-muted-foreground">{user.email}</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <select
+          value={roleId}
+          onChange={(event) => setRoleId(event.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-2"
+        >
+          {roles
+            .filter(
+              (role) =>
+                role.system_key !== "owner" || actorRole === "owner" || role.id === user.role_id,
+            )
+            .map((role) => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
+        </select>
+        <select
+          value={status}
+          onChange={(event) => setStatus(event.target.value as AppUserSummary["status"])}
+          className="h-9 rounded-md border border-input bg-background px-2"
+        >
+          <option value="active">Ativo</option>
+          <option value="inactive">Inativo</option>
+          <option value="blocked">Bloqueado</option>
+        </select>
+      </div>
+      {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={loading}
+        onClick={save}
+        className="mt-3"
+      >
+        {loading ? "Salvando..." : "Salvar usuario"}
+      </Button>
     </div>
   );
 }
@@ -374,7 +794,8 @@ function InvitationCard({
           <p className="font-medium">{invitation.name || invitation.email}</p>
           <p className="mt-1 text-muted-foreground">{invitation.email}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {invitation.roles?.name ?? "Cargo não informado"} · {invitationStatusLabel(invitation.status)}
+            {invitation.roles?.name ?? "Cargo não informado"} ·{" "}
+            {invitationStatusLabel(invitation.status)}
           </p>
         </div>
         <span className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
@@ -382,12 +803,28 @@ function InvitationCard({
         </span>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={isWorking} onClick={handleReissue}>
-          {isWorking ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RotateCw className="mr-2 h-3.5 w-3.5" />}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isWorking}
+          onClick={handleReissue}
+        >
+          {isWorking ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RotateCw className="mr-2 h-3.5 w-3.5" />
+          )}
           Reemitir
         </Button>
         {isPending ? (
-          <Button type="button" size="sm" variant="outline" disabled={isWorking} onClick={handleCancel}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={isWorking}
+            onClick={handleCancel}
+          >
             <XCircle className="mr-2 h-3.5 w-3.5" />
             Cancelar
           </Button>
@@ -441,7 +878,9 @@ function GatewayAccountForm({
       onCreated();
     } catch (submitError) {
       setError(
-        submitError instanceof Error ? submitError.message : "Não foi possível configurar o gateway.",
+        submitError instanceof Error
+          ? submitError.message
+          : "Não foi possível configurar o gateway.",
       );
     } finally {
       setIsSubmitting(false);
@@ -449,7 +888,11 @@ function GatewayAccountForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-4 rounded-lg border border-border bg-card p-4">
+    <form
+      method="post"
+      onSubmit={handleSubmit}
+      className="mb-4 rounded-lg border border-border bg-card p-4"
+    >
       <div className="grid gap-3 md:grid-cols-2">
         <label className="text-sm">
           <span className="font-medium">Provedor</span>
@@ -570,7 +1013,8 @@ function GatewayAccountForm({
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Chaves reais não devem ser digitadas aqui. Use apenas referências de segredo, como variáveis da Vercel ou cofre seguro.
+        Chaves reais não devem ser digitadas aqui. Use apenas referências de segredo, como variáveis
+        da Vercel ou cofre seguro.
       </p>
 
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
@@ -603,7 +1047,10 @@ function GatewayAccountCard({ account }: { account: PaymentGatewayAccount }) {
         </span>
       </div>
       <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-        <Info label="Método padrão" value={paymentMethodLabel(account.settings.default_payment_method)} />
+        <Info
+          label="Método padrão"
+          value={paymentMethodLabel(account.settings.default_payment_method)}
+        />
         <Info label="Credencial" value={account.credentials_ref || "Não vinculada"} />
         <Info label="Webhook" value={account.settings.webhook_url || "Não informado"} />
       </div>

@@ -1,27 +1,22 @@
-import { apiRequest, isUnavailableProductionApi } from "./api";
-import { isPreviewAccessAllowed, isStoredPreviewTokenAllowed, previewAccessToken } from "./access-control";
+import { apiRequest } from "./api";
 
-const tokenKey = "imobiflow.access_token";
-const previewUserKey = "imobiflow.preview_user";
-const previewToken = previewAccessToken;
-const localDevToken = import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_TOKEN?.trim() || "";
-const demoAccessEmail = "gtamaisfischer@gmail.com";
-const demoAccessPasswordHash = "568c3c475d919820cc93717fe9a13a44df01d7f6b617d65f29aa202a4f3d9af7";
+const accessTokenKey = "imobiflow.access_token";
+const refreshTokenKey = "imobiflow.refresh_token";
+
+export type AuthSession = {
+  access_token: string;
+  refresh_token: string;
+  expires_at?: number;
+  refresh_expires_at?: number;
+};
 
 export type AccessResponse = {
-  session?: {
-    access_token: string;
-    refresh_token: string;
-    expires_at?: number;
-  };
+  session?: AuthSession;
   access: {
-    company?: {
-      id: string;
-      name: string;
-      status: string;
-    };
+    company?: { id: string; name: string; status: string };
     appUser?: {
       id: string;
+      company_id?: string;
       name: string;
       email: string;
       role: string;
@@ -32,6 +27,7 @@ export type AccessResponse = {
       status: string;
       plan_slug: string | null;
       expires_at: string | null;
+      grace_ends_at: string | null;
     } | null;
   };
 };
@@ -39,24 +35,20 @@ export type AccessResponse = {
 export type AppUserSummary = {
   id: string;
   company_id: string;
-  role_id: string | null;
+  role_id: string;
   name: string;
   email: string;
   phone: string | null;
-  status: "active" | "invited" | "inactive" | "blocked";
+  status: "active" | "inactive" | "blocked";
   created_at: string;
   updated_at: string;
-  roles?: {
-    id: string;
-    system_key: string | null;
-    name: string;
-  } | null;
+  roles: { id: string; system_key: string | null; name: string };
 };
 
 export type UserInvitation = {
   id: string;
   company_id: string;
-  role_id: string | null;
+  role_id: string;
   invited_by: string | null;
   email: string;
   name: string | null;
@@ -65,193 +57,55 @@ export type UserInvitation = {
   accepted_at: string | null;
   created_at: string;
   updated_at: string;
-  roles?: {
-    id?: string;
-    system_key?: string | null;
-    name?: string | null;
-  } | null;
+  roles: { id: string; system_key: string | null; name: string };
+};
+
+export type CompanyIdentity = {
+  id: string;
+  name: string;
+  document?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  status: string;
+};
+
+export type CompanyRole = {
+  id: string;
+  company_id: string;
+  name: string;
+  system_key: string | null;
+  is_system: boolean;
+  permissions: Array<{ key: string; description: string }>;
+  users_count: number;
 };
 
 export function getStoredToken() {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(tokenKey);
+  return window.localStorage.getItem(accessTokenKey);
+}
+
+export function getStoredRefreshToken() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(refreshTokenKey);
+}
+
+export function storeSession(session: AuthSession) {
+  window.localStorage.setItem(accessTokenKey, session.access_token);
+  window.localStorage.setItem(refreshTokenKey, session.refresh_token);
 }
 
 export function storeToken(token: string) {
-  window.localStorage.setItem(tokenKey, token);
+  window.localStorage.setItem(accessTokenKey, token);
 }
 
 export function clearToken() {
-  window.localStorage.removeItem(tokenKey);
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(accessTokenKey);
+  window.localStorage.removeItem(refreshTokenKey);
 }
 
-export function isPreviewAccessEnabled() {
-  return isPreviewAccessAllowed(import.meta.env) || isUnavailableProductionApi();
-}
-
-export function storePreviewAccess() {
-  if (!isPreviewAccessEnabled()) return false;
-
-  window.localStorage.setItem(tokenKey, previewToken);
-  return true;
-}
-
-export function isLocalDevAccessEnabled() {
-  return (
-    !import.meta.env.PROD &&
-    import.meta.env.DEV &&
-    import.meta.env.VITE_IMOBIFLOW_LOCAL_DEV_AUTH === "true" &&
-    localDevToken.length >= 32
-  );
-}
-
-export function storeLocalDevAccess() {
-  if (!isLocalDevAccessEnabled()) return false;
-
-  window.localStorage.setItem(tokenKey, localDevToken);
-  return true;
-}
-
-export function createLocalDevSession(): AccessResponse {
-  return {
-    session: {
-      access_token: localDevToken,
-      refresh_token: localDevToken,
-    },
-    access: {
-      company: {
-        id: "local-company",
-        name: "ImobiFlow Local",
-        status: "active",
-      },
-      appUser: {
-        id: "local-user",
-        name: "ImobiFlow Local",
-        email: "local@imobiflow.app",
-        role: "owner",
-        permissions: [
-          "site.manage",
-          "properties.view",
-          "properties.manage",
-          "owners.view",
-          "owners.manage",
-          "crm.view",
-          "crm.manage",
-          "appointments.view",
-          "appointments.manage",
-        ],
-      },
-      subscription: {
-        id: "local-subscription",
-        status: "active",
-        plan_slug: "local-dev",
-        expires_at: null,
-      },
-    },
-  };
-}
-
-export async function storeDemoPreviewAccess(email: string, password: string) {
-  const normalizedEmail = email.trim().toLowerCase();
-  const passwordHash = await sha256(password);
-
-  if (normalizedEmail !== demoAccessEmail || passwordHash !== demoAccessPasswordHash) {
-    return false;
-  }
-
-  window.localStorage.setItem(tokenKey, previewToken);
-  window.localStorage.setItem(
-    previewUserKey,
-    JSON.stringify({
-      name: "GTA Mais Fischer",
-      email: demoAccessEmail,
-    }),
-  );
-
-  return true;
-}
-
-export function isPreviewToken(token: string | null) {
-  return (
-    isStoredPreviewTokenAllowed(token, import.meta.env) ||
-    (token === previewToken && hasStoredDemoPreviewUser())
-  );
-}
-
-export function createPreviewSession(): AccessResponse {
-  const previewUser = readStoredPreviewUser();
-
-  if (!isPreviewAccessEnabled() && previewUser.email === "preview@imobiflow.app") {
-    throw new Error("O acesso preview esta desativado neste ambiente.");
-  }
-
-  return {
-    session: {
-      access_token: previewToken,
-      refresh_token: previewToken,
-    },
-    access: {
-      company: {
-        id: "preview-company",
-        name: "ImobiFlow Preview",
-        status: "preview",
-      },
-      appUser: {
-        id: "preview-user",
-        name: previewUser.name,
-        email: previewUser.email,
-        role: "owner",
-        permissions: ["preview:read"],
-      },
-      subscription: {
-        id: "preview-subscription",
-        status: "active",
-        plan_slug: "preview",
-        expires_at: null,
-      },
-    },
-  };
-}
-
-function readStoredPreviewUser() {
-  if (typeof window === "undefined") {
-    return { name: "Visitante", email: "preview@imobiflow.app" };
-  }
-
-  const stored = window.localStorage.getItem(previewUserKey);
-  if (!stored) return { name: "Visitante", email: "preview@imobiflow.app" };
-
-  try {
-    const parsed = JSON.parse(stored) as { name?: string; email?: string };
-    return {
-      name: parsed.name || "Visitante",
-      email: parsed.email || "preview@imobiflow.app",
-    };
-  } catch {
-    return { name: "Visitante", email: "preview@imobiflow.app" };
-  }
-}
-
-function hasStoredDemoPreviewUser() {
-  if (typeof window === "undefined") return false;
-
-  const stored = window.localStorage.getItem(previewUserKey);
-  if (!stored) return false;
-
-  try {
-    const parsed = JSON.parse(stored) as { email?: string };
-    return parsed.email === demoAccessEmail;
-  } catch {
-    return false;
-  }
-}
-
-async function sha256(value: string) {
-  const data = new TextEncoder().encode(value);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(hashBuffer)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+export function isPreviewToken(_token: string | null) {
+  return false;
 }
 
 export async function login(email: string, password: string) {
@@ -259,33 +113,151 @@ export async function login(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-
-  if (response.session?.access_token) {
-    storeToken(response.session.access_token);
-  }
-
+  if (response.session) storeSession(response.session);
   return response;
 }
 
-export async function register(input: {
+export async function logout() {
+  const token = getStoredToken();
+  try {
+    if (token) await apiRequest<void>("/auth/logout", { method: "POST", token });
+  } finally {
+    clearToken();
+  }
+}
+
+export async function refreshSession() {
+  const refreshToken = getStoredRefreshToken();
+  if (!refreshToken) return null;
+  const response = await apiRequest<AccessResponse>("/auth/refresh", {
+    method: "POST",
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  });
+  if (!response.session) throw new Error("A API nao retornou uma sessao renovada.");
+  storeSession(response.session);
+  return response;
+}
+
+export async function activateAccount(input: {
+  token: string;
   name: string;
-  email: string;
   password: string;
-  companyName: string;
-  companyDocument?: string;
+  company_name: string;
+  company_document?: string;
   phone?: string;
 }) {
+  const response = await apiRequest<
+    AccessResponse & {
+      message: string;
+      company: CompanyIdentity;
+      owner: { id: string; name: string; email: string; role: string };
+    }
+  >("/auth/activate-account", { method: "POST", body: JSON.stringify(input) });
+  if (response.session) storeSession(response.session);
+  return response;
+}
+
+export async function validateAccountActivation(token: string) {
   return apiRequest<{
-    message: string;
-    company: { id: string; name: string; status: string };
-    authorization: {
-      authenticated: boolean;
-      companyLinked: boolean;
-      subscriptionActive: boolean;
-      blockedReason: string;
+    activation: {
+      email: string;
+      plan: { slug: string; name: string };
+      expires_at: string;
+      synthetic: boolean;
     };
-  }>("/auth/register", {
+  }>(`/auth/activations/validate?token=${encodeURIComponent(token)}`);
+}
+
+export async function loadSession() {
+  const token = getStoredToken();
+  if (!token) return null;
+  try {
+    return await apiRequest<AccessResponse>("/auth/session", { token });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status !== 401) throw error;
+    try {
+      return await refreshSession();
+    } catch {
+      clearToken();
+      return null;
+    }
+  }
+}
+
+export async function listUsers() {
+  return apiRequest<{ users: AppUserSummary[] }>("/auth/users", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function updateUser(
+  id: string,
+  input: {
+    name?: string;
+    phone?: string;
+    roleSystemKey?: string;
+    roleId?: string;
+    status?: "active" | "inactive" | "blocked";
+  },
+) {
+  return apiRequest<{ user: AppUserSummary }>(`/auth/users/${id}`, {
+    method: "PATCH",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listRoles() {
+  return apiRequest<{ roles: CompanyRole[] }>("/auth/roles", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function listPermissions() {
+  return apiRequest<{ permissions: Array<{ id: string; key: string; description: string }> }>(
+    "/auth/permissions",
+    {
+      token: getStoredToken() ?? undefined,
+    },
+  );
+}
+
+export async function createRole(input: { name: string; permissionKeys: string[] }) {
+  return apiRequest<{ role: CompanyRole }>("/auth/roles", {
     method: "POST",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateRole(id: string, input: { name?: string; permissionKeys?: string[] }) {
+  return apiRequest<{ role: CompanyRole }>(`/auth/roles/${id}`, {
+    method: "PATCH",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteRole(id: string) {
+  return apiRequest<void>(`/auth/roles/${id}`, {
+    method: "DELETE",
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function getCompany() {
+  return apiRequest<{ company: CompanyIdentity }>("/auth/company", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function updateCompany(
+  input: Partial<Pick<CompanyIdentity, "name" | "document" | "phone" | "email">>,
+) {
+  return apiRequest<{ company: CompanyIdentity }>("/auth/company", {
+    method: "PATCH",
+    token: getStoredToken() ?? undefined,
     body: JSON.stringify(input),
   });
 }
@@ -293,31 +265,17 @@ export async function register(input: {
 export async function inviteUser(input: {
   email: string;
   name?: string;
-  roleSystemKey: "admin" | "manager" | "broker" | "financial" | "inspector" | "legal";
+  roleSystemKey?: string;
+  roleId?: string;
 }) {
-  const token = getStoredToken();
-
-  return apiRequest<{
-    invitation: {
-      id: string;
-      email: string;
-      name?: string;
-      status: string;
-      expires_at: string;
-    };
-    invite_url: string;
-    token: string;
-  }>("/auth/invite", {
-    method: "POST",
-    token: token ?? undefined,
-    body: JSON.stringify(input),
-  });
-}
-
-export async function listUsers() {
-  return apiRequest<{ users: AppUserSummary[] }>("/auth/users", {
-    token: getStoredToken() ?? undefined,
-  });
+  return apiRequest<{ invitation: UserInvitation; invite_url: string; delivered: boolean }>(
+    "/auth/invite",
+    {
+      method: "POST",
+      token: getStoredToken() ?? undefined,
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function listInvitations() {
@@ -334,14 +292,22 @@ export async function cancelInvitation(id: string) {
 }
 
 export async function reissueInvitation(id: string) {
+  return apiRequest<{ invitation: UserInvitation; invite_url: string; delivered: boolean }>(
+    `/auth/invitations/${id}/reissue`,
+    { method: "POST", token: getStoredToken() ?? undefined },
+  );
+}
+
+export async function validateInvitation(token: string) {
   return apiRequest<{
-    invitation: UserInvitation;
-    invite_url: string;
-    token: string;
-  }>(`/auth/invitations/${id}/reissue`, {
-    method: "POST",
-    token: getStoredToken() ?? undefined,
-  });
+    invitation: {
+      email: string;
+      name: string | null;
+      company_name: string;
+      role_name: string;
+      expires_at: string;
+    };
+  }>(`/auth/invitations/validate?token=${encodeURIComponent(token)}`);
 }
 
 export async function acceptInvite(input: {
@@ -356,13 +322,26 @@ export async function acceptInvite(input: {
   });
 }
 
-export async function loadSession() {
-  const token = getStoredToken();
-  if (!token) return null;
+export async function requestPasswordReset(email: string) {
+  return apiRequest<{ message: string }>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
 
-  if (isPreviewToken(token)) {
-    return createPreviewSession();
-  }
+export async function resetPassword(token: string, newPassword: string) {
+  return apiRequest<{ message: string }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+}
 
-  return apiRequest<AccessResponse>("/auth/session", { token });
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const response = await apiRequest<{ message: string }>("/auth/change-password", {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+  clearToken();
+  return response;
 }

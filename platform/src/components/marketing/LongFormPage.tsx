@@ -64,7 +64,8 @@ export function LongFormPage({ page }: { page: ContentPage }) {
                     Conteudo para decisao
                   </div>
                   <div className="mt-2 text-sm font-semibold">
-                    Informacoes pensadas para avaliar confianca, operacao e retorno antes da contratacao.
+                    Informacoes pensadas para avaliar confianca, operacao e retorno antes da
+                    contratacao.
                   </div>
                 </div>
               </div>
@@ -75,7 +76,10 @@ export function LongFormPage({ page }: { page: ContentPage }) {
         <section className="border-y border-border bg-surface-1 py-10">
           <div className="mx-auto grid max-w-6xl gap-4 px-6 md:grid-cols-3">
             {page.highlights.map((metric) => (
-              <div key={`${metric.value}-${metric.label}`} className="rounded-2xl border border-border bg-card p-6">
+              <div
+                key={`${metric.value}-${metric.label}`}
+                className="rounded-2xl border border-border bg-card p-6"
+              >
                 <div className="text-2xl font-black text-gradient-brand">{metric.value}</div>
                 <div className="mt-2 text-sm text-muted-foreground">{metric.label}</div>
               </div>
@@ -87,9 +91,14 @@ export function LongFormPage({ page }: { page: ContentPage }) {
           <div className="mx-auto max-w-6xl px-6">
             <div className="grid gap-6 md:grid-cols-3">
               {page.sections.map((section) => (
-                <article key={section.title} className="ring-gradient rounded-3xl border border-border bg-card p-7">
+                <article
+                  key={section.title}
+                  className="ring-gradient rounded-3xl border border-border bg-card p-7"
+                >
                   <h2 className="text-2xl font-bold">{section.title}</h2>
-                  <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{section.body}</p>
+                  <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+                    {section.body}
+                  </p>
                   <ul className="mt-6 space-y-3">
                     {section.bullets.map((bullet) => (
                       <li key={bullet} className="flex items-start gap-3 text-sm">
@@ -116,7 +125,9 @@ export function LongFormPage({ page }: { page: ContentPage }) {
                 O que uma imobiliaria deve avaliar antes de contratar
               </h2>
               <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-                A escolha de um SaaS imobiliario precisa considerar mais que preco. A empresa deve avaliar seguranca, continuidade, clareza de implantacao, isolamento de dados, suporte, regras de acesso e capacidade de evolucao.
+                A escolha de um SaaS imobiliario precisa considerar mais que preco. A empresa deve
+                avaliar seguranca, continuidade, clareza de implantacao, isolamento de dados,
+                suporte, regras de acesso e capacidade de evolucao.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
@@ -126,7 +137,10 @@ export function LongFormPage({ page }: { page: ContentPage }) {
                 "Estados vazios para iniciar com dados reais, sem simulacoes que confundem a operacao.",
                 "Roadmap modular para evoluir CRM, imoveis, vistoria, contratos, financeiro, IA e API.",
               ].map((item) => (
-                <div key={item} className="rounded-2xl border border-border bg-card p-5 text-sm leading-relaxed">
+                <div
+                  key={item}
+                  className="rounded-2xl border border-border bg-card p-5 text-sm leading-relaxed"
+                >
                   {item}
                 </div>
               ))}
@@ -140,14 +154,15 @@ export function LongFormPage({ page }: { page: ContentPage }) {
               Pronto para avaliar o ImobiFlow com seriedade?
             </h2>
             <p className="mx-auto mt-5 max-w-2xl text-sm leading-relaxed text-muted-foreground md:text-base">
-              Crie sua conta para acompanhar a evolucao da plataforma SaaS e validar a estrutura de acesso, empresa, assinatura e permissoes conforme o produto avancar.
+              Crie sua conta para acompanhar a evolucao da plataforma SaaS e validar a estrutura de
+              acesso, empresa, assinatura e permissoes conforme o produto avancar.
             </p>
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
               <a
-                href="/cadastro"
+                href="/planos"
                 className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-brand px-7 py-4 text-sm font-semibold text-primary-foreground shadow-glow transition hover:brightness-110"
               >
-                Criar cadastro
+                Escolher um plano
                 <ArrowRight className="h-4 w-4" />
               </a>
               <a

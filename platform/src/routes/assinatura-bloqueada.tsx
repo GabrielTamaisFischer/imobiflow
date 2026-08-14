@@ -1,6 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { CreditCard, MessageCircle } from "lucide-react";
-import { kiwifyLinks } from "@/product/checkout-links";
 
 export const Route = createFileRoute("/assinatura-bloqueada")({
   component: SubscriptionBlockedPage,
@@ -19,15 +18,13 @@ function SubscriptionBlockedPage() {
           assinatura ativa. Regularize o plano para liberar os módulos do ImobiFlow.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-          <a
-            href={kiwifyLinks.salesPage}
-            target="_blank"
-            rel="noreferrer"
+          <Link
+            to="/planos"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
           >
             <CreditCard className="h-4 w-4" />
             Regularizar plano
-          </a>
+          </Link>
           <a
             href="https://wa.me/"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-input px-4 text-sm font-semibold transition hover:bg-accent"

@@ -1,7 +1,11 @@
-import type { User } from "@supabase/supabase-js";
 import type { Request } from "express";
 
 export type SubscriptionStatus =
+  | "ACTIVE"
+  | "PENDING"
+  | "PAST_DUE"
+  | "SUSPENDED"
+  | "CANCELLED"
   | "active"
   | "pending"
   | "trial"
@@ -13,7 +17,11 @@ export type SubscriptionStatus =
 export type UserRole = "owner" | "admin" | "broker" | "assistant" | string;
 
 export type AccessContext = {
-  authUser: User;
+  authUser: {
+    id: string;
+    email: string;
+    name: string;
+  };
   appUser: {
     id: string;
     company_id: string;
@@ -33,9 +41,11 @@ export type AccessContext = {
     status: SubscriptionStatus;
     plan_slug: string | null;
     expires_at: string | null;
+    grace_ends_at: string | null;
   } | null;
 };
 
 export type RequestWithAccess = Request & {
   access?: AccessContext;
+  authSessionId?: string;
 };

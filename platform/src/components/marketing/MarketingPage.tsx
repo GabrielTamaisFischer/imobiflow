@@ -40,10 +40,10 @@ export function MarketingPage({
               </p>
               <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Link
-                  to="/cadastro"
+                  to="/planos"
                   className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-brand px-6 py-3 text-sm font-semibold text-primary-foreground shadow-glow transition hover:brightness-110"
                 >
-                  Criar cadastro
+                  Escolher um plano
                   <ArrowRight className="h-4 w-4" />
                 </Link>
                 <Link
@@ -102,7 +102,10 @@ export function MarketingPage({
         <section className="py-20">
           <div className="mx-auto grid max-w-6xl gap-6 px-6 md:grid-cols-2">
             {page.sections.map((section) => (
-              <article key={section.title} className="ring-gradient rounded-3xl border border-border bg-card p-7">
+              <article
+                key={section.title}
+                className="ring-gradient rounded-3xl border border-border bg-card p-7"
+              >
                 <h2 className="text-2xl font-bold">{section.title}</h2>
                 <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{section.body}</p>
                 {section.bullets ? (

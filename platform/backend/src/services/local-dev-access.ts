@@ -1,4 +1,3 @@
-import type { User } from "@supabase/supabase-js";
 import { timingSafeEqual } from "node:crypto";
 import { env } from "../config/env.js";
 import type { AccessContext } from "../types/access.js";
@@ -13,7 +12,10 @@ export type LocalDevRequestSource = {
 };
 
 function isLoopbackAddress(value: string) {
-  const normalized = value.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
   return (
     normalized === "localhost" ||
     normalized === "::1" ||
@@ -33,15 +35,22 @@ function isLoopbackHostname(value: string) {
   }
 }
 
-function hasOnlyLoopbackForwarding(value: string | null | undefined, parser: (part: string) => boolean) {
+function hasOnlyLoopbackForwarding(
+  value: string | null | undefined,
+  parser: (part: string) => boolean,
+) {
   if (!value) return true;
-  const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+  const parts = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
   return parts.length > 0 && parts.every(parser);
 }
 
 export function isLoopbackLocalDevRequest(source: LocalDevRequestSource | undefined) {
   if (!source?.hostname || !source.remoteAddress) return false;
-  if (!isLoopbackHostname(source.hostname) || !isLoopbackAddress(source.remoteAddress)) return false;
+  if (!isLoopbackHostname(source.hostname) || !isLoopbackAddress(source.remoteAddress))
+    return false;
   if (!hasOnlyLoopbackForwarding(source.forwardedHost, isLoopbackHostname)) return false;
   if (!hasOnlyLoopbackForwarding(source.forwardedFor, isLoopbackAddress)) return false;
   return true;
@@ -54,7 +63,9 @@ function hasStrongExplicitToken(token: string | undefined) {
 function tokensMatch(received: string, expected: string) {
   const receivedBytes = Buffer.from(received);
   const expectedBytes = Buffer.from(expected);
-  return receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes);
+  return (
+    receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes)
+  );
 }
 
 export function isLocalDevAuthEnabled(source?: LocalDevRequestSource) {
@@ -87,13 +98,8 @@ export function buildLocalDevAccessContext(
     authUser: {
       id: userId,
       email: "local@imobiflow.app",
-      app_metadata: {},
-      user_metadata: {
-        name: "ImobiFlow Local",
-      },
-      aud: "authenticated",
-      created_at: new Date(0).toISOString(),
-    } as User,
+      name: "ImobiFlow Local",
+    },
     appUser: {
       id: userId,
       company_id: companyId,
@@ -123,6 +129,7 @@ export function buildLocalDevAccessContext(
       status: "active",
       plan_slug: "local-dev",
       expires_at: null,
+      grace_ends_at: null,
     },
   };
 }

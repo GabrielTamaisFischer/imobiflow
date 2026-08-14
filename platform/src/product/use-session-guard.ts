@@ -1,17 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { isUnavailableProductionApi } from "./api";
 import type { AccessResponse } from "./auth";
-import {
-  createLocalDevSession,
-  createPreviewSession,
-  getStoredToken,
-  isLocalDevAccessEnabled,
-  isPreviewAccessEnabled,
-  loadSession,
-  storeLocalDevAccess,
-  storePreviewAccess,
-} from "./auth";
+import { clearToken, getStoredToken, loadSession } from "./auth";
 import { isSubscriptionActive } from "./subscription";
 
 export function useSessionGuard() {
@@ -23,55 +13,34 @@ export function useSessionGuard() {
     async function checkAccess() {
       const token = getStoredToken();
       if (!token) {
-        if (isLocalDevAccessEnabled()) {
-          const localStored = storeLocalDevAccess();
-          if (!localStored) {
-            await navigate({ to: "/entrar" });
-            return;
-          }
-
-          setSession(createLocalDevSession());
-          setIsLoading(false);
-          return;
-        }
-
-        if (isUnavailableProductionApi() && isPreviewAccessEnabled()) {
-          const previewStored = storePreviewAccess();
-          if (!previewStored) {
-            await navigate({ to: "/entrar" });
-            return;
-          }
-
-          setSession(createPreviewSession());
-          setIsLoading(false);
-          return;
-        }
-
         await navigate({ to: "/entrar" });
+        setIsLoading(false);
         return;
       }
 
       try {
         const nextSession = await loadSession();
-        const subscription = nextSession?.access.subscription;
+        if (!nextSession) {
+          await navigate({ to: "/entrar" });
+          return;
+        }
+        const subscription = nextSession.access.subscription;
 
-        if (!isSubscriptionActive(subscription?.status, subscription?.expires_at)) {
+        if (
+          !isSubscriptionActive(
+            subscription?.status,
+            subscription?.expires_at,
+            subscription?.grace_ends_at,
+          )
+        ) {
           await navigate({ to: "/assinatura-bloqueada" });
           return;
         }
 
         setSession(nextSession);
       } catch {
-        if (isUnavailableProductionApi() && isPreviewAccessEnabled()) {
-          const previewStored = storePreviewAccess();
-          if (previewStored) {
-            setSession(createPreviewSession());
-            setIsLoading(false);
-            return;
-          }
-        }
-
-        await navigate({ to: "/assinatura-bloqueada" });
+        clearToken();
+        await navigate({ to: "/entrar" });
       } finally {
         setIsLoading(false);
       }

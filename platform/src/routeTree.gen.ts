@@ -10,6 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResultadosRouteImport } from './routes/resultados'
+import { Route as RedefinirSenhaRouteImport } from './routes/redefinir-senha'
+import { Route as RecuperarSenhaRouteImport } from './routes/recuperar-senha'
 import { Route as QuemUsaRouteImport } from './routes/quem-usa'
 import { Route as ProdutoRouteImport } from './routes/produto'
 import { Route as PlanosRouteImport } from './routes/planos'
@@ -17,6 +19,7 @@ import { Route as InteligenciaRouteImport } from './routes/inteligencia'
 import { Route as FaqRouteImport } from './routes/faq'
 import { Route as EntrarRouteImport } from './routes/entrar'
 import { Route as CadastroRouteImport } from './routes/cadastro'
+import { Route as AtivarContaRouteImport } from './routes/ativar-conta'
 import { Route as AssinaturaBloqueadaRouteImport } from './routes/assinatura-bloqueada'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as AceitarConviteRouteImport } from './routes/aceitar-convite'
@@ -56,6 +59,16 @@ const ResultadosRoute = ResultadosRouteImport.update({
   path: '/resultados',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RedefinirSenhaRoute = RedefinirSenhaRouteImport.update({
+  id: '/redefinir-senha',
+  path: '/redefinir-senha',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecuperarSenhaRoute = RecuperarSenhaRouteImport.update({
+  id: '/recuperar-senha',
+  path: '/recuperar-senha',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const QuemUsaRoute = QuemUsaRouteImport.update({
   id: '/quem-usa',
   path: '/quem-usa',
@@ -89,6 +102,11 @@ const EntrarRoute = EntrarRouteImport.update({
 const CadastroRoute = CadastroRouteImport.update({
   id: '/cadastro',
   path: '/cadastro',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AtivarContaRoute = AtivarContaRouteImport.update({
+  id: '/ativar-conta',
+  path: '/ativar-conta',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AssinaturaBloqueadaRoute = AssinaturaBloqueadaRouteImport.update({
@@ -269,6 +287,7 @@ export interface FileRoutesByFullPath {
   '/aceitar-convite': typeof AceitarConviteRoute
   '/app': typeof AppRouteWithChildren
   '/assinatura-bloqueada': typeof AssinaturaBloqueadaRoute
+  '/ativar-conta': typeof AtivarContaRoute
   '/cadastro': typeof CadastroRoute
   '/entrar': typeof EntrarRoute
   '/faq': typeof FaqRoute
@@ -276,6 +295,8 @@ export interface FileRoutesByFullPath {
   '/planos': typeof PlanosRoute
   '/produto': typeof ProdutoRoute
   '/quem-usa': typeof QuemUsaRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
+  '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
@@ -311,6 +332,7 @@ export interface FileRoutesByTo {
   '/$slug': typeof SlugRoute
   '/aceitar-convite': typeof AceitarConviteRoute
   '/assinatura-bloqueada': typeof AssinaturaBloqueadaRoute
+  '/ativar-conta': typeof AtivarContaRoute
   '/cadastro': typeof CadastroRoute
   '/entrar': typeof EntrarRoute
   '/faq': typeof FaqRoute
@@ -318,6 +340,8 @@ export interface FileRoutesByTo {
   '/planos': typeof PlanosRoute
   '/produto': typeof ProdutoRoute
   '/quem-usa': typeof QuemUsaRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
+  '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
@@ -355,6 +379,7 @@ export interface FileRoutesById {
   '/aceitar-convite': typeof AceitarConviteRoute
   '/app': typeof AppRouteWithChildren
   '/assinatura-bloqueada': typeof AssinaturaBloqueadaRoute
+  '/ativar-conta': typeof AtivarContaRoute
   '/cadastro': typeof CadastroRoute
   '/entrar': typeof EntrarRoute
   '/faq': typeof FaqRoute
@@ -362,6 +387,8 @@ export interface FileRoutesById {
   '/planos': typeof PlanosRoute
   '/produto': typeof ProdutoRoute
   '/quem-usa': typeof QuemUsaRoute
+  '/recuperar-senha': typeof RecuperarSenhaRoute
+  '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
@@ -400,6 +427,7 @@ export interface FileRouteTypes {
     | '/aceitar-convite'
     | '/app'
     | '/assinatura-bloqueada'
+    | '/ativar-conta'
     | '/cadastro'
     | '/entrar'
     | '/faq'
@@ -407,6 +435,8 @@ export interface FileRouteTypes {
     | '/planos'
     | '/produto'
     | '/quem-usa'
+    | '/recuperar-senha'
+    | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
     | '/app/configuracoes'
@@ -442,6 +472,7 @@ export interface FileRouteTypes {
     | '/$slug'
     | '/aceitar-convite'
     | '/assinatura-bloqueada'
+    | '/ativar-conta'
     | '/cadastro'
     | '/entrar'
     | '/faq'
@@ -449,6 +480,8 @@ export interface FileRouteTypes {
     | '/planos'
     | '/produto'
     | '/quem-usa'
+    | '/recuperar-senha'
+    | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
     | '/app/configuracoes'
@@ -485,6 +518,7 @@ export interface FileRouteTypes {
     | '/aceitar-convite'
     | '/app'
     | '/assinatura-bloqueada'
+    | '/ativar-conta'
     | '/cadastro'
     | '/entrar'
     | '/faq'
@@ -492,6 +526,8 @@ export interface FileRouteTypes {
     | '/planos'
     | '/produto'
     | '/quem-usa'
+    | '/recuperar-senha'
+    | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
     | '/app/configuracoes'
@@ -529,6 +565,7 @@ export interface RootRouteChildren {
   AceitarConviteRoute: typeof AceitarConviteRoute
   AppRoute: typeof AppRouteWithChildren
   AssinaturaBloqueadaRoute: typeof AssinaturaBloqueadaRoute
+  AtivarContaRoute: typeof AtivarContaRoute
   CadastroRoute: typeof CadastroRoute
   EntrarRoute: typeof EntrarRoute
   FaqRoute: typeof FaqRoute
@@ -536,6 +573,8 @@ export interface RootRouteChildren {
   PlanosRoute: typeof PlanosRoute
   ProdutoRoute: typeof ProdutoRoute
   QuemUsaRoute: typeof QuemUsaRoute
+  RecuperarSenhaRoute: typeof RecuperarSenhaRoute
+  RedefinirSenhaRoute: typeof RedefinirSenhaRoute
   ResultadosRoute: typeof ResultadosRoute
   AssinarVistoriaTokenRoute: typeof AssinarVistoriaTokenRoute
   SiteSlugRoute: typeof SiteSlugRouteWithChildren
@@ -550,6 +589,20 @@ declare module '@tanstack/react-router' {
       path: '/resultados'
       fullPath: '/resultados'
       preLoaderRoute: typeof ResultadosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/redefinir-senha': {
+      id: '/redefinir-senha'
+      path: '/redefinir-senha'
+      fullPath: '/redefinir-senha'
+      preLoaderRoute: typeof RedefinirSenhaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/recuperar-senha': {
+      id: '/recuperar-senha'
+      path: '/recuperar-senha'
+      fullPath: '/recuperar-senha'
+      preLoaderRoute: typeof RecuperarSenhaRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/quem-usa': {
@@ -599,6 +652,13 @@ declare module '@tanstack/react-router' {
       path: '/cadastro'
       fullPath: '/cadastro'
       preLoaderRoute: typeof CadastroRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ativar-conta': {
+      id: '/ativar-conta'
+      path: '/ativar-conta'
+      fullPath: '/ativar-conta'
+      preLoaderRoute: typeof AtivarContaRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/assinatura-bloqueada': {
@@ -964,6 +1024,7 @@ const rootRouteChildren: RootRouteChildren = {
   AceitarConviteRoute: AceitarConviteRoute,
   AppRoute: AppRouteWithChildren,
   AssinaturaBloqueadaRoute: AssinaturaBloqueadaRoute,
+  AtivarContaRoute: AtivarContaRoute,
   CadastroRoute: CadastroRoute,
   EntrarRoute: EntrarRoute,
   FaqRoute: FaqRoute,
@@ -971,6 +1032,8 @@ const rootRouteChildren: RootRouteChildren = {
   PlanosRoute: PlanosRoute,
   ProdutoRoute: ProdutoRoute,
   QuemUsaRoute: QuemUsaRoute,
+  RecuperarSenhaRoute: RecuperarSenhaRoute,
+  RedefinirSenhaRoute: RedefinirSenhaRoute,
   ResultadosRoute: ResultadosRoute,
   AssinarVistoriaTokenRoute: AssinarVistoriaTokenRoute,
   SiteSlugRoute: SiteSlugRouteWithChildren,

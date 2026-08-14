@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { LogOut } from "lucide-react";
 import type { AccessResponse } from "@/product/auth";
-import { clearToken } from "@/product/auth";
+import { logout } from "@/product/auth";
 import { appModules } from "@/product/app-modules";
 
 type AppShellProps = {
@@ -58,9 +58,9 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
                 <p className="truncate text-xs text-muted-foreground">
                   {isPreview
                     ? "Modo visualização · dados vazios"
-                    : subscription?.status === "active"
-                    ? `Plano ${subscription.plan_slug ?? "ativo"}`
-                    : "Assinatura em validação"}
+                    : subscription?.status?.toUpperCase() === "ACTIVE"
+                      ? `Plano ${subscription.plan_slug ?? "ativo"}`
+                      : "Assinatura em validação"}
                 </p>
               </div>
 
@@ -73,7 +73,13 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
                 </div>
                 <Link
                   to="/entrar"
-                  onClick={() => clearToken()}
+                  aria-label="Sair"
+                  title="Sair"
+                  onClick={async (event) => {
+                    event.preventDefault();
+                    await logout().catch(() => undefined);
+                    window.location.assign("/entrar");
+                  }}
                   className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground"
                 >
                   <LogOut className="h-4 w-4" />
@@ -106,7 +112,9 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
             </nav>
           </div>
 
-          <div className={fullBleed ? "w-full" : "mx-auto max-w-7xl px-4 py-6 lg:px-6"}>{children}</div>
+          <div className={fullBleed ? "w-full" : "mx-auto max-w-7xl px-4 py-6 lg:px-6"}>
+            {children}
+          </div>
         </section>
       </div>
     </main>

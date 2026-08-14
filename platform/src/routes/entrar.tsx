@@ -1,8 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Clock3, LockKeyhole, ShieldCheck } from "lucide-react";
+import { LockKeyhole } from "lucide-react";
 import { FormEvent, useState } from "react";
-import { login, storeDemoPreviewAccess } from "@/product/auth";
-import { API_SETUP_MESSAGE, isUnavailableProductionApi } from "@/product/api";
+import { login } from "@/product/auth";
 import { isSubscriptionActive } from "@/product/subscription";
 
 export const Route = createFileRoute("/entrar")({
@@ -11,7 +10,6 @@ export const Route = createFileRoute("/entrar")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const accessInSetup = isUnavailableProductionApi();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -24,19 +22,6 @@ function LoginPage() {
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get("email"));
     const password = String(formData.get("password"));
-
-    const allowedPreviewAccess = await storeDemoPreviewAccess(email, password);
-    if (allowedPreviewAccess) {
-      setIsSubmitting(false);
-      await navigate({ to: "/app" });
-      return;
-    }
-
-    if (accessInSetup) {
-      setIsSubmitting(false);
-      setError("E-mail ou senha inválidos para o acesso de visualização.");
-      return;
-    }
 
     try {
       const response = await login(email, password);
@@ -70,7 +55,7 @@ function LoginPage() {
           </p>
           <div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">
             {[
-              ["Login seguro", "Supabase Auth"],
+              ["Login seguro", "MySQL + JWT"],
               ["Empresa", "Multiempresa"],
               ["Assinatura", "Bloqueio ativo"],
             ].map(([title, label]) => (
@@ -82,24 +67,15 @@ function LoginPage() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="rounded-lg border border-border bg-card p-6 shadow-sm">
+        <form
+          method="post"
+          onSubmit={handleSubmit}
+          className="rounded-lg border border-border bg-card p-6 shadow-sm"
+        >
           <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <LockKeyhole className="h-5 w-5" />
           </div>
           <h2 className="text-2xl font-semibold tracking-tight">Entrar</h2>
-          {accessInSetup ? (
-            <div className="mt-5 rounded-lg border border-primary/25 bg-primary/5 p-4">
-              <div className="flex gap-3">
-                <ShieldCheck className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
-                <div>
-                  <h3 className="text-sm font-semibold">Acesso de visualização liberado</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    {API_SETUP_MESSAGE} A conta autorizada pode entrar para acompanhar como a área interna está ficando.
-                  </p>
-                </div>
-              </div>
-            </div>
-          ) : null}
           <div className="mt-6 space-y-4">
             <label className="block text-sm font-medium">
               E-mail
@@ -134,29 +110,16 @@ function LoginPage() {
           >
             {isSubmitting ? "Entrando..." : "Entrar"}
           </button>
-          {accessInSetup ? (
-            <div className="mt-4 grid gap-2">
-              <Link
-                to="/cadastro"
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold transition hover:bg-accent"
-              >
-                Solicitar acesso antecipado
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link
-                to="/planos"
-                className="inline-flex items-center justify-center gap-2 text-sm font-medium text-primary"
-              >
-                <Clock3 className="h-4 w-4" />
-                Ver estrutura dos planos
-              </Link>
-            </div>
-          ) : null}
+          <p className="mt-4 text-center text-sm">
+            <Link to="/recuperar-senha" className="font-medium text-primary">
+              Esqueci minha senha
+            </Link>
+          </p>
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
             Ainda não tem conta?{" "}
-            <Link to="/cadastro" className="font-medium text-primary">
-              Criar cadastro
+            <Link to="/planos" className="font-medium text-primary">
+              Escolher um plano
             </Link>
           </p>
         </form>
