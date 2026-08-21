@@ -9,6 +9,7 @@ import {
   listLeads,
   loadCrmPipeline,
   moveLeadToStage,
+  updateLead,
   type CrmStage,
   type Lead,
 } from "@/product/crm";
@@ -114,7 +115,7 @@ function CrmPage() {
       {session?.access.subscription?.plan_slug === "preview" ? (
         <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
           Modo visualização ativo: os leads criados aqui ficam apenas neste navegador para você testar
-          o fluxo. O banco real continua vazio até o Supabase e a API de produção serem ativados.
+          o fluxo. O CRM autenticado usa a API e o banco operacional da empresa.
         </div>
       ) : null}
 
@@ -181,6 +182,11 @@ function CrmPage() {
                     stages={stages}
                     onDragStart={() => setDraggingLeadId(lead.id)}
                     onMove={(stageId) => void handleMoveLead(lead.id, stageId)}
+                    onUpdated={(updatedLead) =>
+                      setLeads((current) =>
+                        current.map((item) => (item.id === updatedLead.id ? updatedLead : item)),
+                      )
+                    }
                   />
                 ))}
                 {stage.leads.length === 0 ? (
@@ -364,12 +370,17 @@ function LeadCard({
   stages,
   onDragStart,
   onMove,
+  onUpdated,
 }: {
   lead: Lead;
   stages: CrmStage[];
   onDragStart: () => void;
   onMove: (stageId: string) => void;
+  onUpdated: (lead: Lead) => void;
 }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const budget = lead.budget_cents
     ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
         lead.budget_cents / 100,
@@ -405,6 +416,50 @@ function LeadCard({
           {lead.notes}
         </p>
       ) : null}
+
+      {isEditing ? (
+        <form
+          className="mt-3 space-y-2 rounded-md border border-border bg-muted/30 p-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            setIsSaving(true);
+            setError(null);
+            try {
+              const response = await updateLead(lead.id, {
+                name: String(form.get("name") ?? ""),
+                phone: String(form.get("phone") ?? ""),
+                source: String(form.get("source") ?? ""),
+                notes: String(form.get("notes") ?? ""),
+              });
+              onUpdated(response.lead);
+              setIsEditing(false);
+            } catch (updateError) {
+              setError(updateError instanceof Error ? updateError.message : "Não foi possível editar o lead.");
+            } finally {
+              setIsSaving(false);
+            }
+          }}
+        >
+          <input name="name" defaultValue={lead.name} required className="h-8 w-full rounded border border-input bg-background px-2 text-xs" aria-label="Nome do lead" />
+          <input name="phone" defaultValue={lead.phone ?? ""} className="h-8 w-full rounded border border-input bg-background px-2 text-xs" aria-label="Telefone do lead" />
+          <input name="source" defaultValue={lead.source ?? ""} className="h-8 w-full rounded border border-input bg-background px-2 text-xs" aria-label="Origem do lead" />
+          <textarea name="notes" defaultValue={lead.notes ?? ""} rows={2} className="w-full rounded border border-input bg-background px-2 py-1 text-xs" aria-label="Observações do lead" />
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          <div className="flex gap-2">
+            <button type="submit" disabled={isSaving} className="h-8 rounded border border-border px-2 text-xs font-medium disabled:opacity-60">{isSaving ? "Salvando..." : "Salvar"}</button>
+            <button type="button" onClick={() => setIsEditing(false)} className="h-8 rounded border border-border px-2 text-xs">Cancelar</button>
+          </div>
+        </form>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsEditing(true)}
+          className="mt-3 h-8 w-full rounded-md border border-border text-xs font-medium transition hover:bg-accent"
+        >
+          Editar lead
+        </button>
+      )}
 
       {lead.phone ? (
         <a

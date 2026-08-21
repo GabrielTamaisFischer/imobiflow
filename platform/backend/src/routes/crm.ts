@@ -1,290 +1,33 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import {
-  requireActiveSubscription,
-  requireAuth,
-  requireCompany,
-  requirePermission,
-} from "../middleware/auth.js";
-import { supabaseAdmin } from "../lib/supabase.js";
+import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
+import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const crmRouter = Router();
-
 crmRouter.use(requireAuth, requireCompany, requireActiveSubscription);
 
 const leadSchema = z.object({
-  name: z.string().min(2),
-  email: z.string().email().optional().or(z.literal("")),
-  phone: z.string().min(3).optional().or(z.literal("")),
-  source: z.string().max(80).optional().or(z.literal("")),
-  interest_type: z.enum(["sale", "rent", "both", "not_defined"]).default("not_defined"),
-  stage_id: z.string().uuid().optional(),
-  assigned_to: z.string().uuid().optional(),
-  budget_cents: z.number().int().nonnegative().optional(),
-  property_reference: z.string().max(160).optional().or(z.literal("")),
-  notes: z.string().max(4000).optional().or(z.literal("")),
+  name: z.string().trim().min(2).max(180), email: z.string().email().optional().or(z.literal("")),
+  phone: z.string().min(3).max(40).optional().or(z.literal("")), source: z.string().max(80).optional().or(z.literal("")),
+  interest_type: z.enum(["sale", "rent", "both", "not_defined"]).default("not_defined"), stage_id: z.string().uuid().optional(),
+  assigned_to: z.string().uuid().optional(), budget_cents: z.number().int().nonnegative().optional(),
+  property_reference: z.string().max(160).optional().or(z.literal("")), notes: z.string().max(4000).optional().or(z.literal("")),
   next_follow_up_at: z.string().datetime().optional().or(z.literal("")),
 });
+const updateLeadSchema = leadSchema.partial().extend({ status: z.enum(["open", "won", "lost", "archived"]).optional(), last_contact_at: z.string().datetime().optional().or(z.literal("")) });
+const stageMoveSchema = z.object({ stage_id: z.string().uuid() });
+const leadSelect = { id:true, companyId:true, stageId:true, assignedTo:true, name:true, email:true, phone:true, source:true, interestType:true, status:true, budgetCents:true, propertyReference:true, notes:true, lastContactAt:true, nextFollowUpAt:true, createdAt:true, updatedAt:true } as const;
+const nil = (value?: string | null) => value || null;
+function serialize(lead: any) { return { id:lead.id, company_id:lead.companyId, stage_id:lead.stageId, assigned_to:lead.assignedTo, name:lead.name, email:lead.email, phone:lead.phone, source:lead.source, interest_type:lead.interestType, status:lead.status, budget_cents:lead.budgetCents, property_reference:lead.propertyReference, notes:lead.notes, last_contact_at:lead.lastContactAt?.toISOString() ?? null, next_follow_up_at:lead.nextFollowUpAt?.toISOString() ?? null, created_at:lead.createdAt.toISOString(), updated_at:lead.updatedAt.toISOString() }; }
+async function stageFor(companyId:string, stageId:string | undefined) { if(!stageId)return null; const stage=await getPrisma().crmStage.findFirst({where:{id:stageId,companyId,status:"active"}}); if(!stage) throw Object.assign(new Error("Etapa do funil inválida para esta empresa."),{statusCode:422,code:"INVALID_STAGE"}); return stage.id; }
+async function assignedFor(companyId:string, userId:string|undefined) { if(!userId)return null; const user=await getPrisma().appUser.findFirst({where:{id:userId,companyId,status:"active"},select:{id:true}}); if(!user) throw Object.assign(new Error("Responsável inválido para esta empresa."),{statusCode:422,code:"INVALID_ASSIGNEE"}); return user.id; }
+function inputData(input:any) { return { ...(input.name !== undefined?{name:input.name}:{}), ...(input.email !== undefined?{email:nil(input.email)}:{}), ...(input.phone !== undefined?{phone:nil(input.phone)}:{}), ...(input.source !== undefined?{source:input.source||"manual"}:{}), ...(input.interest_type !== undefined?{interestType:input.interest_type}:{}), ...(input.budget_cents !== undefined?{budgetCents:input.budget_cents}:{}), ...(input.property_reference !== undefined?{propertyReference:nil(input.property_reference)}:{}), ...(input.notes !== undefined?{notes:nil(input.notes)}:{}), ...(input.status !== undefined?{status:input.status}:{}), ...(input.last_contact_at !== undefined?{lastContactAt:input.last_contact_at?new Date(input.last_contact_at):null}:{}), ...(input.next_follow_up_at !== undefined?{nextFollowUpAt:input.next_follow_up_at?new Date(input.next_follow_up_at):null}:{}) }; }
 
-const updateLeadSchema = leadSchema.partial().extend({
-  status: z.enum(["open", "won", "lost", "archived"]).optional(),
-  last_contact_at: z.string().datetime().optional().or(z.literal("")),
-});
-
-const noteSchema = z.object({
-  body: z.string().min(1).max(4000),
-  visibility: z.enum(["internal", "shared"]).default("internal"),
-});
-
-const taskSchema = z.object({
-  title: z.string().min(2).max(180),
-  due_at: z.string().datetime().optional().or(z.literal("")),
-  assigned_to: z.string().uuid().optional(),
-});
-
-const stageMoveSchema = z.object({
-  stage_id: z.string().uuid(),
-});
-
-function cleanEmpty<T extends Record<string, unknown>>(input: T) {
-  return Object.fromEntries(
-    Object.entries(input).map(([key, value]) => [key, value === "" ? null : value]),
-  );
-}
-
-async function ensureStageBelongsToCompany(stageId: string | undefined, companyId: string) {
-  if (!stageId) return null;
-
-  const { data, error } = await supabaseAdmin
-    .from("crm_stages")
-    .select("id")
-    .eq("id", stageId)
-    .eq("company_id", companyId)
-    .eq("status", "active")
-    .maybeSingle<{ id: string }>();
-
-  if (error) throw error;
-  if (!data) {
-    throw Object.assign(new Error("Etapa do funil inválida para esta empresa."), {
-      statusCode: 422,
-      code: "INVALID_STAGE",
-    });
-  }
-
-  return data.id;
-}
-
-crmRouter.get("/pipeline", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
-  try {
-    const companyId = req.access!.company.id;
-    const userId = req.access!.appUser.id;
-    res.json(await ensureDefaultCrmPipeline(companyId, userId));
-  } catch (error) {
-    next(error);
-  }
-});
-
-crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
-  try {
-    const companyId = req.access!.company.id;
-    const status = typeof req.query.status === "string" ? req.query.status : "open";
-
-    const { data, error } = await supabaseAdmin
-      .from("leads")
-      .select(
-        "id, company_id, stage_id, assigned_to, name, email, phone, source, interest_type, status, budget_cents, property_reference, notes, last_contact_at, next_follow_up_at, created_at, updated_at",
-      )
-      .eq("company_id", companyId)
-      .eq("status", status)
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-
-    res.json({ leads: data ?? [] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-crmRouter.post("/leads", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
-  try {
-    const companyId = req.access!.company.id;
-    const userId = req.access!.appUser.id;
-    const input = leadSchema.parse(req.body);
-    const pipeline = await ensureDefaultCrmPipeline(companyId, userId);
-    const defaultStage = pipeline.stages[0]?.id;
-    const stageId = await ensureStageBelongsToCompany(input.stage_id ?? defaultStage, companyId);
-
-    const { data: lead, error } = await supabaseAdmin
-      .from("leads")
-      .insert({
-        ...cleanEmpty(input),
-        company_id: companyId,
-        stage_id: stageId,
-        created_by: userId,
-      })
-      .select(
-        "id, company_id, stage_id, assigned_to, name, email, phone, source, interest_type, status, budget_cents, property_reference, notes, last_contact_at, next_follow_up_at, created_at, updated_at",
-      )
-      .single();
-
-    if (error) throw error;
-
-    await supabaseAdmin.from("lead_events").insert({
-      company_id: companyId,
-      lead_id: lead.id,
-      user_id: userId,
-      event_type: "lead.created",
-      payload: { source: lead.source, stage_id: lead.stage_id },
-    });
-
-    res.status(201).json({ lead });
-  } catch (error) {
-    next(error);
-  }
-});
-
-crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
-  try {
-    const companyId = req.access!.company.id;
-    const userId = req.access!.appUser.id;
-    const input = updateLeadSchema.parse(req.body);
-
-    if (input.stage_id) {
-      await ensureStageBelongsToCompany(input.stage_id, companyId);
-    }
-
-    const { data: lead, error } = await supabaseAdmin
-      .from("leads")
-      .update(cleanEmpty(input))
-      .eq("id", req.params.id)
-      .eq("company_id", companyId)
-      .select(
-        "id, company_id, stage_id, assigned_to, name, email, phone, source, interest_type, status, budget_cents, property_reference, notes, last_contact_at, next_follow_up_at, created_at, updated_at",
-      )
-      .single();
-
-    if (error) throw error;
-
-    await supabaseAdmin.from("lead_events").insert({
-      company_id: companyId,
-      lead_id: lead.id,
-      user_id: userId,
-      event_type: "lead.updated",
-      payload: cleanEmpty(input),
-    });
-
-    res.json({ lead });
-  } catch (error) {
-    next(error);
-  }
-});
-
-crmRouter.patch(
-  "/leads/:id/stage",
-  requirePermission("crm.manage"),
-  async (req: RequestWithAccess, res, next) => {
-    try {
-      const companyId = req.access!.company.id;
-      const userId = req.access!.appUser.id;
-      const input = stageMoveSchema.parse(req.body);
-      const stageId = await ensureStageBelongsToCompany(input.stage_id, companyId);
-
-      const { data: currentLead, error: currentLeadError } = await supabaseAdmin
-        .from("leads")
-        .select("id, stage_id")
-        .eq("id", req.params.id)
-        .eq("company_id", companyId)
-        .single<{ id: string; stage_id: string | null }>();
-
-      if (currentLeadError) throw currentLeadError;
-
-      const { data: lead, error } = await supabaseAdmin
-        .from("leads")
-        .update({ stage_id: stageId, updated_at: new Date().toISOString() })
-        .eq("id", req.params.id)
-        .eq("company_id", companyId)
-        .select(
-          "id, company_id, stage_id, assigned_to, name, email, phone, source, interest_type, status, budget_cents, property_reference, notes, last_contact_at, next_follow_up_at, created_at, updated_at",
-        )
-        .single();
-
-      if (error) throw error;
-
-      await supabaseAdmin.from("lead_events").insert({
-        company_id: companyId,
-        lead_id: lead.id,
-        user_id: userId,
-        event_type: "lead.stage_changed",
-        payload: {
-          from_stage_id: currentLead.stage_id,
-          to_stage_id: stageId,
-        },
-      });
-
-      res.json({ lead });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-crmRouter.post(
-  "/leads/:id/notes",
-  requirePermission("crm.manage"),
-  async (req: RequestWithAccess, res, next) => {
-    try {
-      const companyId = req.access!.company.id;
-      const userId = req.access!.appUser.id;
-      const input = noteSchema.parse(req.body);
-
-      const { data: note, error } = await supabaseAdmin
-        .from("lead_notes")
-        .insert({
-          company_id: companyId,
-          lead_id: req.params.id,
-          user_id: userId,
-          ...input,
-        })
-        .select("id, company_id, lead_id, user_id, body, visibility, created_at")
-        .single();
-
-      if (error) throw error;
-
-      res.status(201).json({ note });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-crmRouter.post(
-  "/leads/:id/tasks",
-  requirePermission("crm.manage"),
-  async (req: RequestWithAccess, res, next) => {
-    try {
-      const companyId = req.access!.company.id;
-      const userId = req.access!.appUser.id;
-      const input = taskSchema.parse(req.body);
-
-      const { data: task, error } = await supabaseAdmin
-        .from("lead_tasks")
-        .insert({
-          ...cleanEmpty(input),
-          company_id: companyId,
-          lead_id: req.params.id,
-          created_by: userId,
-        })
-        .select("id, company_id, lead_id, assigned_to, title, due_at, status, created_at, updated_at")
-        .single();
-
-      if (error) throw error;
-
-      res.status(201).json({ task });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
+crmRouter.get("/pipeline",requirePermission("crm.view"),async(req:RequestWithAccess,res,next)=>{try{res.json(await ensureDefaultCrmPipeline(req.access!.company.id,req.access!.appUser.id));}catch(error){next(error);}});
+crmRouter.get("/leads",requirePermission("crm.view"),async(req:RequestWithAccess,res,next)=>{try{const companyId=req.access!.company.id;const status=typeof req.query.status==="string"?req.query.status:"open";const leads=await getPrisma().lead.findMany({where:{companyId,status},select:leadSelect,orderBy:[{createdAt:"desc"},{id:"desc"}],take:100});res.json({leads:leads.map(serialize)});}catch(error){next(error);}});
+crmRouter.post("/leads",requirePermission("crm.manage"),async(req:RequestWithAccess,res,next)=>{try{const companyId=req.access!.company.id,userId=req.access!.appUser.id,input=leadSchema.parse(req.body);const pipeline=await ensureDefaultCrmPipeline(companyId,userId);const stageId=await stageFor(companyId,input.stage_id??pipeline.stages[0]?.id);const assignedTo=await assignedFor(companyId,input.assigned_to);const lead=await getPrisma().$transaction(async(tx)=>{const created=await tx.lead.create({data:{companyId,createdBy:userId,stageId,assignedTo,name:input.name,...inputData(input)},select:leadSelect});await tx.leadEvent.create({data:{companyId,leadId:created.id,userId,eventType:"lead.created",payloadJson:{source:created.source,stage_id:created.stageId} as Prisma.InputJsonValue}});return created;});res.status(201).json({lead:serialize(lead)});}catch(error){next(error);}});
+crmRouter.patch("/leads/:id",requirePermission("crm.manage"),async(req:RequestWithAccess,res,next)=>{try{const companyId=req.access!.company.id,userId=req.access!.appUser.id,input=updateLeadSchema.parse(req.body);const existing=await getPrisma().lead.findFirst({where:{id:req.params.id,companyId},select:{id:true}});if(!existing)throw Object.assign(new Error("Lead não encontrado."),{statusCode:404,code:"LEAD_NOT_FOUND"});const stageId=await stageFor(companyId,input.stage_id);const assignedTo=await assignedFor(companyId,input.assigned_to);const lead=await getPrisma().$transaction(async(tx)=>{const updated=await tx.lead.update({where:{id:existing.id},data:{...inputData(input),...(input.stage_id!==undefined?{stageId}:{}),...(input.assigned_to!==undefined?{assignedTo}: {})},select:leadSelect});await tx.leadEvent.create({data:{companyId,leadId:updated.id,userId,eventType:"lead.updated",payloadJson:input as Prisma.InputJsonValue}});return updated;});res.json({lead:serialize(lead)});}catch(error){next(error);}});
+crmRouter.patch("/leads/:id/stage",requirePermission("crm.manage"),async(req:RequestWithAccess,res,next)=>{try{const companyId=req.access!.company.id,userId=req.access!.appUser.id,input=stageMoveSchema.parse(req.body);const stageId=await stageFor(companyId,input.stage_id);const existing=await getPrisma().lead.findFirst({where:{id:req.params.id,companyId},select:{id:true,stageId:true}});if(!existing)throw Object.assign(new Error("Lead não encontrado."),{statusCode:404,code:"LEAD_NOT_FOUND"});const lead=await getPrisma().$transaction(async(tx)=>{const updated=await tx.lead.update({where:{id:existing.id},data:{stageId},select:leadSelect});await tx.leadEvent.create({data:{companyId,leadId:updated.id,userId,eventType:"lead.stage_changed",payloadJson:{from_stage_id:existing.stageId,to_stage_id:stageId} as Prisma.InputJsonValue}});return updated;});res.json({lead:serialize(lead)});}catch(error){next(error);}});

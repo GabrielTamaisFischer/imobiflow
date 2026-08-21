@@ -1,23 +1,5 @@
-import { supabaseAdmin } from "../lib/supabase.js";
-
-export type CrmStage = {
-  id: string;
-  company_id: string;
-  pipeline_id: string;
-  name: string;
-  position: number;
-  probability: number;
-  color: string | null;
-  status: string;
-};
-
-export type CrmPipeline = {
-  id: string;
-  company_id: string;
-  name: string;
-  is_default: boolean;
-  status: string;
-};
+import type { PrismaClient } from "@prisma/client";
+import { getPrisma } from "../lib/website-builder-prisma.js";
 
 const defaultStages = [
   { name: "Novo lead", position: 1, probability: 10, color: "#8b5cf6" },
@@ -27,60 +9,39 @@ const defaultStages = [
   { name: "Fechamento", position: 5, probability: 90, color: "#ef4444" },
 ];
 
-export async function ensureDefaultCrmPipeline(companyId: string, userId?: string | null) {
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from("crm_pipelines")
-    .select("id, company_id, name, is_default, status")
-    .eq("company_id", companyId)
-    .eq("is_default", true)
-    .maybeSingle<CrmPipeline>();
-
-  if (existingError) throw existingError;
-
-  const pipeline = existing ?? (await createDefaultCrmPipeline(companyId, userId));
-
-  const { data: stages, error: stagesError } = await supabaseAdmin
-    .from("crm_stages")
-    .select("id, company_id, pipeline_id, name, position, probability, color, status")
-    .eq("company_id", companyId)
-    .eq("pipeline_id", pipeline.id)
-    .eq("status", "active")
-    .order("position", { ascending: true })
-    .returns<CrmStage[]>();
-
-  if (stagesError) throw stagesError;
-
-  return {
-    pipeline,
-    stages: stages ?? [],
-  };
+function serializePipeline(pipeline: { id: string; name: string; isDefault: boolean; status: string }) {
+  return { id: pipeline.id, name: pipeline.name, is_default: pipeline.isDefault, status: pipeline.status };
 }
 
-export async function createDefaultCrmPipeline(companyId: string, userId?: string | null) {
-  const { data: pipeline, error: pipelineError } = await supabaseAdmin
-    .from("crm_pipelines")
-    .insert({
-      company_id: companyId,
-      name: "Funil comercial",
-      is_default: true,
-      status: "active",
-      created_by: userId,
-    })
-    .select("id, company_id, name, is_default, status")
-    .single<CrmPipeline>();
+function serializeStage(stage: { id: string; name: string; position: number; probability: number; color: string | null; status: string }) {
+  return { id: stage.id, name: stage.name, position: stage.position, probability: stage.probability, color: stage.color, status: stage.status };
+}
 
-  if (pipelineError) throw pipelineError;
-
-  const { error: stagesError } = await supabaseAdmin.from("crm_stages").insert(
-    defaultStages.map((stage) => ({
-      company_id: companyId,
-      pipeline_id: pipeline.id,
-      ...stage,
-      status: "active",
-    })),
-  );
-
-  if (stagesError) throw stagesError;
-
-  return pipeline;
+export async function ensureDefaultCrmPipeline(
+  companyId: string,
+  _userId?: string | null,
+  prisma: Pick<PrismaClient, "crmPipeline" | "crmStage"> = getPrisma(),
+) {
+  let pipeline = await prisma.crmPipeline.findFirst({ where: { companyId, isDefault: true }, orderBy: { createdAt: "asc" } });
+  if (!pipeline) {
+    try {
+      pipeline = await prisma.crmPipeline.create({
+        data: {
+          companyId,
+          name: "Funil comercial",
+          isDefault: true,
+          status: "active",
+          stages: { create: defaultStages.map((stage) => ({ companyId, ...stage, status: "active" })) },
+        },
+      });
+    } catch (error) {
+      pipeline = await prisma.crmPipeline.findFirst({ where: { companyId, isDefault: true }, orderBy: { createdAt: "asc" } });
+      if (!pipeline) throw error;
+    }
+  }
+  const stages = await prisma.crmStage.findMany({
+    where: { companyId, pipelineId: pipeline.id, status: "active" },
+    orderBy: [{ position: "asc" }, { id: "asc" }],
+  });
+  return { pipeline: serializePipeline(pipeline), stages: stages.map(serializeStage) };
 }

@@ -29,6 +29,9 @@ model Company {
   properties    Property[]
   companySites  CompanySite[]
   leads         Lead[]
+  crmPipelines  CrmPipeline[]
+  crmStages     CrmStage[]
+  leadEvents    LeadEvent[]
   siteLeads     SiteLead[]
   appointments  Appointment[]
   importJobs    ImportJob[]
@@ -574,6 +577,7 @@ model Lead {
   id                String     @id @default(uuid()) @db.Char(36)
   companyId         String     @map("company_id") @db.Char(36)
   stageId           String?    @map("stage_id") @db.Char(36)
+  assignedTo        String?    @map("assigned_to") @db.Char(36)
   createdBy         String?    @map("created_by") @db.Char(36)
   name              String     @db.VarChar(180)
   email             String?    @db.VarChar(180)
@@ -582,13 +586,72 @@ model Lead {
   interestType      String     @default("not_defined") @map("interest_type") @db.VarChar(60)
   propertyReference String?    @map("property_reference") @db.VarChar(220)
   notes             String?    @db.Text
+  status            String     @default("open") @db.VarChar(40)
+  budgetCents       Int?       @map("budget_cents")
+  lastContactAt     DateTime?  @map("last_contact_at")
+  nextFollowUpAt    DateTime?  @map("next_follow_up_at")
   createdAt         DateTime   @default(now()) @map("created_at")
   updatedAt         DateTime   @updatedAt @map("updated_at")
   company           Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stage             CrmStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  events            LeadEvent[]
   siteLeads         SiteLead[]
 
   @@index([companyId, source, createdAt])
+  @@index([companyId, stageId, status, createdAt])
   @@map("leads")
+}
+
+model CrmPipeline {
+  id        String     @id @default(uuid()) @db.Char(36)
+  companyId String     @map("company_id") @db.Char(36)
+  name      String     @db.VarChar(160)
+  isDefault Boolean    @default(false) @map("is_default")
+  status    String     @default("active") @db.VarChar(40)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stages    CrmStage[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isDefault, status])
+  @@map("crm_pipelines")
+}
+
+model CrmStage {
+  id          String      @id @default(uuid()) @db.Char(36)
+  companyId   String      @map("company_id") @db.Char(36)
+  pipelineId  String      @map("pipeline_id") @db.Char(36)
+  name        String      @db.VarChar(120)
+  position    Int
+  probability Int         @default(0)
+  color       String?     @db.VarChar(32)
+  status      String      @default("active") @db.VarChar(40)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pipeline    CrmPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+
+  @@unique([pipelineId, position])
+  @@unique([pipelineId, name])
+  @@index([companyId, pipelineId, status, position])
+  @@map("crm_stages")
+}
+
+model LeadEvent {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String   @map("company_id") @db.Char(36)
+  leadId      String   @map("lead_id") @db.Char(36)
+  userId      String?  @map("user_id") @db.Char(36)
+  eventType   String   @map("event_type") @db.VarChar(100)
+  payloadJson Json     @map("payload_json")
+  createdAt   DateTime @default(now()) @map("created_at")
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, leadId, createdAt])
+  @@map("lead_events")
 }
 
 model SiteLead {

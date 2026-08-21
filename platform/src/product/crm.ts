@@ -125,6 +125,15 @@ export async function moveLeadToStage(leadId: string, stageId: string) {
   });
 }
 
+export async function updateLead(leadId: string, input: Partial<LeadInput>) {
+  if (isPreviewCrm()) throw new Error("Edição CRM não disponível no modo de visualização.");
+  return apiRequest<{ lead: Lead }>(`/crm/leads/${leadId}`, {
+    method: "PATCH",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify(input),
+  });
+}
+
 export async function createLeadTask(
   leadId: string,
   input: { title: string; due_at?: string; assigned_to?: string },
