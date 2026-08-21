@@ -47,8 +47,6 @@ function CrmPage() {
   const [showForm, setShowForm] = useState(false);
   const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showLossForm, setShowLossForm] = useState(false);
-  const [lossReason, setLossReason] = useState("sem retorno");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Lead["status"]>("open");
   const [users, setUsers] = useState<CrmUser[]>([]);
@@ -479,6 +477,8 @@ function LeadCard({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showLossForm, setShowLossForm] = useState(false);
+  const [lossReason, setLossReason] = useState("sem retorno");
   const budget = lead.budget_cents
     ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
         lead.budget_cents / 100,
