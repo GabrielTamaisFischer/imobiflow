@@ -29,6 +29,20 @@ export function normalizeLeadPhone(value?: string | null) {
   return digits || null;
 }
 
+async function routeNewLead(tx: Prisma.TransactionClient, companyId: string) {
+  const config = await tx.crmRoutingConfig.findUnique({ where: { companyId }, select: { mode: true, lastAssignedUserId: true } });
+  if (!config || config.mode !== "round_robin") return { userId: null, mode: "manual" as const };
+  const members = await tx.crmRoutingMember.findMany({
+    where: { companyId, active: true, user: { companyId, status: "active" } },
+    orderBy: { position: "asc" }, select: { userId: true },
+  });
+  if (!members.length) return { userId: null, mode: "round_robin" as const };
+  const previous = members.findIndex((member) => member.userId === config.lastAssignedUserId);
+  const selected = members[(previous + 1 + members.length) % members.length];
+  await tx.crmRoutingConfig.update({ where: { companyId }, data: { lastAssignedUserId: selected.userId } });
+  return { userId: selected.userId, mode: "round_robin" as const };
+}
+
 export async function ingestLead(input: LeadIntakeInput) {
   const prisma = getPrisma();
   const email = input.email?.trim() || null;
@@ -75,10 +89,12 @@ export async function ingestLead(input: LeadIntakeInput) {
     if (!lead) {
       const pipeline = await ensureDefaultCrmPipeline(input.companyId, null, tx);
       const stageId = pipeline.stages[0]?.id ?? null;
+      const routing = await routeNewLead(tx, input.companyId);
       lead = await tx.lead.create({
         data: {
           companyId: input.companyId,
           stageId,
+          assignedTo: routing.userId,
           name: input.name.trim(),
           email,
           emailNormalized,
@@ -100,6 +116,9 @@ export async function ingestLead(input: LeadIntakeInput) {
           payloadJson: { source: input.source, stage_id: stageId } as Prisma.InputJsonValue,
         },
       });
+      if (routing.userId) {
+        await tx.leadEvent.create({ data: { companyId: input.companyId, leadId: lead.id, eventType: "lead.assigned", payloadJson: { assigned_to: routing.userId, assignment_mode: routing.mode } as Prisma.InputJsonValue } });
+      }
     }
 
     const siteLead = await tx.siteLead.create({

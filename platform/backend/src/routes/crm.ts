@@ -30,10 +30,12 @@ const updateLeadSchema = leadSchema.partial().extend({
   last_contact_at: z.string().datetime().optional().or(z.literal("")),
 });
 const stageMoveSchema = z.object({ stage_id: z.string().uuid() });
+const activitySchema = z.object({ type: z.enum(["note", "call", "whatsapp", "email", "contact", "other"]), body: z.string().max(4000).optional().or(z.literal("")), occurred_at: z.string().datetime().optional() });
+const routingSchema = z.object({ mode: z.enum(["manual", "round_robin"]), user_ids: z.array(z.string().uuid()).max(100).default([]) });
 const leadSelect = {
   id: true, companyId: true, stageId: true, assignedTo: true, name: true, email: true, phone: true,
   source: true, interestType: true, status: true, lostReason: true, budgetCents: true,
-  propertyReference: true, notes: true, lastContactAt: true, nextFollowUpAt: true, createdAt: true, updatedAt: true,
+  propertyReference: true, notes: true, firstContactAt: true, lastContactAt: true, nextFollowUpAt: true, createdAt: true, updatedAt: true,
 } as const;
 type LeadRow = Prisma.LeadGetPayload<{ select: typeof leadSelect }>;
 const nil = (value?: string | null) => value || null;
@@ -44,7 +46,7 @@ function serialize(lead: LeadRow) {
     name: lead.name, email: lead.email, phone: lead.phone, source: lead.source,
     interest_type: lead.interestType, status: lead.status, lost_reason: lead.lostReason,
     budget_cents: lead.budgetCents, property_reference: lead.propertyReference, notes: lead.notes,
-    last_contact_at: lead.lastContactAt?.toISOString() ?? null, next_follow_up_at: lead.nextFollowUpAt?.toISOString() ?? null,
+    first_contact_at: lead.firstContactAt?.toISOString() ?? null, last_contact_at: lead.lastContactAt?.toISOString() ?? null, next_follow_up_at: lead.nextFollowUpAt?.toISOString() ?? null,
     created_at: lead.createdAt.toISOString(), updated_at: lead.updatedAt.toISOString(),
   };
 }
@@ -91,6 +93,29 @@ crmRouter.get("/pipeline", requirePermission("crm.view"), async (req: RequestWit
   try { res.json(await ensureDefaultCrmPipeline(req.access!.company.id, req.access!.appUser.id)); } catch (error) { next(error); }
 });
 
+crmRouter.get("/routing", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const config = await getPrisma().crmRoutingConfig.findUnique({ where: { companyId } });
+    const members = await getPrisma().crmRoutingMember.findMany({ where: { companyId, active: true }, orderBy: { position: "asc" }, select: { userId: true, position: true, user: { select: { id: true, name: true, status: true } } } });
+    res.json({ mode: config?.mode ?? "manual", user_ids: members.map((member) => member.userId), users: members.map((member) => member.user) });
+  } catch (error) { next(error); }
+});
+
+crmRouter.patch("/routing", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id, input = routingSchema.parse(req.body), prisma = getPrisma();
+    const users = input.user_ids.length ? await prisma.appUser.findMany({ where: { id: { in: input.user_ids }, companyId, status: "active" }, select: { id: true } }) : [];
+    if (users.length !== input.user_ids.length) throw invalid("Usuários elegíveis inválidos para esta empresa.", "INVALID_ROUTING_MEMBER");
+    await prisma.$transaction(async (tx) => {
+      await tx.crmRoutingConfig.upsert({ where: { companyId }, create: { companyId, mode: input.mode }, update: { mode: input.mode } });
+      await tx.crmRoutingMember.deleteMany({ where: { companyId } });
+      if (users.length) await tx.crmRoutingMember.createMany({ data: users.map((user, position) => ({ companyId, userId: user.id, position, active: true })) });
+    });
+    res.json({ mode: input.mode, user_ids: input.user_ids });
+  } catch (error) { next(error); }
+});
+
 crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
@@ -129,6 +154,7 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
       },
       take: 25,
     });
+    const activities = await getPrisma().leadActivity.findMany({ where: { companyId: req.access!.company.id, leadId: lead.id }, orderBy: { occurredAt: "desc" }, take: 25, select: { id: true, type: true, body: true, occurredAt: true, user: { select: { name: true } } } });
     res.json({
       lead: serialize(lead),
       interests: interests.map((interest) => ({
@@ -142,6 +168,7 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
           ? String((interest.metadata as Record<string, unknown>).channel)
           : "site",
       })),
+      activities: activities.map((activity) => ({ id: activity.id, type: activity.type, body: activity.body, occurred_at: activity.occurredAt.toISOString(), user_name: activity.user?.name ?? null })),
     });
   } catch (error) { next(error); }
 });
@@ -165,7 +192,7 @@ crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: Reque
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = updateLeadSchema.parse(req.body);
     ensureStatusRules(input);
-    const existing = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, status: true, stageId: true } });
+    const existing = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, status: true, stageId: true, assignedTo: true } });
     if (!existing) throw notFound();
     const stageId = await stageFor(companyId, input.stage_id), assignedTo = await assignedFor(companyId, input.assigned_to);
     const lead = await getPrisma().$transaction(async (tx) => {
@@ -177,9 +204,31 @@ crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: Reque
           ? { from_stage_id: existing.stageId, to_stage_id: updated.stageId }
           : {};
       await tx.leadEvent.create({ data: { companyId, leadId: updated.id, userId, eventType, payloadJson: payload as Prisma.InputJsonValue } });
+      if (input.assigned_to !== undefined && input.assigned_to !== existing.assignedTo) {
+        await tx.leadEvent.create({ data: { companyId, leadId: updated.id, userId, eventType: updated.assignedTo ? "lead.assigned" : "lead.unassigned", payloadJson: updated.assignedTo ? { assigned_to: updated.assignedTo, assignment_mode: "manual" } : {} } });
+      }
       return updated;
     });
     res.json({ lead: serialize(lead) });
+  } catch (error) { next(error); }
+});
+
+crmRouter.post("/leads/:id/activities", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = activitySchema.parse(req.body), prisma = getPrisma();
+    const lead = await prisma.lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, firstContactAt: true, lastContactAt: true } }).catch(() => null);
+    if (!lead) throw notFound();
+    const occurredAt = input.occurred_at ? new Date(input.occurred_at) : new Date();
+    const isContact = ["call", "whatsapp", "email", "contact"].includes(input.type);
+    const activity = await prisma.$transaction(async (tx) => {
+      const created = await tx.leadActivity.create({ data: { companyId, leadId: lead.id, userId, type: input.type, body: nil(input.body), occurredAt } });
+      if (isContact) {
+        await tx.lead.update({ where: { id: lead.id }, data: { lastContactAt: occurredAt, ...(lead.firstContactAt ? {} : { firstContactAt: occurredAt }) } });
+        if (!lead.firstContactAt) await tx.leadEvent.create({ data: { companyId, leadId: lead.id, userId, eventType: "lead.contacted", payloadJson: { type: input.type } } });
+      }
+      return created;
+    });
+    res.status(201).json({ activity: { id: activity.id, type: activity.type, body: activity.body, occurred_at: activity.occurredAt.toISOString() } });
   } catch (error) { next(error); }
 });
 

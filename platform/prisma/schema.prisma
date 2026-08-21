@@ -33,6 +33,9 @@ model Company {
   crmStages     CrmStage[]
   leadEvents    LeadEvent[]
   siteLeads     SiteLead[]
+  crmRoutingConfig CrmRoutingConfig?
+  crmRoutingMembers CrmRoutingMember[]
+  leadActivities LeadActivity[]
   appointments  Appointment[]
   importJobs    ImportJob[]
   importRows    ImportRow[]
@@ -66,6 +69,10 @@ model AppUser {
   invitationsSent UserInvitation[] @relation("InvitationSender")
   authAuditLogs AuthAuditLog[] @relation("AuthAuditActor")
   activatedProvisionings AccountProvisioning[] @relation("ProvisioningOwner")
+  routingMemberships CrmRoutingMember[]
+  assignedLeads Lead[] @relation("LeadAssignee")
+  leadActivities LeadActivity[]
+  routingLastAssigned CrmRoutingConfig[] @relation("RoutingLastAssigned")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -592,13 +599,16 @@ model Lead {
   lostReason        String?    @map("lost_reason") @db.VarChar(500)
   budgetCents       Int?       @map("budget_cents")
   lastContactAt     DateTime?  @map("last_contact_at")
+  firstContactAt    DateTime?  @map("first_contact_at")
   nextFollowUpAt    DateTime?  @map("next_follow_up_at")
   createdAt         DateTime   @default(now()) @map("created_at")
   updatedAt         DateTime   @updatedAt @map("updated_at")
   company           Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignee          AppUser?   @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   stage             CrmStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
   events            LeadEvent[]
   siteLeads         SiteLead[]
+  activities        LeadActivity[]
 
   @@index([companyId, source, createdAt])
   @@index([companyId, stageId, status, createdAt])
@@ -682,6 +692,53 @@ model SiteLead {
   @@index([companyId, siteId, createdAt])
   @@index([companyId, propertyId])
   @@map("site_leads")
+}
+
+model CrmRoutingConfig {
+  id                String   @id @default(uuid()) @db.Char(36)
+  companyId         String   @unique @map("company_id") @db.Char(36)
+  mode              String   @default("manual") @db.VarChar(30)
+  lastAssignedUserId String? @map("last_assigned_user_id") @db.Char(36)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lastAssignedUser  AppUser? @relation("RoutingLastAssigned", fields: [lastAssignedUserId], references: [id], onDelete: SetNull)
+
+  @@map("crm_routing_configs")
+}
+
+model CrmRoutingMember {
+  id        String   @id @default(uuid()) @db.Char(36)
+  companyId String   @map("company_id") @db.Char(36)
+  userId    String   @map("user_id") @db.Char(36)
+  position  Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@unique([companyId, position])
+  @@index([companyId, active, position])
+  @@map("crm_routing_members")
+}
+
+model LeadActivity {
+  id         String   @id @default(uuid()) @db.Char(36)
+  companyId  String   @map("company_id") @db.Char(36)
+  leadId     String   @map("lead_id") @db.Char(36)
+  userId     String?  @map("user_id") @db.Char(36)
+  type       String   @db.VarChar(30)
+  body       String?  @db.Text
+  occurredAt DateTime @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user       AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, leadId, occurredAt])
+  @@map("lead_activities")
 }
 
 model Appointment {

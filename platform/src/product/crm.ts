@@ -37,6 +37,7 @@ export type Lead = {
   budget_cents: number | null;
   property_reference: string | null;
   notes: string | null;
+  first_contact_at: string | null;
   last_contact_at: string | null;
   next_follow_up_at: string | null;
   created_at: string;
@@ -69,6 +70,7 @@ export type LeadInterest = {
   created_at: string;
   source: string;
 };
+export type LeadActivity = { id: string; type: string; body: string | null; occurred_at: string; user_name?: string | null };
 
 export type LeadTask = {
   id: string;
@@ -145,7 +147,19 @@ export async function moveLeadToStage(leadId: string, stageId: string) {
 }
 
 export async function getLead(leadId: string) {
-  return apiRequest<{ lead: Lead; interests: LeadInterest[] }>(`/crm/leads/${leadId}`, { token: getStoredToken() ?? undefined });
+  return apiRequest<{ lead: Lead; interests: LeadInterest[]; activities: LeadActivity[] }>(`/crm/leads/${leadId}`, { token: getStoredToken() ?? undefined });
+}
+
+export async function createLeadActivity(leadId: string, input: { type: string; body?: string; occurred_at?: string }) {
+  return apiRequest<{ activity: LeadActivity }>(`/crm/leads/${leadId}/activities`, { method: "POST", token: getStoredToken() ?? undefined, body: JSON.stringify(input) });
+}
+
+export async function getCrmRouting() {
+  return apiRequest<{ mode: "manual" | "round_robin"; user_ids: string[]; users: CrmUser[] }>("/crm/routing", { token: getStoredToken() ?? undefined });
+}
+
+export async function updateCrmRouting(input: { mode: "manual" | "round_robin"; user_ids: string[] }) {
+  return apiRequest<{ mode: string; user_ids: string[] }>("/crm/routing", { method: "PATCH", token: getStoredToken() ?? undefined, body: JSON.stringify(input) });
 }
 
 export async function listCrmUsers() {
