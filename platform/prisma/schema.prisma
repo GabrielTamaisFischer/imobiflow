@@ -73,6 +73,7 @@ model AppUser {
   assignedLeads Lead[] @relation("LeadAssignee")
   leadActivities LeadActivity[]
   routingLastAssigned CrmRoutingConfig[] @relation("RoutingLastAssigned")
+  leadEvents LeadEvent[]
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -664,6 +665,7 @@ model LeadEvent {
   createdAt   DateTime @default(now()) @map("created_at")
   company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user        AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([companyId, leadId, createdAt])
   @@map("lead_events")

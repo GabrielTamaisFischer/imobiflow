@@ -13,11 +13,15 @@ import {
   moveLeadToStage,
   updateLead,
   createLeadActivity,
+  getCrmRouting,
+  getCrmSummary,
+  updateCrmRouting,
   type CrmStage,
   type LeadInterest,
   type CrmUser,
   type Lead,
   type LeadActivity,
+  type LeadEvent,
 } from "@/product/crm";
 import { useSessionGuard } from "@/product/use-session-guard";
 
@@ -31,6 +35,8 @@ const interestLabels = {
   both: "Compra ou locação",
   not_defined: "Não definido",
 };
+function formatDate(value: string | null | undefined) { return value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "Não definido"; }
+function humanEvent(type: string, userName?: string | null) { const labels: Record<string, string> = { "lead.created": "Lead criado", "lead.received": "Lead recebido pelo Site", "lead.assigned": `Lead atribuído${userName ? ` a ${userName}` : ""}`, "lead.unassigned": "Responsável removido", "lead.contacted": "Contato registrado", "lead.stage_changed": "Lead movido no funil", "lead.won": "Lead marcado como ganho", "lead.lost": "Lead marcado como perdido" }; return labels[type] ?? "Atualização do lead"; }
 
 function CrmPage() {
   const { session, isLoading } = useSessionGuard();
@@ -46,21 +52,28 @@ function CrmPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Lead["status"]>("open");
   const [users, setUsers] = useState<CrmUser[]>([]);
-  const [selectedLead, setSelectedLead] = useState<(Lead & { interests?: LeadInterest[]; activities?: LeadActivity[] }) | null>(null);
+  const [selectedLead, setSelectedLead] = useState<(Lead & { interests?: LeadInterest[]; activities?: LeadActivity[]; events?: LeadEvent[] }) | null>(null);
+  const [summary, setSummary] = useState({ unassigned: 0, without_first_contact: 0, follow_up_overdue: 0, follow_up_today: 0 });
+  const [routing, setRouting] = useState<{ mode: "manual" | "round_robin"; user_ids: string[] }>({ mode: "manual", user_ids: [] });
+  const [showRouting, setShowRouting] = useState(false);
 
   async function refreshCrm() {
     setIsCrmLoading(true);
     setError(null);
 
     try {
-      const [pipelineResponse, leadsResponse, usersResponse] = await Promise.all([
+      const [pipelineResponse, leadsResponse, usersResponse, summaryResponse, routingResponse] = await Promise.all([
         loadCrmPipeline(),
         listLeads({ status: statusFilter, search: search || undefined, page: 1, page_size: 25 }),
         listCrmUsers(),
+        getCrmSummary(),
+        getCrmRouting(),
       ]);
       setStages(pipelineResponse.stages);
       setLeads(leadsResponse.leads);
       setUsers(usersResponse.users.filter((user) => user.status === "active"));
+      setSummary(summaryResponse);
+      setRouting({ mode: routingResponse.mode, user_ids: routingResponse.user_ids });
     } catch (crmError) {
       setError(crmError instanceof Error ? crmError.message : "Não foi possível carregar o CRM.");
     } finally {
@@ -128,6 +141,12 @@ function CrmPage() {
           Adicionar manualmente
         </button>
       </div>
+
+      <section className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[["Sem responsável", summary.unassigned], ["Sem primeiro contato", summary.without_first_contact], ["Follow-up atrasado", summary.follow_up_overdue], ["Follow-up hoje", summary.follow_up_today]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-border bg-card p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>)}
+      </section>
+      <button type="button" onClick={() => setShowRouting((value) => !value)} className="mb-4 rounded-md border border-border px-3 py-2 text-sm">Distribuição de leads</button>
+      {showRouting ? <RoutingPanel users={users} routing={routing} onSaved={(next) => { setRouting(next); setShowRouting(false); }} canManage={Boolean(session?.access.appUser?.permissions.includes("crm.manage"))} /> : null}
 
       {session?.access.subscription?.plan_slug === "preview" ? (
         <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
@@ -216,7 +235,7 @@ function CrmPage() {
                     onOpen={async () => {
                       try {
                         const response = await getLead(lead.id);
-                        setSelectedLead({ ...response.lead, interests: response.interests, activities: response.activities });
+                        setSelectedLead({ ...response.lead, interests: response.interests, activities: response.activities, events: response.events });
                       } catch (detailError) {
                         setError(detailError instanceof Error ? detailError.message : "Não foi possível abrir o lead.");
                       }
@@ -241,29 +260,36 @@ function CrmPage() {
   );
 }
 
-function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead & { interests?: LeadInterest[]; activities?: LeadActivity[] }; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
+function RoutingPanel({ users, routing, onSaved, canManage }: { users: CrmUser[]; routing: { mode: "manual" | "round_robin"; user_ids: string[] }; onSaved: (routing: { mode: "manual" | "round_robin"; user_ids: string[] }) => void; canManage: boolean }) {
+  const [mode, setMode] = useState(routing.mode); const [selected, setSelected] = useState(routing.user_ids); const [error, setError] = useState<string | null>(null);
+  return <div className="mb-4 rounded-lg border border-border bg-card p-4"><p className="font-semibold">Distribuição de leads</p><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "manual"} onChange={() => setMode("manual")} disabled={!canManage} /> Manual</label><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "round_robin"} onChange={() => setMode("round_robin")} disabled={!canManage} /> Automática — Round-robin</label>{mode === "round_robin" ? <div className="mt-3 space-y-2">{users.map((user) => <label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(user.id)} onChange={() => setSelected((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} disabled={!canManage} />{user.name}</label>)}</div> : null}{canManage ? <button type="button" onClick={async () => { try { await updateCrmRouting({ mode, user_ids: mode === "round_robin" ? selected : [] }); onSaved({ mode, user_ids: mode === "round_robin" ? selected : [] }); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar."); } }} className="mt-3 h-9 rounded border border-border px-3 text-sm">Salvar configuração</button> : <p className="mt-3 text-xs text-muted-foreground">Você pode visualizar, mas não alterar esta configuração.</p>}{error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}</div>;
+}
+
+function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead & { interests?: LeadInterest[]; activities?: LeadActivity[]; events?: LeadEvent[] }; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
   const [isSaving, setIsSaving] = useState(false);
   const [activityType, setActivityType] = useState("whatsapp");
   const [activityBody, setActivityBody] = useState("");
   const [activityError, setActivityError] = useState<string | null>(null);
   async function saveActivity() {
     setActivityError(null);
-    try { await createLeadActivity(lead.id, { type: activityType, body: activityBody }); setActivityBody(""); } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar a atividade."); }
+    try { await createLeadActivity(lead.id, { type: activityType, body: activityBody }); const refreshed = await getLead(lead.id); onSaved(refreshed.lead); setActivityBody(""); } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar a atividade."); }
   }
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="Detalhe do lead">
     <form className="w-full max-w-lg space-y-3 rounded-lg border border-border bg-card p-5 shadow-xl" onSubmit={async (event) => {
       event.preventDefault(); setIsSaving(true);
       const form = new FormData(event.currentTarget);
-      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")) }).finally(() => setIsSaving(false));
+      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")), next_follow_up_at: String(form.get("next_follow_up_at") || "") }).finally(() => setIsSaving(false));
       onSaved(response.lead);
     }}>
       <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Detalhe do lead</h2><button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button></div>
-      <Field label="Nome" name="name" required placeholder={lead.name} /><Field label="E-mail" name="email" type="email" placeholder={lead.email ?? ""} /><Field label="Telefone" name="phone" placeholder={lead.phone ?? ""} /><Field label="Origem" name="source" placeholder={lead.source ?? ""} /><Field label="Orçamento" name="budget" placeholder={lead.budget_cents ? String(lead.budget_cents / 100) : ""} />
+      <Field label="Nome" name="name" required placeholder={lead.name} /><Field label="E-mail" name="email" type="email" placeholder={lead.email ?? ""} /><Field label="Telefone" name="phone" placeholder={lead.phone ?? ""} /><Field label="Origem" name="source" placeholder={lead.source ?? ""} /><Field label="Orçamento" name="budget" placeholder={lead.budget_cents ? String(lead.budget_cents / 100) : ""} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" placeholder={lead.next_follow_up_at ?? ""} />
       <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
       <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
       {lead.interests?.length ? <section className="rounded border border-border bg-muted/30 p-3"><p className="text-sm font-semibold">Imóveis de interesse</p><div className="mt-2 space-y-2">{lead.interests.map((interest) => <div key={interest.id} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{interest.property_code ?? "Imóvel"}</span>{interest.property_title ? ` — ${interest.property_title}` : ""} · {interest.source}</div>)}</div></section> : null}
       <div className="rounded border border-border p-3 space-y-2"><p className="text-sm font-semibold">Registrar atividade</p><select value={activityType} onChange={(event) => setActivityType(event.target.value)} className="h-9 w-full rounded border border-input bg-background px-2 text-sm"><option value="whatsapp">WhatsApp (registro manual)</option><option value="call">Ligação</option><option value="email">E-mail</option><option value="contact">Contato</option><option value="note">Nota</option></select><textarea value={activityBody} onChange={(event) => setActivityBody(event.target.value)} placeholder="Observação" className="w-full rounded border border-input px-2 py-2 text-sm" /><button type="button" onClick={() => void saveActivity()} className="h-9 rounded border border-border px-3 text-sm">Registrar atividade</button>{activityError ? <p className="text-xs text-destructive">{activityError}</p> : null}</div>
       {lead.activities?.length ? <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Atividades recentes</p>{lead.activities.map((activity) => <p key={activity.id} className="mt-1 text-xs text-muted-foreground">{activity.type}: {activity.body ?? ""}</p>)}</section> : null}
+      <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Timeline</p>{(lead.events ?? []).map((event) => <p key={event.id} className="mt-1 text-xs text-muted-foreground">{humanEvent(event.event_type, event.user_name)}</p>)}</section>
+      <div className="text-xs text-muted-foreground">Primeiro contato: {formatDate(lead.first_contact_at)} · Último contato: {formatDate(lead.last_contact_at)} · Próximo follow-up: {formatDate(lead.next_follow_up_at)}</div>
       <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button>
     </form>
   </div>;

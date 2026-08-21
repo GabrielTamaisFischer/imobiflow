@@ -105,8 +105,9 @@ crmRouter.get("/routing", requirePermission("crm.view"), async (req: RequestWith
 crmRouter.patch("/routing", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, input = routingSchema.parse(req.body), prisma = getPrisma();
-    const users = input.user_ids.length ? await prisma.appUser.findMany({ where: { id: { in: input.user_ids }, companyId, status: "active" }, select: { id: true } }) : [];
+    const users = input.user_ids.length ? await prisma.appUser.findMany({ where: { id: { in: input.user_ids }, companyId, status: "active" }, select: { id: true, permissionsJson: true } }) : [];
     if (users.length !== input.user_ids.length) throw invalid("Usuários elegíveis inválidos para esta empresa.", "INVALID_ROUTING_MEMBER");
+    if (users.some((user) => !Array.isArray(user.permissionsJson) || !(user.permissionsJson as unknown[]).some((permission) => permission === "crm.view" || permission === "crm.manage"))) throw invalid("Usuário sem acesso ao CRM não pode receber leads.", "CRM_PERMISSION_REQUIRED");
     await prisma.$transaction(async (tx) => {
       await tx.crmRoutingConfig.upsert({ where: { companyId }, create: { companyId, mode: input.mode }, update: { mode: input.mode } });
       await tx.crmRoutingMember.deleteMany({ where: { companyId } });
@@ -141,6 +142,19 @@ crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAc
   } catch (error) { next(error); }
 });
 
+crmRouter.get("/summary", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id, now = new Date(), start = new Date(now); start.setHours(0, 0, 0, 0); const end = new Date(start); end.setDate(end.getDate() + 1);
+    const [unassigned, withoutFirstContact, followUpOverdue, followUpToday] = await Promise.all([
+      getPrisma().lead.count({ where: { companyId, status: "open", assignedTo: null } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", firstContactAt: null } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { lt: start } } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { gte: start, lt: end } } }),
+    ]);
+    res.json({ unassigned, without_first_contact: withoutFirstContact, follow_up_overdue: followUpOverdue, follow_up_today: followUpToday });
+  } catch (error) { next(error); }
+});
+
 crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const lead = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId: req.access!.company.id }, select: leadSelect });
@@ -155,6 +169,7 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
       take: 25,
     });
     const activities = await getPrisma().leadActivity.findMany({ where: { companyId: req.access!.company.id, leadId: lead.id }, orderBy: { occurredAt: "desc" }, take: 25, select: { id: true, type: true, body: true, occurredAt: true, user: { select: { name: true } } } });
+    const events = await getPrisma().leadEvent.findMany({ where: { companyId: req.access!.company.id, leadId: lead.id, eventType: { in: ["lead.created", "lead.received", "lead.assigned", "lead.unassigned", "lead.contacted", "lead.stage_changed", "lead.won", "lead.lost"] } }, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, eventType: true, createdAt: true, user: { select: { name: true } } } });
     res.json({
       lead: serialize(lead),
       interests: interests.map((interest) => ({
@@ -169,6 +184,7 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
           : "site",
       })),
       activities: activities.map((activity) => ({ id: activity.id, type: activity.type, body: activity.body, occurred_at: activity.occurredAt.toISOString(), user_name: activity.user?.name ?? null })),
+      events: events.map((event) => ({ id: event.id, event_type: event.eventType, created_at: event.createdAt.toISOString(), user_name: event.user?.name ?? null })),
     });
   } catch (error) { next(error); }
 });
