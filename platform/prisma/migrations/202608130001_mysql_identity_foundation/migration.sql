@@ -61,8 +61,15 @@ ALTER TABLE `users`
   ADD COLUMN `failed_login_attempts` INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN `locked_until` DATETIME(3) NULL,
   ADD UNIQUE KEY `users_email_key` (`email`),
-  ADD KEY `users_company_id_status_idx` (`company_id`, `status`),
-  MODIFY `role_id` CHAR(36) NOT NULL,
+  ADD KEY `users_company_id_status_idx` (`company_id`, `status`);
+
+-- TiDB rejects changing a column and adding its foreign key in the same ALTER.
+-- Keeping these as separate statements is also valid on MySQL and preserves
+-- the canonical non-null role invariant before the constraint is installed.
+ALTER TABLE `users`
+  MODIFY `role_id` CHAR(36) NOT NULL;
+
+ALTER TABLE `users`
   ADD CONSTRAINT `users_role_id_fkey` FOREIGN KEY (`role_id`) REFERENCES `roles`(`id`) ON DELETE RESTRICT ON UPDATE CASCADE;
 
 CREATE TABLE `role_permissions` (
