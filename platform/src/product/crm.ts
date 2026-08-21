@@ -60,6 +60,15 @@ export type LeadInput = {
 };
 
 export type CrmUser = { id: string; name: string; email: string; role: string; status: string };
+export type LeadInterest = {
+  id: string;
+  property_id: string | null;
+  property_code: string | null;
+  property_title: string | null;
+  operation: string | null;
+  created_at: string;
+  source: string;
+};
 
 export type LeadTask = {
   id: string;
@@ -136,7 +145,7 @@ export async function moveLeadToStage(leadId: string, stageId: string) {
 }
 
 export async function getLead(leadId: string) {
-  return apiRequest<{ lead: Lead }>(`/crm/leads/${leadId}`, { token: getStoredToken() ?? undefined });
+  return apiRequest<{ lead: Lead; interests: LeadInterest[] }>(`/crm/leads/${leadId}`, { token: getStoredToken() ?? undefined });
 }
 
 export async function listCrmUsers() {

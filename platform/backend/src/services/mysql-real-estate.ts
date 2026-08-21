@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
+import { ingestLead } from "./lead-intake.js";
 import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
 
 type PropertyInput = Record<string, any>;
@@ -702,53 +703,30 @@ export async function createMysqlPublicLead(params: {
   ipAddress?: string | null;
   userAgent?: string | null;
 }) {
-  let propertyReference: string | null = null;
-  if (params.propertyId) {
-    const property = await prisma().property.findFirst({
-      where: { id: params.propertyId, companyId: params.site.companyId },
-      select: { code: true, title: true },
-    });
-    if (!property) throw publicSiteNotFound();
-    propertyReference = property.code || property.title;
-  }
-
-  const lead = await prisma().lead.create({
-    data: {
-      companyId: params.site.companyId,
-      name: params.input.name,
-      email: emptyToNull(params.input.email),
-      phone: emptyToNull(params.input.phone),
-      source: "site",
-      interestType: "not_defined",
-      propertyReference,
-      notes: emptyToNull(params.input.message),
-    },
-  });
-
-  await prisma().siteLead.create({
-    data: {
-      companyId: params.site.companyId,
-      siteId: params.site.id,
-      propertyId: params.propertyId,
-      leadId: lead.id,
-      name: params.input.name,
-      email: emptyToNull(params.input.email),
-      phone: emptyToNull(params.input.phone),
-      message: emptyToNull(params.input.message),
-      sourceUrl: params.sourceUrl ?? null,
-      ipAddress: params.ipAddress ?? null,
-      userAgent: params.userAgent ?? null,
-      metadata: { slug: params.site.slug },
-    },
+  const result = await ingestLead({
+    companyId: params.site.companyId,
+    siteId: params.site.id,
+    propertyId: params.propertyId,
+    source: "site",
+    name: params.input.name,
+    email: emptyToNull(params.input.email),
+    phone: emptyToNull(params.input.phone),
+    message: emptyToNull(params.input.message),
+    sourceUrl: params.sourceUrl ?? null,
+    ipAddress: params.ipAddress ?? null,
+    userAgent: params.userAgent ?? null,
+    provider: "company_site",
+    metadata: { channel: "site", site_slug: params.site.slug, page_type: "property" },
   });
 
   return {
-    id: lead.id,
-    name: lead.name,
-    email: lead.email,
-    phone: lead.phone,
-    source: lead.source,
-    created_at: lead.createdAt.toISOString(),
+    id: result.lead.id,
+    name: result.lead.name,
+    email: result.lead.email,
+    phone: result.lead.phone,
+    source: result.lead.source,
+    created_at: result.lead.createdAt.toISOString(),
+    matched_existing: result.matchedExisting,
   };
 }
 

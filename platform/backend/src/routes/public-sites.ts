@@ -11,12 +11,16 @@ import {
 export const publicSitesRouter = Router();
 
 const leadSchema = z.object({
-  name: z.string().min(2).max(160),
-  email: z.string().email().optional().or(z.literal("")),
-  phone: z.string().min(3).max(40).optional().or(z.literal("")),
-  message: z.string().max(2000).optional().or(z.literal("")),
+  name: z.string().trim().min(2).max(160),
+  email: z.string().trim().email().optional().or(z.literal("")),
+  phone: z.string().trim().min(3).max(40).optional().or(z.literal("")),
+  message: z.string().trim().max(2000).optional().or(z.literal("")),
   property_id: z.string().uuid().optional().or(z.literal("")),
 });
+
+const leadRateWindow = new Map<string, { startedAt: number; count: number }>();
+const LEAD_RATE_LIMIT = 20;
+const LEAD_RATE_WINDOW_MS = 60_000;
 
 function clientIp(req: Request) {
   const forwarded = req.headers["x-forwarded-for"];
@@ -71,6 +75,16 @@ publicSitesRouter.get("/:slug/properties/:propertyId", async (req, res, next) =>
 
 publicSitesRouter.post("/:slug/leads", async (req, res, next) => {
   try {
+    const ip = clientIp(req) ?? "unknown";
+    const now = Date.now();
+    const current = leadRateWindow.get(ip);
+    if (!current || now - current.startedAt >= LEAD_RATE_WINDOW_MS) {
+      leadRateWindow.set(ip, { startedAt: now, count: 1 });
+    } else if (current.count >= LEAD_RATE_LIMIT) {
+      return res.status(429).json({ error: "LEAD_RATE_LIMITED", message: "Tente novamente mais tarde." });
+    } else {
+      current.count += 1;
+    }
     const { site } = await getMysqlPublishedSite(String(req.params.slug));
     const settings = isRecord(site.settingsJson) ? site.settingsJson : {};
     if (settings.allow_lead_capture === false) {

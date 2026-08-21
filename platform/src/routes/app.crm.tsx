@@ -6,12 +6,14 @@ import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   createLead,
+  getLead,
   listCrmUsers,
   listLeads,
   loadCrmPipeline,
   moveLeadToStage,
   updateLead,
   type CrmStage,
+  type LeadInterest,
   type CrmUser,
   type Lead,
 } from "@/product/crm";
@@ -40,7 +42,7 @@ function CrmPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Lead["status"]>("open");
   const [users, setUsers] = useState<CrmUser[]>([]);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [selectedLead, setSelectedLead] = useState<(Lead & { interests?: LeadInterest[] }) | null>(null);
 
   async function refreshCrm() {
     setIsCrmLoading(true);
@@ -110,7 +112,7 @@ function CrmPage() {
         <div>
           <p className="text-sm font-semibold">Funil comercial</p>
           <p className="text-sm text-muted-foreground">
-            Cadastre leads reais e acompanhe cada negociação por etapa.
+          Leads normalmente chegam automaticamente pelo site e por integrações. Cadastros manuais ficam disponíveis para exceções.
           </p>
         </div>
         <button
@@ -119,7 +121,7 @@ function CrmPage() {
           className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" />
-          Novo lead
+          Adicionar manualmente
         </button>
       </div>
 
@@ -207,7 +209,14 @@ function CrmPage() {
                       )
                     }
                     users={users}
-                    onOpen={() => setSelectedLead(lead)}
+                    onOpen={async () => {
+                      try {
+                        const response = await getLead(lead.id);
+                        setSelectedLead({ ...response.lead, interests: response.interests });
+                      } catch (detailError) {
+                        setError(detailError instanceof Error ? detailError.message : "Não foi possível abrir o lead.");
+                      }
+                    }}
                     onStatus={(status, reason) => void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
                       setLeads((current) => statusFilter === response.lead.status ? current.map((item) => item.id === lead.id ? response.lead : item) : current.filter((item) => item.id !== lead.id));
                     }).catch((statusError) => setError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o status."))}
@@ -223,12 +232,12 @@ function CrmPage() {
           ))}
         </section>
       )}
-      {selectedLead ? <LeadDetail lead={selectedLead} users={users} onClose={() => setSelectedLead(null)} onSaved={(lead) => { setSelectedLead(lead); setLeads((current) => current.map((item) => item.id === lead.id ? lead : item)); }} /> : null}
+      {selectedLead ? <LeadDetail lead={selectedLead} users={users} onClose={() => setSelectedLead(null)} onSaved={(lead) => { setSelectedLead((current) => current ? { ...current, ...lead } : lead); setLeads((current) => current.map((item) => item.id === lead.id ? lead : item)); }} /> : null}
     </ModulePage>
   );
 }
 
-function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
+function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead & { interests?: LeadInterest[] }; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
   const [isSaving, setIsSaving] = useState(false);
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="Detalhe do lead">
     <form className="w-full max-w-lg space-y-3 rounded-lg border border-border bg-card p-5 shadow-xl" onSubmit={async (event) => {
@@ -241,6 +250,7 @@ function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead; users: CrmU
       <Field label="Nome" name="name" required placeholder={lead.name} /><Field label="E-mail" name="email" type="email" placeholder={lead.email ?? ""} /><Field label="Telefone" name="phone" placeholder={lead.phone ?? ""} /><Field label="Origem" name="source" placeholder={lead.source ?? ""} /><Field label="Orçamento" name="budget" placeholder={lead.budget_cents ? String(lead.budget_cents / 100) : ""} />
       <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
       <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
+      {lead.interests?.length ? <section className="rounded border border-border bg-muted/30 p-3"><p className="text-sm font-semibold">Imóveis de interesse</p><div className="mt-2 space-y-2">{lead.interests.map((interest) => <div key={interest.id} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{interest.property_code ?? "Imóvel"}</span>{interest.property_title ? ` — ${interest.property_title}` : ""} · {interest.source}</div>)}</div></section> : null}
       <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button>
     </form>
   </div>;

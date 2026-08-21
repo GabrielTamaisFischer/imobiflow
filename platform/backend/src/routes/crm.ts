@@ -119,7 +119,29 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
   try {
     const lead = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId: req.access!.company.id }, select: leadSelect });
     if (!lead) throw notFound();
-    res.json({ lead: serialize(lead) });
+    const interests = await getPrisma().siteLead.findMany({
+      where: { companyId: req.access!.company.id, leadId: lead.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true, propertyId: true, createdAt: true, metadata: true,
+        property: { select: { code: true, title: true, operation: true } },
+      },
+      take: 25,
+    });
+    res.json({
+      lead: serialize(lead),
+      interests: interests.map((interest) => ({
+        id: interest.id,
+        property_id: interest.propertyId,
+        property_code: interest.property?.code ?? null,
+        property_title: interest.property?.title ?? null,
+        operation: interest.property?.operation ?? null,
+        created_at: interest.createdAt.toISOString(),
+        source: typeof interest.metadata === "object" && interest.metadata && "channel" in interest.metadata
+          ? String((interest.metadata as Record<string, unknown>).channel)
+          : "site",
+      })),
+    });
   } catch (error) { next(error); }
 });
 

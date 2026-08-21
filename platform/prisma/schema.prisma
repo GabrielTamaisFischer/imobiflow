@@ -581,7 +581,9 @@ model Lead {
   createdBy         String?    @map("created_by") @db.Char(36)
   name              String     @db.VarChar(180)
   email             String?    @db.VarChar(180)
+  emailNormalized   String?    @map("email_normalized") @db.VarChar(180)
   phone             String?    @db.VarChar(40)
+  phoneNormalized   String?    @map("phone_normalized") @db.VarChar(40)
   source            String     @default("site") @db.VarChar(80)
   interestType      String     @default("not_defined") @map("interest_type") @db.VarChar(60)
   propertyReference String?    @map("property_reference") @db.VarChar(220)
@@ -600,6 +602,8 @@ model Lead {
 
   @@index([companyId, source, createdAt])
   @@index([companyId, stageId, status, createdAt])
+  @@index([companyId, emailNormalized, status])
+  @@index([companyId, phoneNormalized, status])
   @@map("leads")
 }
 
