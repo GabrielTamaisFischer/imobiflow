@@ -65,4 +65,18 @@ describe("property site publication readiness", () => {
     await syncMysqlPropertyPublication("company-a", "property-a");
     expect(database.property.update).toHaveBeenCalledWith(expect.objectContaining({ data: { publishedAt: null, siteFeatured: false } }));
   });
+
+  it("preserves an existing publication only when explicitly requested for a commercial edit", async () => {
+    const publishedAt = new Date("2026-08-14T12:00:00.000Z");
+    database.property.findFirst.mockResolvedValue({
+      ...completeProperty,
+      ownerId: null,
+      zipCode: null,
+      media: [],
+      publishedAt,
+    });
+    await expect(syncMysqlPropertyPublication("company-a", "property-a", { preserveExistingOnIncomplete: true }))
+      .resolves.toEqual({ ready: false, published: true });
+    expect(database.property.update).toHaveBeenCalledWith(expect.objectContaining({ data: { publishedAt, siteFeatured: true } }));
+  });
 });

@@ -415,6 +415,14 @@ export async function updateMysqlProperty(companyId: string, propertyId: string,
   await ensurePropertyBelongsToCompany(propertyId, companyId);
   if (input.code !== undefined) await ensureMysqlPropertyCodeAvailable(companyId, input.code, propertyId);
 
+  const before = await prisma().property.findFirst({
+    where: { id: propertyId, companyId },
+    select: { publishedAt: true },
+  });
+  const readinessFields = ["owner_id", "title", "description", "property_type", "operation", "status", "zip_code", "city", "state"];
+  const commercialOnly = Boolean(before?.publishedAt)
+    && !Object.keys(input).some((key) => readinessFields.includes(key));
+
   const ownerId = input.owner_id !== undefined ? await ensureMysqlOwner(companyId, input.owner_id || null) : undefined;
   const property = await prisma().property.update({
     where: { id: propertyId },
@@ -426,7 +434,7 @@ export async function updateMysqlProperty(companyId: string, propertyId: string,
   });
 
   if (input.owner_id !== undefined && ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
-  await syncMysqlPropertyPublication(companyId, property.id);
+  await syncMysqlPropertyPublication(companyId, property.id, { preserveExistingOnIncomplete: commercialOnly });
   return getMysqlProperty(companyId, property.id);
 }
 
@@ -537,7 +545,11 @@ export async function deleteMysqlPropertyMedia(companyId: string, propertyId: st
   await syncMysqlPropertyPublication(companyId, propertyId);
 }
 
-export async function syncMysqlPropertyPublication(companyId: string, propertyId: string) {
+export async function syncMysqlPropertyPublication(
+  companyId: string,
+  propertyId: string,
+  options: { preserveExistingOnIncomplete?: boolean } = {},
+) {
   const property = await prisma().property.findFirst({
     where: { id: propertyId, companyId },
     include: { media: { where: { mediaType: "photo", isCover: true }, select: { id: true }, take: 1 } },
@@ -567,7 +579,9 @@ export async function syncMysqlPropertyPublication(companyId: string, propertyId
   // que já estava publicado. A publicação só é criada quando o imóvel fica
   // pronto; depois de publicada, ela permanece até uma ação explícita de
   // despublicação ou exclusão.
-  const preserveExistingPublication = Boolean(property.publishedAt && publication.site_enabled !== false);
+  const preserveExistingPublication = Boolean(
+    options.preserveExistingOnIncomplete && property.publishedAt && publication.site_enabled !== false,
+  );
   const publishedAt = preserveExistingPublication ? property.publishedAt : (shouldPublish ? new Date() : null);
   const siteFeatured = preserveExistingPublication
     ? publication.site_featured === true
@@ -575,7 +589,7 @@ export async function syncMysqlPropertyPublication(companyId: string, propertyId
   if ((property.publishedAt?.getTime() ?? null) !== (publishedAt?.getTime() ?? null) || property.siteFeatured !== siteFeatured) {
     await prisma().property.update({ where: { id: propertyId }, data: { publishedAt, siteFeatured } });
   }
-  return { ready, published: shouldPublish };
+  return { ready, published: Boolean(publishedAt) };
 }
 
 export async function ensureMysqlCompanySite(companyId: string, userId: string, batchId?: string) {
