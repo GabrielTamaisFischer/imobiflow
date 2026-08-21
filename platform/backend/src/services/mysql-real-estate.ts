@@ -563,8 +563,15 @@ export async function syncMysqlPropertyPublication(companyId: string, propertyId
     && ["available", "reserved"].includes(property.status),
   );
   const shouldPublish = publication.site_enabled === true && ready;
-  const publishedAt = shouldPublish ? (property.publishedAt ?? new Date()) : null;
-  const siteFeatured = shouldPublish && publication.site_featured === true;
+  // Uma edição comercial (preço/comissão) não deve retirar do ar um imóvel
+  // que já estava publicado. A publicação só é criada quando o imóvel fica
+  // pronto; depois de publicada, ela permanece até uma ação explícita de
+  // despublicação ou exclusão.
+  const preserveExistingPublication = Boolean(property.publishedAt && publication.site_enabled !== false);
+  const publishedAt = preserveExistingPublication ? property.publishedAt : (shouldPublish ? new Date() : null);
+  const siteFeatured = preserveExistingPublication
+    ? publication.site_featured === true
+    : shouldPublish && publication.site_featured === true;
   if ((property.publishedAt?.getTime() ?? null) !== (publishedAt?.getTime() ?? null) || property.siteFeatured !== siteFeatured) {
     await prisma().property.update({ where: { id: propertyId }, data: { publishedAt, siteFeatured } });
   }
