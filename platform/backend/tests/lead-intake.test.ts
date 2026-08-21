@@ -21,6 +21,14 @@ describe("lead intake normalization and contract", () => {
     expect(service).toContain("ingestLead({");
   });
 
+  it("reuses canonical normalization in manual CRM mutations", async () => {
+    const source = await readFile(new URL("../src/routes/crm.ts", import.meta.url), "utf8");
+    expect(source).toContain("normalizeLeadEmail");
+    expect(source).toContain("normalizeLeadPhone");
+    expect(source).toContain("emailNormalized");
+    expect(source).toContain("phoneNormalized");
+  });
+
   it("records deduplicated intake occurrences and events", async () => {
     const source = await readFile(new URL("../src/services/lead-intake.ts", import.meta.url), "utf8");
     expect(source).toContain('status: "open"');

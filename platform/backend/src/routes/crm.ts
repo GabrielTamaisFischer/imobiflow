@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
+import { normalizeLeadEmail, normalizeLeadPhone } from "../services/lead-intake.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const crmRouter = Router();
@@ -69,8 +70,8 @@ async function assignedFor(companyId: string, userId: string | undefined) {
 function inputData(input: z.infer<typeof updateLeadSchema>) {
   return {
     ...(input.name !== undefined ? { name: input.name } : {}),
-    ...(input.email !== undefined ? { email: nil(input.email) } : {}),
-    ...(input.phone !== undefined ? { phone: nil(input.phone) } : {}),
+    ...(input.email !== undefined ? { email: nil(input.email), emailNormalized: normalizeLeadEmail(input.email) } : {}),
+    ...(input.phone !== undefined ? { phone: nil(input.phone), phoneNormalized: normalizeLeadPhone(input.phone) } : {}),
     ...(input.source !== undefined ? { source: input.source || "manual" } : {}),
     ...(input.interest_type !== undefined ? { interestType: input.interest_type } : {}),
     ...(input.budget_cents !== undefined ? { budgetCents: input.budget_cents } : {}),
