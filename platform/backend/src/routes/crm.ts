@@ -5,6 +5,7 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
 import { normalizeLeadEmail, normalizeLeadPhone } from "../services/lead-intake.js";
+import { saoPauloDayBounds } from "../services/crm-time.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const crmRouter = Router();
@@ -105,9 +106,12 @@ crmRouter.get("/routing", requirePermission("crm.view"), async (req: RequestWith
 crmRouter.patch("/routing", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, input = routingSchema.parse(req.body), prisma = getPrisma();
-    const users = input.user_ids.length ? await prisma.appUser.findMany({ where: { id: { in: input.user_ids }, companyId, status: "active" }, select: { id: true, permissionsJson: true } }) : [];
+    const users = input.user_ids.length ? await prisma.appUser.findMany({
+      where: { id: { in: input.user_ids }, companyId, status: "active" },
+      select: { id: true, roleRecord: { select: { companyId: true, permissions: { select: { permission: { select: { key: true } } } } } } },
+    }) : [];
     if (users.length !== input.user_ids.length) throw invalid("Usuários elegíveis inválidos para esta empresa.", "INVALID_ROUTING_MEMBER");
-    if (users.some((user) => !Array.isArray(user.permissionsJson) || !(user.permissionsJson as unknown[]).some((permission) => permission === "crm.view" || permission === "crm.manage"))) throw invalid("Usuário sem acesso ao CRM não pode receber leads.", "CRM_PERMISSION_REQUIRED");
+    if (users.some((user) => user.roleRecord.companyId !== companyId || !user.roleRecord.permissions.some(({ permission }) => permission.key === "crm.view" || permission.key === "crm.manage"))) throw invalid("Usuário sem acesso ao CRM não pode receber leads.", "CRM_PERMISSION_REQUIRED");
     await prisma.$transaction(async (tx) => {
       await tx.crmRoutingConfig.upsert({ where: { companyId }, create: { companyId, mode: input.mode }, update: { mode: input.mode } });
       await tx.crmRoutingMember.deleteMany({ where: { companyId } });
@@ -144,7 +148,7 @@ crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAc
 
 crmRouter.get("/summary", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
-    const companyId = req.access!.company.id, now = new Date(), start = new Date(now); start.setHours(0, 0, 0, 0); const end = new Date(start); end.setDate(end.getDate() + 1);
+    const companyId = req.access!.company.id, { start, end } = saoPauloDayBounds(new Date());
     const [unassigned, withoutFirstContact, followUpOverdue, followUpToday] = await Promise.all([
       getPrisma().lead.count({ where: { companyId, status: "open", assignedTo: null } }),
       getPrisma().lead.count({ where: { companyId, status: "open", firstContactAt: null } }),

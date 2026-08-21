@@ -30,15 +30,23 @@ export function normalizeLeadPhone(value?: string | null) {
 }
 
 async function routeNewLead(tx: Prisma.TransactionClient, companyId: string) {
-  const config = await tx.crmRoutingConfig.findUnique({ where: { companyId }, select: { mode: true, lastAssignedUserId: true } });
-  if (!config || config.mode !== "round_robin") return { userId: null, mode: "manual" as const };
-  const members = await tx.crmRoutingMember.findMany({ where: { companyId, active: true, user: { companyId, status: "active" } }, orderBy: { position: "asc" }, select: { userId: true, user: { select: { permissionsJson: true } } } });
-  const eligible = members.filter((member) => Array.isArray(member.user.permissionsJson) && (member.user.permissionsJson as unknown[]).some((permission) => permission === "crm.view" || permission === "crm.manage"));
-  if (!eligible.length) return { userId: null, mode: "round_robin" as const };
-  const previous = eligible.findIndex((member) => member.userId === config.lastAssignedUserId);
-  const selected = eligible[(previous + 1 + eligible.length) % eligible.length];
-  await tx.crmRoutingConfig.update({ where: { companyId }, data: { lastAssignedUserId: selected.userId } });
-  return { userId: selected.userId, mode: "round_robin" as const };
+  // Compare-and-swap makes the persisted cursor the coordinator across Render restarts.
+  // TiDB/MySQL execute updateMany atomically; a failed CAS retries with the newer cursor.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const config = await tx.crmRoutingConfig.findUnique({ where: { companyId }, select: { mode: true, lastAssignedUserId: true } });
+    if (!config || config.mode !== "round_robin") return { userId: null, mode: "manual" as const };
+    const members = await tx.crmRoutingMember.findMany({
+      where: { companyId, active: true, user: { companyId, status: "active" } }, orderBy: { position: "asc" },
+      select: { userId: true, user: { select: { roleRecord: { select: { companyId: true, permissions: { select: { permission: { select: { key: true } } } } } } } } },
+    });
+    const eligible = members.filter((member) => member.user.roleRecord.companyId === companyId && member.user.roleRecord.permissions.some(({ permission }) => permission.key === "crm.view" || permission.key === "crm.manage"));
+    if (!eligible.length) return { userId: null, mode: "round_robin" as const };
+    const previous = eligible.findIndex((member) => member.userId === config.lastAssignedUserId);
+    const selected = eligible[(previous + 1 + eligible.length) % eligible.length];
+    const claimed = await tx.crmRoutingConfig.updateMany({ where: { companyId, lastAssignedUserId: config.lastAssignedUserId }, data: { lastAssignedUserId: selected.userId } });
+    if (claimed.count === 1) return { userId: selected.userId, mode: "round_robin" as const };
+  }
+  throw Object.assign(new Error("Não foi possível coordenar a distribuição do lead."), { statusCode: 409, code: "ROUTING_CONFLICT" });
 }
 
 export async function ingestLead(input: LeadIntakeInput) {
