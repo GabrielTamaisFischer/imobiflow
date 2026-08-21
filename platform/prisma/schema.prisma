@@ -587,6 +587,7 @@ model Lead {
   propertyReference String?    @map("property_reference") @db.VarChar(220)
   notes             String?    @db.Text
   status            String     @default("open") @db.VarChar(40)
+  lostReason        String?    @map("lost_reason") @db.VarChar(500)
   budgetCents       Int?       @map("budget_cents")
   lastContactAt     DateTime?  @map("last_contact_at")
   nextFollowUpAt    DateTime?  @map("next_follow_up_at")

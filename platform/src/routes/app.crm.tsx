@@ -6,11 +6,13 @@ import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import {
   createLead,
+  listCrmUsers,
   listLeads,
   loadCrmPipeline,
   moveLeadToStage,
   updateLead,
   type CrmStage,
+  type CrmUser,
   type Lead,
 } from "@/product/crm";
 import { useSessionGuard } from "@/product/use-session-guard";
@@ -35,15 +37,24 @@ function CrmPage() {
   const [showForm, setShowForm] = useState(false);
   const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<Lead["status"]>("open");
+  const [users, setUsers] = useState<CrmUser[]>([]);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   async function refreshCrm() {
     setIsCrmLoading(true);
     setError(null);
 
     try {
-      const [pipelineResponse, leadsResponse] = await Promise.all([loadCrmPipeline(), listLeads()]);
+      const [pipelineResponse, leadsResponse, usersResponse] = await Promise.all([
+        loadCrmPipeline(),
+        listLeads({ status: statusFilter, search: search || undefined, page: 1, page_size: 25 }),
+        listCrmUsers(),
+      ]);
       setStages(pipelineResponse.stages);
       setLeads(leadsResponse.leads);
+      setUsers(usersResponse.users.filter((user) => user.status === "active"));
     } catch (crmError) {
       setError(crmError instanceof Error ? crmError.message : "Não foi possível carregar o CRM.");
     } finally {
@@ -55,7 +66,7 @@ function CrmPage() {
     if (!isLoading && session) {
       void refreshCrm();
     }
-  }, [isLoading, session]);
+  }, [isLoading, session, statusFilter]);
 
   const leadsByStage = useMemo(
     () =>
@@ -118,6 +129,14 @@ function CrmPage() {
           o fluxo. O CRM autenticado usa a API e o banco operacional da empresa.
         </div>
       ) : null}
+
+      <div className="mb-4 grid gap-2 rounded-lg border border-border bg-card p-3 md:grid-cols-[1fr_180px_auto]">
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar nome, e-mail ou telefone" className="h-9 rounded-md border border-input bg-background px-3 text-sm" />
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as Lead["status"])} className="h-9 rounded-md border border-input bg-background px-3 text-sm">
+          <option value="open">Abertos</option><option value="won">Ganhos</option><option value="lost">Perdidos</option>
+        </select>
+        <button type="button" onClick={() => void refreshCrm()} className="h-9 rounded-md border border-border px-3 text-sm font-medium">Pesquisar</button>
+      </div>
 
       {showForm ? (
         <LeadForm
@@ -187,6 +206,11 @@ function CrmPage() {
                         current.map((item) => (item.id === updatedLead.id ? updatedLead : item)),
                       )
                     }
+                    users={users}
+                    onOpen={() => setSelectedLead(lead)}
+                    onStatus={(status, reason) => void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
+                      setLeads((current) => statusFilter === response.lead.status ? current.map((item) => item.id === lead.id ? response.lead : item) : current.filter((item) => item.id !== lead.id));
+                    }).catch((statusError) => setError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o status."))}
                   />
                 ))}
                 {stage.leads.length === 0 ? (
@@ -199,8 +223,27 @@ function CrmPage() {
           ))}
         </section>
       )}
+      {selectedLead ? <LeadDetail lead={selectedLead} users={users} onClose={() => setSelectedLead(null)} onSaved={(lead) => { setSelectedLead(lead); setLeads((current) => current.map((item) => item.id === lead.id ? lead : item)); }} /> : null}
     </ModulePage>
   );
+}
+
+function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
+  const [isSaving, setIsSaving] = useState(false);
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="Detalhe do lead">
+    <form className="w-full max-w-lg space-y-3 rounded-lg border border-border bg-card p-5 shadow-xl" onSubmit={async (event) => {
+      event.preventDefault(); setIsSaving(true);
+      const form = new FormData(event.currentTarget);
+      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")) }).finally(() => setIsSaving(false));
+      onSaved(response.lead);
+    }}>
+      <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Detalhe do lead</h2><button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button></div>
+      <Field label="Nome" name="name" required placeholder={lead.name} /><Field label="E-mail" name="email" type="email" placeholder={lead.email ?? ""} /><Field label="Telefone" name="phone" placeholder={lead.phone ?? ""} /><Field label="Origem" name="source" placeholder={lead.source ?? ""} /><Field label="Orçamento" name="budget" placeholder={lead.budget_cents ? String(lead.budget_cents / 100) : ""} />
+      <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+      <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
+      <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button>
+    </form>
+  </div>;
 }
 
 function LeadForm({
@@ -371,12 +414,18 @@ function LeadCard({
   onDragStart,
   onMove,
   onUpdated,
+  users,
+  onOpen,
+  onStatus,
 }: {
   lead: Lead;
   stages: CrmStage[];
   onDragStart: () => void;
   onMove: (stageId: string) => void;
   onUpdated: (lead: Lead) => void;
+  users: CrmUser[];
+  onOpen: () => void;
+  onStatus: (status: Lead["status"], reason?: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -401,7 +450,7 @@ function LeadCard({
           <h3 className="truncate text-sm font-semibold">{lead.name}</h3>
           <p className="mt-1 text-xs text-muted-foreground">{interestLabels[lead.interest_type]}</p>
         </div>
-        <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <button type="button" onClick={onOpen} className="rounded p-1 text-muted-foreground hover:bg-muted" aria-label="Abrir detalhes do lead"><Search className="h-4 w-4 shrink-0" /></button>
       </div>
 
       <div className="mt-3 space-y-1 text-xs text-muted-foreground">
@@ -460,6 +509,11 @@ function LeadCard({
           Editar lead
         </button>
       )}
+      {lead.assigned_to ? <p className="mt-2 text-xs text-muted-foreground">Responsável: {users.find((user) => user.id === lead.assigned_to)?.name ?? "Usuário"}</p> : null}
+      {lead.status === "open" ? <div className="mt-2 flex gap-2">
+        <button type="button" onClick={() => onStatus("won")} className="h-8 flex-1 rounded border border-emerald-500/40 px-2 text-xs text-emerald-700">Marcar ganho</button>
+        <button type="button" onClick={() => { const reason = window.prompt("Motivo da perda"); if (reason?.trim()) onStatus("lost", reason.trim()); }} className="h-8 flex-1 rounded border border-destructive/40 px-2 text-xs text-destructive">Marcar perdido</button>
+      </div> : null}
 
       {lead.phone ? (
         <a

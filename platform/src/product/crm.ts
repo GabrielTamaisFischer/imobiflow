@@ -33,6 +33,7 @@ export type Lead = {
   source: string | null;
   interest_type: "sale" | "rent" | "both" | "not_defined";
   status: "open" | "won" | "lost" | "archived";
+  lost_reason: string | null;
   budget_cents: number | null;
   property_reference: string | null;
   notes: string | null;
@@ -53,7 +54,12 @@ export type LeadInput = {
   property_reference?: string;
   notes?: string;
   next_follow_up_at?: string;
+  assigned_to?: string;
+  status?: Lead["status"];
+  lost_reason?: string;
 };
+
+export type CrmUser = { id: string; name: string; email: string; role: string; status: string };
 
 export type LeadTask = {
   id: string;
@@ -87,10 +93,14 @@ export async function loadCrmPipeline() {
   });
 }
 
-export async function listLeads() {
-  if (isPreviewCrm()) return { leads: readPreviewLeads() };
+export async function listLeads(filters: Record<string, string | number | undefined> = {}) {
+  if (isPreviewCrm()) {
+    const preview = readPreviewLeads();
+    return { leads: preview, pagination: { page: 1, page_size: preview.length, total: preview.length, total_pages: 1, has_next: false, has_previous: false } };
+  }
 
-  return apiRequest<{ leads: Lead[] }>("/crm/leads", {
+  const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
+  return apiRequest<{ leads: Lead[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } }>(`/crm/leads${query.toString() ? `?${query}` : ""}`, {
     token: getStoredToken() ?? undefined,
   });
 }
@@ -123,6 +133,14 @@ export async function moveLeadToStage(leadId: string, stageId: string) {
     token: getStoredToken() ?? undefined,
     body: JSON.stringify({ stage_id: stageId }),
   });
+}
+
+export async function getLead(leadId: string) {
+  return apiRequest<{ lead: Lead }>(`/crm/leads/${leadId}`, { token: getStoredToken() ?? undefined });
+}
+
+export async function listCrmUsers() {
+  return apiRequest<{ users: CrmUser[] }>("/auth/users", { token: getStoredToken() ?? undefined });
 }
 
 export async function updateLead(leadId: string, input: Partial<LeadInput>) {
@@ -184,6 +202,7 @@ function createPreviewLead(input: LeadInput): Lead {
     source: input.source || null,
     interest_type: input.interest_type,
     status: "open",
+    lost_reason: null,
     budget_cents: input.budget_cents ?? null,
     property_reference: input.property_reference || null,
     notes: input.notes || null,

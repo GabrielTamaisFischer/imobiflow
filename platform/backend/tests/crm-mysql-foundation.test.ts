@@ -53,8 +53,14 @@ describe("CRM MySQL foundation", () => {
     expect(source).toContain("requireAuth, requireCompany, requireActiveSubscription");
     expect(source).toContain('requirePermission("crm.view")');
     expect(source).toContain('requirePermission("crm.manage")');
-    expect(source).toContain("where:{id:req.params.id,companyId}");
-    expect(source).toContain("where:{id:stageId,companyId,status:\"active\"}");
-    expect(source).toContain("where:{id:userId,companyId,status:\"active\"}");
+    expect(source).toContain('crmRouter.get("/leads/:id"');
+    expect(source).toContain("id: req.params.id, companyId: req.access!.company.id");
+    expect(source).toContain('id: stageId, companyId, status: "active"');
+    expect(source).toContain('id: userId, companyId, status: "active"');
+    expect(source).toContain("LOST_REASON_REQUIRED");
+    expect(source).toContain("lead.won");
+    expect(source).toContain("lead.lost");
+    expect(source).toContain("page_size");
+    expect(source).toContain("search");
   });
 });
