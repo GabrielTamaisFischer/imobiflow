@@ -168,7 +168,7 @@ export async function updateCrmRouting(input: { mode: "manual" | "round_robin"; 
 }
 
 export async function listCrmUsers() {
-  return apiRequest<{ users: CrmUser[] }>("/auth/users", { token: getStoredToken() ?? undefined });
+  return apiRequest<{ users: CrmUser[] }>("/crm/users", { token: getStoredToken() ?? undefined });
 }
 
 export async function updateLead(leadId: string, input: Partial<LeadInput>) {

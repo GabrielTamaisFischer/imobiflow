@@ -54,6 +54,8 @@ describe("CRM MySQL foundation", () => {
     expect(source).toContain('requirePermission("crm.view")');
     expect(source).toContain('requirePermission("crm.manage")');
     expect(source).toContain('crmRouter.get("/leads/:id"');
+    expect(source).toContain('crmRouter.get("/users"');
+    expect(source).toContain('roleRecord: { permissions: { some: { permission: { key: { in: ["crm.view", "crm.manage"] } } } } }');
     expect(source).toContain("id: req.params.id, companyId: req.access!.company.id");
     expect(source).toContain('id: stageId, companyId, status: "active"');
     expect(source).toContain('id: userId, companyId, status: "active"');
@@ -62,5 +64,13 @@ describe("CRM MySQL foundation", () => {
     expect(source).toContain("lead.lost");
     expect(source).toContain("page_size");
     expect(source).toContain("search");
+  });
+
+  it("uses the CRM-scoped assignee endpoint instead of the administrative users endpoint", async () => {
+    const source = await readFile(new URL("../../src/product/crm.ts", import.meta.url), "utf8");
+    const authSource = await readFile(new URL("../src/routes/auth.ts", import.meta.url), "utf8");
+    expect(source).toContain('apiRequest<{ users: CrmUser[] }>("/crm/users"');
+    expect(source).not.toContain('listCrmUsers() {\n  return apiRequest<{ users: CrmUser[] }>("/auth/users"');
+    expect(authSource).toContain('"/users",\n  requireAuth,\n  requireCompany,\n  requirePermission("users.manage")');
   });
 });

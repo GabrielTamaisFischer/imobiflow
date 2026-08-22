@@ -94,6 +94,21 @@ crmRouter.get("/pipeline", requirePermission("crm.view"), async (req: RequestWit
   try { res.json(await ensureDefaultCrmPipeline(req.access!.company.id, req.access!.appUser.id)); } catch (error) { next(error); }
 });
 
+crmRouter.get("/users", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const users = await getPrisma().appUser.findMany({
+      where: {
+        companyId: req.access!.company.id,
+        status: "active",
+        roleRecord: { permissions: { some: { permission: { key: { in: ["crm.view", "crm.manage"] } } } } },
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, role: true, status: true },
+    });
+    res.json({ users });
+  } catch (error) { next(error); }
+});
+
 crmRouter.get("/routing", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
