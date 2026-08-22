@@ -24,6 +24,7 @@ import {
   type LeadEvent,
 } from "@/product/crm";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { toDateTimeLocalValue, toIsoOrEmpty } from "@/product/crm-date";
 
 export const Route = createFileRoute("/app/crm")({
   component: CrmPage,
@@ -37,9 +38,11 @@ const interestLabels = {
 };
 function formatDate(value: string | null | undefined) { return value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "Não definido"; }
 function humanEvent(type: string, userName?: string | null) { const labels: Record<string, string> = { "lead.created": "Lead criado", "lead.received": "Lead recebido pelo Site", "lead.assigned": `Lead atribuído${userName ? ` a ${userName}` : ""}`, "lead.unassigned": "Responsável removido", "lead.contacted": "Contato registrado", "lead.stage_changed": "Lead movido no funil", "lead.won": "Lead marcado como ganho", "lead.lost": "Lead marcado como perdido" }; return labels[type] ?? "Atualização do lead"; }
+type LeadDetailData = Lead & { interests?: LeadInterest[]; activities?: LeadActivity[]; events?: LeadEvent[] };
 
 function CrmPage() {
   const { session, isLoading } = useSessionGuard();
+  const canManage = Boolean(session?.access.appUser?.permissions.includes("crm.manage"));
   const module = getModuleByKey("crm");
   const [stages, setStages] = useState<CrmStage[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -95,6 +98,7 @@ function CrmPage() {
   );
 
   async function handleMoveLead(leadId: string, stageId: string) {
+    if (!canManage) return;
     const currentLead = leads.find((lead) => lead.id === leadId);
     if (!currentLead || currentLead.stage_id === stageId) return;
 
@@ -161,7 +165,7 @@ function CrmPage() {
         <button type="button" onClick={() => void refreshCrm()} className="h-9 rounded-md border border-border px-3 text-sm font-medium">Pesquisar</button>
       </div>
 
-      {showForm ? (
+      {showForm && canManage ? (
         <LeadForm
           stages={stages}
           onCancel={() => setShowForm(false)}
@@ -189,7 +193,7 @@ function CrmPage() {
           title="Nenhum lead encontrado"
           description="O CRM começa vazio. Cadastre o primeiro lead real quando a operação comercial estiver pronta para usar o funil."
           actionLabel="Cadastrar lead"
-          onAction={() => setShowForm(true)}
+          onAction={canManage ? () => setShowForm(true) : undefined}
         />
       ) : (
         <section className="grid gap-4 xl:grid-cols-5">
@@ -197,12 +201,12 @@ function CrmPage() {
             <div
               key={stage.id}
               className="min-h-[360px] rounded-lg border border-border bg-card"
-              onDragOver={(event) => event.preventDefault()}
+              onDragOver={(event) => { if (canManage) event.preventDefault(); }}
               onDrop={(event) => {
                 event.preventDefault();
                 const leadId = event.dataTransfer.getData("text/plain") || draggingLeadId;
                 setDraggingLeadId(null);
-                if (leadId) void handleMoveLead(leadId, stage.id);
+                if (leadId && canManage) void handleMoveLead(leadId, stage.id);
               }}
             >
               <div className="border-b border-border p-4">
@@ -230,6 +234,7 @@ function CrmPage() {
                       )
                     }
                     users={users}
+                    canManage={canManage}
                     onOpen={async () => {
                       try {
                         const response = await getLead(lead.id);
@@ -238,9 +243,9 @@ function CrmPage() {
                         setError(detailError instanceof Error ? detailError.message : "Não foi possível abrir o lead.");
                       }
                     }}
-                    onStatus={(status, reason) => void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
+                    onStatus={(status, reason) => { if (!canManage) return; void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
                       setLeads((current) => statusFilter === response.lead.status ? current.map((item) => item.id === lead.id ? response.lead : item) : current.filter((item) => item.id !== lead.id));
-                    }).catch((statusError) => setError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o status."))}
+                    }).catch((statusError) => setError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o status.")); }}
                   />
                 ))}
                 {stage.leads.length === 0 ? (
@@ -253,7 +258,7 @@ function CrmPage() {
           ))}
         </section>
       )}
-      {selectedLead ? <LeadDetail lead={selectedLead} users={users} onClose={() => setSelectedLead(null)} onSaved={(lead) => { setSelectedLead((current) => current ? { ...current, ...lead } : lead); setLeads((current) => current.map((item) => item.id === lead.id ? lead : item)); }} /> : null}
+      {selectedLead ? <LeadDetail lead={selectedLead} users={users} canManage={canManage} onClose={() => setSelectedLead(null)} onSaved={(detail) => { setSelectedLead(detail); setLeads((current) => current.map((item) => item.id === detail.id ? detail : item)); }} /> : null}
     </ModulePage>
   );
 }
@@ -263,32 +268,32 @@ function RoutingPanel({ users, routing, onSaved, canManage }: { users: CrmUser[]
   return <div className="mb-4 rounded-lg border border-border bg-card p-4"><p className="font-semibold">Distribuição de leads</p><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "manual"} onChange={() => setMode("manual")} disabled={!canManage} /> Manual</label><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "round_robin"} onChange={() => setMode("round_robin")} disabled={!canManage} /> Automática — Round-robin</label>{mode === "round_robin" ? <div className="mt-3 space-y-2">{users.map((user) => <label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(user.id)} onChange={() => setSelected((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} disabled={!canManage} />{user.name}</label>)}</div> : null}{canManage ? <button type="button" onClick={async () => { try { await updateCrmRouting({ mode, user_ids: mode === "round_robin" ? selected : [] }); onSaved({ mode, user_ids: mode === "round_robin" ? selected : [] }); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar."); } }} className="mt-3 h-9 rounded border border-border px-3 text-sm">Salvar configuração</button> : <p className="mt-3 text-xs text-muted-foreground">Você pode visualizar, mas não alterar esta configuração.</p>}{error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}</div>;
 }
 
-function LeadDetail({ lead, users, onClose, onSaved }: { lead: Lead & { interests?: LeadInterest[]; activities?: LeadActivity[]; events?: LeadEvent[] }; users: CrmUser[]; onClose: () => void; onSaved: (lead: Lead) => void }) {
+function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDetailData; users: CrmUser[]; canManage: boolean; onClose: () => void; onSaved: (lead: LeadDetailData) => void }) {
   const [isSaving, setIsSaving] = useState(false);
   const [activityType, setActivityType] = useState("whatsapp");
   const [activityBody, setActivityBody] = useState("");
   const [activityError, setActivityError] = useState<string | null>(null);
   async function saveActivity() {
     setActivityError(null);
-    try { await createLeadActivity(lead.id, { type: activityType, body: activityBody }); const refreshed = await getLead(lead.id); onSaved(refreshed.lead); setActivityBody(""); } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar a atividade."); }
+    try { await createLeadActivity(lead.id, { type: activityType, body: activityBody }); const refreshed = await getLead(lead.id); onSaved({ ...refreshed.lead, interests: refreshed.interests, activities: refreshed.activities, events: refreshed.events }); setActivityBody(""); } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar a atividade."); }
   }
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="Detalhe do lead">
     <form className="w-full max-w-lg space-y-3 rounded-lg border border-border bg-card p-5 shadow-xl" onSubmit={async (event) => {
       event.preventDefault(); setIsSaving(true);
       const form = new FormData(event.currentTarget);
-      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")), next_follow_up_at: String(form.get("next_follow_up_at") || "") }).finally(() => setIsSaving(false));
-      onSaved(response.lead);
+      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")), next_follow_up_at: toIsoOrEmpty(String(form.get("next_follow_up_at") || "")) }).finally(() => setIsSaving(false));
+      onSaved({ ...response.lead, interests: lead.interests, activities: lead.activities, events: lead.events });
     }}>
       <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Detalhe do lead</h2><button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button></div>
-      <Field label="Nome" name="name" required placeholder={lead.name} /><Field label="E-mail" name="email" type="email" placeholder={lead.email ?? ""} /><Field label="Telefone" name="phone" placeholder={lead.phone ?? ""} /><Field label="Origem" name="source" placeholder={lead.source ?? ""} /><Field label="Orçamento" name="budget" placeholder={lead.budget_cents ? String(lead.budget_cents / 100) : ""} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" placeholder={lead.next_follow_up_at ?? ""} />
-      <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
-      <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
+      <Field label="Nome" name="name" required defaultValue={lead.name} disabled={!canManage} /><Field label="E-mail" name="email" type="email" defaultValue={lead.email ?? ""} disabled={!canManage} /><Field label="Telefone" name="phone" defaultValue={lead.phone ?? ""} disabled={!canManage} /><Field label="Origem" name="source" defaultValue={lead.source ?? ""} disabled={!canManage} /><Field label="Orçamento" name="budget" defaultValue={lead.budget_cents ? String(lead.budget_cents / 100) : ""} disabled={!canManage} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" defaultValue={toDateTimeLocalValue(lead.next_follow_up_at)} disabled={!canManage} />
+      <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} disabled={!canManage} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+      <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} disabled={!canManage} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
       {lead.interests?.length ? <section className="rounded border border-border bg-muted/30 p-3"><p className="text-sm font-semibold">Imóveis de interesse</p><div className="mt-2 space-y-2">{lead.interests.map((interest) => <div key={interest.id} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{interest.property_code ?? "Imóvel"}</span>{interest.property_title ? ` — ${interest.property_title}` : ""} · {interest.source}</div>)}</div></section> : null}
-      <div className="rounded border border-border p-3 space-y-2"><p className="text-sm font-semibold">Registrar atividade</p><select value={activityType} onChange={(event) => setActivityType(event.target.value)} className="h-9 w-full rounded border border-input bg-background px-2 text-sm"><option value="whatsapp">WhatsApp (registro manual)</option><option value="call">Ligação</option><option value="email">E-mail</option><option value="contact">Contato</option><option value="note">Nota</option></select><textarea value={activityBody} onChange={(event) => setActivityBody(event.target.value)} placeholder="Observação" className="w-full rounded border border-input px-2 py-2 text-sm" /><button type="button" onClick={() => void saveActivity()} className="h-9 rounded border border-border px-3 text-sm">Registrar atividade</button>{activityError ? <p className="text-xs text-destructive">{activityError}</p> : null}</div>
+      {canManage ? <div className="rounded border border-border p-3 space-y-2"><p className="text-sm font-semibold">Registrar atividade</p><select value={activityType} onChange={(event) => setActivityType(event.target.value)} className="h-9 w-full rounded border border-input bg-background px-2 text-sm"><option value="whatsapp">WhatsApp (registro manual)</option><option value="call">Ligação</option><option value="email">E-mail</option><option value="contact">Contato</option><option value="note">Nota</option></select><textarea value={activityBody} onChange={(event) => setActivityBody(event.target.value)} placeholder="Observação" className="w-full rounded border border-input px-2 py-2 text-sm" /><button type="button" onClick={() => void saveActivity()} className="h-9 rounded border border-border px-3 text-sm">Registrar atividade</button>{activityError ? <p className="text-xs text-destructive">{activityError}</p> : null}</div> : null}
       {lead.activities?.length ? <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Atividades recentes</p>{lead.activities.map((activity) => <p key={activity.id} className="mt-1 text-xs text-muted-foreground">{activity.type}: {activity.body ?? ""}</p>)}</section> : null}
       <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Timeline</p>{(lead.events ?? []).map((event) => <p key={event.id} className="mt-1 text-xs text-muted-foreground">{humanEvent(event.event_type, event.user_name)}</p>)}</section>
       <div className="text-xs text-muted-foreground">Primeiro contato: {formatDate(lead.first_contact_at)} · Último contato: {formatDate(lead.last_contact_at)} · Próximo follow-up: {formatDate(lead.next_follow_up_at)}</div>
-      <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button>
+      {canManage ? <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button> : null}
     </form>
   </div>;
 }
@@ -431,6 +436,8 @@ function Field({
   type = "text",
   required,
   placeholder,
+  defaultValue,
+  disabled,
   inputMode,
 }: {
   label: string;
@@ -438,6 +445,8 @@ function Field({
   type?: string;
   required?: boolean;
   placeholder?: string;
+  defaultValue?: string;
+  disabled?: boolean;
   inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
 }) {
   return (
@@ -448,6 +457,8 @@ function Field({
         type={type}
         required={required}
         placeholder={placeholder}
+        defaultValue={defaultValue}
+        disabled={disabled}
         inputMode={inputMode}
         className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
       />
@@ -462,6 +473,7 @@ function LeadCard({
   onMove,
   onUpdated,
   users,
+  canManage,
   onOpen,
   onStatus,
 }: {
@@ -471,6 +483,7 @@ function LeadCard({
   onMove: (stageId: string) => void;
   onUpdated: (lead: Lead) => void;
   users: CrmUser[];
+  canManage: boolean;
   onOpen: () => void;
   onStatus: (status: Lead["status"], reason?: string) => void;
 }) {
@@ -487,7 +500,7 @@ function LeadCard({
 
   return (
     <article
-      draggable
+      draggable={canManage}
       onDragStart={(event) => {
         event.dataTransfer.setData("text/plain", lead.id);
         onDragStart();
@@ -515,7 +528,7 @@ function LeadCard({
         </p>
       ) : null}
 
-      {isEditing ? (
+      {isEditing && canManage ? (
         <form
           className="mt-3 space-y-2 rounded-md border border-border bg-muted/30 p-2"
           onSubmit={async (event) => {
@@ -549,7 +562,7 @@ function LeadCard({
             <button type="button" onClick={() => setIsEditing(false)} className="h-8 rounded border border-border px-2 text-xs">Cancelar</button>
           </div>
         </form>
-      ) : (
+      ) : canManage ? (
         <button
           type="button"
           onClick={() => setIsEditing(true)}
@@ -557,13 +570,13 @@ function LeadCard({
         >
           Editar lead
         </button>
-      )}
+      ) : null}
       {lead.assigned_to ? <p className="mt-2 text-xs text-muted-foreground">Responsável: {users.find((user) => user.id === lead.assigned_to)?.name ?? "Usuário"}</p> : null}
-      {lead.status === "open" ? <div className="mt-2 flex gap-2">
+      {canManage && lead.status === "open" ? <div className="mt-2 flex gap-2">
         <button type="button" onClick={() => onStatus("won")} className="h-8 flex-1 rounded border border-emerald-500/40 px-2 text-xs text-emerald-700">Marcar ganho</button>
         <button type="button" onClick={() => setShowLossForm(true)} className="h-8 flex-1 rounded border border-destructive/40 px-2 text-xs text-destructive">Marcar perdido</button>
       </div> : null}
-      {showLossForm ? <div className="mt-2 rounded border border-destructive/30 p-2"><label className="text-xs">Motivo<select value={lossReason} onChange={(event) => setLossReason(event.target.value)} className="mt-1 h-8 w-full rounded border border-input bg-background px-2 text-xs"><option value="preço">Preço</option><option value="desistência">Desistência</option><option value="sem retorno">Sem retorno</option><option value="imóvel indisponível">Imóvel indisponível</option><option value="fechou com concorrente">Fechou com concorrente</option><option value="financiamento">Financiamento</option><option value="outro">Outro</option></select></label><div className="mt-2 flex gap-2"><button type="button" onClick={() => { onStatus("lost", lossReason); setShowLossForm(false); }} className="h-8 rounded bg-destructive px-3 text-xs text-white">Confirmar perda</button><button type="button" onClick={() => setShowLossForm(false)} className="h-8 rounded border px-3 text-xs">Cancelar</button></div></div> : null}
+      {canManage && showLossForm ? <div className="mt-2 rounded border border-destructive/30 p-2"><label className="text-xs">Motivo<select value={lossReason} onChange={(event) => setLossReason(event.target.value)} className="mt-1 h-8 w-full rounded border border-input bg-background px-2 text-xs"><option value="preço">Preço</option><option value="desistência">Desistência</option><option value="sem retorno">Sem retorno</option><option value="imóvel indisponível">Imóvel indisponível</option><option value="fechou com concorrente">Fechou com concorrente</option><option value="financiamento">Financiamento</option><option value="outro">Outro</option></select></label><div className="mt-2 flex gap-2"><button type="button" onClick={() => { onStatus("lost", lossReason); setShowLossForm(false); }} className="h-8 rounded bg-destructive px-3 text-xs text-white">Confirmar perda</button><button type="button" onClick={() => setShowLossForm(false)} className="h-8 rounded border px-3 text-xs">Cancelar</button></div></div> : null}
 
       {lead.phone ? (
         <a
@@ -578,7 +591,7 @@ function LeadCard({
         </a>
       ) : null}
 
-      <label className="mt-3 block text-xs text-muted-foreground">
+      {canManage ? <label className="mt-3 block text-xs text-muted-foreground">
         Mover para
         <select
           value={lead.stage_id ?? ""}
@@ -591,7 +604,7 @@ function LeadCard({
             </option>
           ))}
         </select>
-      </label>
+      </label> : null}
     </article>
   );
 }
