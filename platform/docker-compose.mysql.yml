@@ -1,0 +1,20 @@
+services:
+  imobiflow-mysql:
+    image: mysql:8.4
+    container_name: imobiflow-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: imobiflow
+      MYSQL_USER: imobiflow
+      MYSQL_PASSWORD: imobiflow_local_password
+      MYSQL_ROOT_PASSWORD: imobiflow_root_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - imobiflow_mysql_data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+volumes:
+  imobiflow_mysql_data:

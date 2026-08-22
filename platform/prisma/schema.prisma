@@ -1,0 +1,1132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id            String        @id @default(uuid()) @db.Char(36)
+  name          String        @db.VarChar(160)
+  document      String?       @db.VarChar(40)
+  phone         String?       @db.VarChar(40)
+  email         String?       @db.VarChar(160)
+  status        String        @default("active") @db.VarChar(40)
+  isSynthetic   Boolean       @default(false) @map("is_synthetic")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  users         AppUser[]
+  roles         Role[]
+  invitations   UserInvitation[]
+  authSessions  AuthSession[]
+  passwordResetTokens PasswordResetToken[]
+  authAuditLogs AuthAuditLog[]
+  subscriptions Subscription[]
+  accountProvisionings AccountProvisioning[]
+  owners        PropertyOwner[]
+  properties    Property[]
+  companySites  CompanySite[]
+  leads         Lead[]
+  crmPipelines  CrmPipeline[]
+  crmStages     CrmStage[]
+  leadEvents    LeadEvent[]
+  siteLeads     SiteLead[]
+  crmRoutingConfig CrmRoutingConfig?
+  crmRoutingMembers CrmRoutingMember[]
+  leadActivities LeadActivity[]
+  appointments  Appointment[]
+  importJobs    ImportJob[]
+  importRows    ImportRow[]
+
+  @@index([status])
+  @@map("companies")
+}
+
+model AppUser {
+  id            String        @id @default(uuid()) @db.Char(36)
+  companyId     String        @map("company_id") @db.Char(36)
+  roleId        String        @map("role_id") @db.Char(36)
+  name          String        @db.VarChar(160)
+  email         String        @unique(map: "users_email_key") @db.VarChar(180)
+  phone         String?       @db.VarChar(40)
+  passwordHash  String?       @map("password_hash") @db.VarChar(180)
+  status        String        @default("active") @db.VarChar(40)
+  isSynthetic   Boolean       @default(false) @map("is_synthetic")
+  role          String        @default("owner") @db.VarChar(60)
+  permissionsJson Json        @map("permissions_json")
+  passwordChangedAt DateTime? @map("password_changed_at")
+  lastLoginAt   DateTime?     @map("last_login_at")
+  failedLoginAttempts Int     @default(0) @map("failed_login_attempts")
+  lockedUntil   DateTime?     @map("locked_until")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  roleRecord    Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  authSessions  AuthSession[]
+  passwordResetTokens PasswordResetToken[]
+  invitationsSent UserInvitation[] @relation("InvitationSender")
+  authAuditLogs AuthAuditLog[] @relation("AuthAuditActor")
+  activatedProvisionings AccountProvisioning[] @relation("ProvisioningOwner")
+  routingMemberships CrmRoutingMember[]
+  assignedLeads Lead[] @relation("LeadAssignee")
+  leadActivities LeadActivity[]
+  routingLastAssigned CrmRoutingConfig[] @relation("RoutingLastAssigned")
+  leadEvents LeadEvent[]
+
+  @@unique([companyId, email])
+  @@index([companyId, status])
+  @@map("users")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Char(36)
+  key         String           @unique @db.VarChar(120)
+  description String           @db.VarChar(240)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Char(36)
+  companyId   String           @map("company_id") @db.Char(36)
+  name        String           @db.VarChar(100)
+  systemKey   String?          @map("system_key") @db.VarChar(60)
+  isSystem    Boolean          @default(false) @map("is_system")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  users       AppUser[]
+  invitations UserInvitation[]
+
+  @@unique([companyId, name])
+  @@unique([companyId, systemKey])
+  @@index([companyId, isSystem])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Char(36)
+  permissionId String     @map("permission_id") @db.Char(36)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserInvitation {
+  id          String    @id @default(uuid()) @db.Char(36)
+  companyId   String    @map("company_id") @db.Char(36)
+  roleId      String    @map("role_id") @db.Char(36)
+  invitedById String?   @map("invited_by") @db.Char(36)
+  email       String    @db.VarChar(180)
+  name        String?   @db.VarChar(160)
+  tokenHash   String    @unique @map("token_hash") @db.Char(64)
+  status      String    @default("pending") @db.VarChar(40)
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role        Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy   AppUser?  @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([email, status])
+  @@map("user_invitations")
+}
+
+model AuthSession {
+  id               String    @id @default(uuid()) @db.Char(36)
+  companyId        String    @map("company_id") @db.Char(36)
+  userId           String    @map("user_id") @db.Char(36)
+  accessTokenJti   String    @unique @map("access_token_jti") @db.Char(36)
+  refreshTokenHash String    @unique @map("refresh_token_hash") @db.Char(64)
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  lastUsedAt       DateTime? @map("last_used_at")
+  ipAddress        String?   @map("ip_address") @db.VarChar(80)
+  userAgent        String?   @map("user_agent") @db.VarChar(300)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user             AppUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId, revokedAt])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Char(36)
+  companyId String    @map("company_id") @db.Char(36)
+  userId    String    @map("user_id") @db.Char(36)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      AppUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId, usedAt])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model AuthAuditLog {
+  id           String   @id @default(uuid()) @db.Char(36)
+  companyId    String   @map("company_id") @db.Char(36)
+  actorUserId  String?  @map("actor_user_id") @db.Char(36)
+  action       String   @db.VarChar(120)
+  entityType   String   @map("entity_type") @db.VarChar(80)
+  entityId     String?  @map("entity_id") @db.Char(36)
+  metadataJson Json?    @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor        AppUser? @relation("AuthAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, entityType, entityId])
+  @@map("auth_audit_logs")
+}
+
+model Subscription {
+  id                     String    @id @default(uuid()) @db.Char(36)
+  companyId              String    @map("company_id") @db.Char(36)
+  planId                 String?   @map("plan_id") @db.Char(36)
+  status                 String    @default("PENDING") @db.VarChar(40)
+  planSlug               String?   @map("plan_slug") @db.VarChar(80)
+  billingProvider        String?   @map("billing_provider") @db.VarChar(60)
+  externalSubscriptionId String?   @map("external_subscription_id") @db.VarChar(180)
+  currentPeriodStart     DateTime? @map("current_period_start")
+  currentPeriodEnd       DateTime? @map("current_period_end")
+  graceEndsAt            DateTime? @map("grace_ends_at")
+  expiresAt              DateTime? @map("expires_at")
+  cancelledAt            DateTime? @map("cancelled_at")
+  isSynthetic            Boolean   @default(false) @map("is_synthetic")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  company                Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan                   Plan?     @relation(fields: [planId], references: [id], onDelete: Restrict)
+  activationProvisioning AccountProvisioning?
+
+  @@index([companyId, status])
+  @@index([planId, status])
+  @@unique([billingProvider, externalSubscriptionId])
+  @@map("subscriptions")
+}
+
+model Plan {
+  id              String   @id @default(uuid()) @db.Char(36)
+  slug            String   @unique @db.VarChar(80)
+  name            String   @db.VarChar(120)
+  description     String?  @db.VarChar(500)
+  billingInterval String   @default("monthly") @map("billing_interval") @db.VarChar(40)
+  priceCents      Int      @map("price_cents")
+  currency        String   @default("BRL") @db.Char(3)
+  featuresJson    Json?    @map("features_json")
+  active          Boolean  @default(true)
+  isSynthetic     Boolean  @default(false) @map("is_synthetic")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  subscriptions   Subscription[]
+  checkoutSessions CheckoutSession[]
+  accountProvisionings AccountProvisioning[]
+
+  @@index([active, isSynthetic, priceCents])
+  @@map("plans")
+}
+
+model CheckoutSession {
+  id                String    @id @default(uuid()) @db.Char(36)
+  planId            String    @map("plan_id") @db.Char(36)
+  provider          String    @db.VarChar(60)
+  externalSessionId String?   @map("external_session_id") @db.VarChar(180)
+  externalSubscriptionId String? @map("external_subscription_id") @db.VarChar(180)
+  purchaserEmail    String    @map("purchaser_email") @db.VarChar(180)
+  status            String    @default("PENDING") @db.VarChar(40)
+  amountCents       Int       @map("amount_cents")
+  currency          String    @default("BRL") @db.Char(3)
+  checkoutUrl       String?   @map("checkout_url") @db.VarChar(1200)
+  expiresAt         DateTime? @map("expires_at")
+  confirmedAt       DateTime? @map("confirmed_at")
+  isSynthetic       Boolean   @default(false) @map("is_synthetic")
+  metadataJson      Json?     @map("metadata_json")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  plan              Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  paymentEvents     PaymentEvent[]
+  provisioning      AccountProvisioning?
+
+  @@unique([provider, externalSessionId])
+  @@index([purchaserEmail, status, createdAt])
+  @@index([planId, status])
+  @@map("checkout_sessions")
+}
+
+model PaymentEvent {
+  id                String   @id @default(uuid()) @db.Char(36)
+  checkoutSessionId String   @map("checkout_session_id") @db.Char(36)
+  provider          String   @db.VarChar(60)
+  externalEventId   String   @map("external_event_id") @db.VarChar(180)
+  eventType         String   @map("event_type") @db.VarChar(100)
+  status            String   @db.VarChar(40)
+  amountCents       Int?     @map("amount_cents")
+  currency          String?  @db.Char(3)
+  payloadHash       String   @map("payload_hash") @db.Char(64)
+  occurredAt        DateTime @map("occurred_at")
+  processedAt       DateTime? @map("processed_at")
+  isSynthetic       Boolean  @default(false) @map("is_synthetic")
+  metadataJson      Json?    @map("metadata_json")
+  createdAt         DateTime @default(now()) @map("created_at")
+  checkoutSession   CheckoutSession @relation(fields: [checkoutSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalEventId])
+  @@index([checkoutSessionId, status])
+  @@map("payment_events")
+}
+
+model AccountProvisioning {
+  id                String    @id @default(uuid()) @db.Char(36)
+  checkoutSessionId String    @unique @map("checkout_session_id") @db.Char(36)
+  planId            String    @map("plan_id") @db.Char(36)
+  purchaserEmail    String    @map("purchaser_email") @db.VarChar(180)
+  tokenHash         String    @unique @map("token_hash") @db.Char(64)
+  status            String    @default("READY") @db.VarChar(40)
+  expiresAt         DateTime  @map("expires_at")
+  activatedAt       DateTime? @map("activated_at")
+  companyId         String?   @unique @map("company_id") @db.Char(36)
+  ownerUserId       String?   @unique @map("owner_user_id") @db.Char(36)
+  subscriptionId    String?   @unique @map("subscription_id") @db.Char(36)
+  isSynthetic       Boolean   @default(false) @map("is_synthetic")
+  metadataJson      Json?     @map("metadata_json")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  checkoutSession   CheckoutSession @relation(fields: [checkoutSessionId], references: [id], onDelete: Cascade)
+  plan              Plan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  company           Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner             AppUser?  @relation("ProvisioningOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([purchaserEmail, status, expiresAt])
+  @@map("account_provisionings")
+}
+
+model PropertyOwner {
+  id                  String       @id @default(uuid()) @db.Char(36)
+  companyId           String       @map("company_id") @db.Char(36)
+  createdBy           String?      @map("created_by") @db.Char(36)
+  ownerType           String       @default("individual") @map("owner_type") @db.VarChar(40)
+  clientType          String       @default("proprietario") @map("client_type") @db.VarChar(40)
+  name                String       @db.VarChar(180)
+  document            String?      @db.VarChar(40)
+  email               String?      @db.VarChar(180)
+  phone               String?      @db.VarChar(40)
+  whatsapp            String?      @db.VarChar(40)
+  residentialPhone    String?      @map("residential_phone") @db.VarChar(40)
+  commercialPhone     String?      @map("commercial_phone") @db.VarChar(40)
+  addressJson         Json         @map("address_json")
+  notes               String?      @db.Text
+  status              String       @default("active") @db.VarChar(40)
+  portalToken         String?      @map("portal_token") @db.VarChar(120)
+  portalEnabled       Boolean      @default(false) @map("portal_enabled")
+  portalLastAccessAt  DateTime?    @map("portal_last_access_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+  company             Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  properties          Property[]
+
+  @@index([companyId, status])
+  @@index([companyId, document])
+  @@map("property_owners")
+}
+
+model Property {
+  id                      String          @id @default(uuid()) @db.Char(36)
+  companyId               String          @map("company_id") @db.Char(36)
+  ownerId                 String?         @map("owner_id") @db.Char(36)
+  createdBy               String?         @map("created_by") @db.Char(36)
+  code                    String?         @db.VarChar(40)
+  title                   String          @db.VarChar(220)
+  description             String?         @db.Text
+  propertyType            String          @default("apartment") @map("property_type") @db.VarChar(40)
+  operation               String          @default("sale") @db.VarChar(40)
+  status                  String          @default("draft") @db.VarChar(40)
+  street                  String?         @db.VarChar(180)
+  number                  String?         @db.VarChar(40)
+  complement              String?         @db.VarChar(120)
+  neighborhood            String?         @db.VarChar(120)
+  city                    String?         @db.VarChar(120)
+  state                   String?         @db.VarChar(40)
+  zipCode                 String?         @map("zip_code") @db.VarChar(20)
+  country                 String?         @db.VarChar(80)
+  latitude                Float?
+  longitude               Float?
+  condominiumName         String?         @map("condominium_name") @db.VarChar(160)
+  nearbyHighways          Json            @map("nearby_highways")
+  responsibleUserId       String?         @map("responsible_user_id") @db.Char(36)
+  captureJson             Json            @map("capture_json")
+  primaryDetailsJson      Json            @map("primary_details_json")
+  measurementsJson        Json            @map("measurements_json")
+  salePriceCents          Int?            @map("sale_price_cents")
+  rentPriceCents          Int?            @map("rent_price_cents")
+  condominiumFeeCents     Int?            @map("condominium_fee_cents")
+  iptuCents               Int?            @map("iptu_cents")
+  commercialTermsJson     Json            @map("commercial_terms_json")
+  featuresJson            Json            @map("features_json")
+  amenityGroupsJson       Json            @map("amenity_groups_json")
+  videosJson              Json            @map("videos_json")
+  publicationSettingsJson Json            @map("publication_settings_json")
+  descriptionTemplateKey  String?         @map("description_template_key") @db.VarChar(100)
+  privateArea             Float?          @map("private_area")
+  totalArea               Float?          @map("total_area")
+  bedrooms                Int?
+  bathrooms               Int?
+  suites                  Int?
+  parkingSpaces           Int?            @map("parking_spaces")
+  publishedAt             DateTime?       @map("published_at")
+  siteFeatured            Boolean         @default(false) @map("site_featured")
+  importSource            String?         @map("import_source") @db.VarChar(80)
+  importExternalId        String?         @map("import_external_id") @db.VarChar(180)
+  importJobId             String?         @map("import_job_id") @db.Char(36)
+  importedAt              DateTime?       @map("imported_at")
+  createdAt               DateTime        @default(now()) @map("created_at")
+  updatedAt               DateTime        @updatedAt @map("updated_at")
+  company                 Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner                   PropertyOwner?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  media                   PropertyMedia[]
+  siteLeads               SiteLead[]
+  appointments            Appointment[]
+  importJob               ImportJob?      @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+  importRows              ImportRow[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status, publishedAt])
+  @@index([companyId, operation])
+  @@index([companyId, city, neighborhood])
+  @@index([companyId, importSource, importExternalId])
+  @@index([companyId, importJobId])
+  @@index([companyId, createdAt, id])
+  @@index([companyId, propertyType])
+  @@index([companyId, status, siteFeatured, publishedAt])
+  @@map("properties")
+}
+
+model PropertyOwnerLink {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String   @map("company_id") @db.Char(36)
+  propertyId  String   @map("property_id") @db.Char(36)
+  ownerId     String   @map("owner_id") @db.Char(36)
+  isMainOwner Boolean  @default(false) @map("is_main_owner")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([companyId, propertyId, ownerId])
+  @@index([companyId, propertyId])
+  @@map("property_owner_links")
+}
+
+model PropertyMedia {
+  id            String    @id @default(uuid()) @db.Char(36)
+  companyId     String    @map("company_id") @db.Char(36)
+  propertyId    String    @map("property_id") @db.Char(36)
+  mediaType     String    @default("photo") @map("media_type") @db.VarChar(40)
+  url           String    @db.VarChar(1200)
+  caption       String?   @db.VarChar(240)
+  position      Int       @default(0)
+  storageBucket String?   @map("storage_bucket") @db.VarChar(160)
+  storagePath   String?   @map("storage_path") @db.VarChar(700)
+  mimeType      String?   @map("mime_type") @db.VarChar(120)
+  fileSize      Int?      @map("file_size")
+  isCover       Boolean   @default(false) @map("is_cover")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  property      Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, propertyId, position])
+  @@map("property_media")
+}
+
+model StoredFile {
+  id               String   @id @default(uuid()) @db.Char(36)
+  companyId        String   @map("company_id") @db.Char(36)
+  entityType       String   @map("entity_type") @db.VarChar(80)
+  entityId         String   @map("entity_id") @db.Char(36)
+  provider         String   @db.VarChar(60)
+  publicId         String   @map("public_id") @db.VarChar(700)
+  resourceType     String   @map("resource_type") @db.VarChar(40)
+  secureUrl        String   @map("secure_url") @db.VarChar(1200)
+  originalFilename String   @map("original_filename") @db.VarChar(240)
+  mimeType         String   @map("mime_type") @db.VarChar(120)
+  sizeBytes        Int?     @map("size_bytes")
+  width            Int?
+  height           Int?
+  format           String?  @db.VarChar(40)
+  createdAt        DateTime @default(now()) @map("created_at")
+  uploadedBy       String?  @map("uploaded_by") @db.Char(36)
+  isTestData       Boolean  @default(false) @map("is_test_data")
+  testBatchId      String?  @map("test_batch_id") @db.VarChar(120)
+  sourceUrl        String?  @map("source_url") @db.VarChar(1200)
+  importJobId      String?  @map("import_job_id") @db.Char(36)
+  importSource     String?  @map("import_source") @db.VarChar(80)
+  metadataJson     Json?    @map("metadata_json")
+
+  @@unique([provider, publicId])
+  @@index([companyId, entityType, entityId])
+  @@index([companyId, isTestData, testBatchId])
+  @@index([companyId, importJobId])
+  @@map("stored_files")
+}
+
+model ImportJob {
+  id                String      @id @default(uuid()) @db.Char(36)
+  companyId         String      @map("company_id") @db.Char(36)
+  createdBy         String?     @map("created_by") @db.Char(36)
+  importType        String      @default("owners_properties") @map("import_type") @db.VarChar(40)
+  sourceType        String      @map("source_type") @db.VarChar(40)
+  sourceName        String      @map("source_name") @db.VarChar(240)
+  mode              String      @default("test") @db.VarChar(20)
+  status            String      @default("PENDING") @db.VarChar(40)
+  totalRows         Int         @default(0) @map("total_rows")
+  processedRows     Int         @default(0) @map("processed_rows")
+  importedRows      Int         @default(0) @map("imported_rows")
+  updatedRows       Int         @default(0) @map("updated_rows")
+  skippedRows       Int         @default(0) @map("skipped_rows")
+  duplicateRows     Int         @default(0) @map("duplicate_rows")
+  failedRows        Int         @default(0) @map("failed_rows")
+  importedPhotos    Int         @default(0) @map("imported_photos")
+  failedPhotos      Int         @default(0) @map("failed_photos")
+  batchSize         Int         @default(25) @map("batch_size")
+  nextCursor        Int         @default(1) @map("next_cursor")
+  confirmFullImport Boolean     @default(false) @map("confirm_full_import")
+  mappingJson       Json        @map("mapping_json")
+  metadataJson      Json        @map("metadata_json")
+  startedAt         DateTime?   @map("started_at")
+  finishedAt        DateTime?   @map("finished_at")
+  lastError         String?     @map("last_error") @db.Text
+  lockToken         String?     @map("lock_token") @db.Char(36)
+  lockExpiresAt     DateTime?   @map("lock_expires_at")
+  rolledBackAt      DateTime?   @map("rolled_back_at")
+  rollbackJson      Json?       @map("rollback_json")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  rows              ImportRow[]
+  properties        Property[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, updatedAt])
+  @@map("import_jobs")
+}
+
+model ImportRow {
+  id                String      @id @default(uuid()) @db.Char(36)
+  importJobId       String      @map("import_job_id") @db.Char(36)
+  companyId         String      @map("company_id") @db.Char(36)
+  rowNumber         Int         @map("row_number")
+  externalId        String?     @map("external_id") @db.VarChar(180)
+  status            String      @default("PENDING") @db.VarChar(40)
+  action            String?     @db.VarChar(40)
+  propertyId        String?     @map("property_id") @db.Char(36)
+  ownerId           String?     @map("owner_id") @db.Char(36)
+  errorCode         String?     @map("error_code") @db.VarChar(100)
+  errorMessage      String?     @map("error_message") @db.Text
+  sourcePayloadJson Json        @map("source_payload_json")
+  mappedDataJson    Json        @map("mapped_data_json")
+  processedAt       DateTime?   @map("processed_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+  job               ImportJob   @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  company           Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property          Property?   @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@unique([importJobId, rowNumber])
+  @@index([companyId, importJobId, status, rowNumber])
+  @@index([companyId, externalId])
+  @@map("import_rows")
+}
+
+model CompanySite {
+  id            String     @id @default(uuid()) @db.Char(36)
+  companyId     String     @map("company_id") @db.Char(36)
+  createdBy     String?    @map("created_by") @db.Char(36)
+  slug          String     @db.VarChar(100)
+  customDomain  String?    @map("custom_domain") @db.VarChar(180)
+  status        String     @default("draft") @db.VarChar(40)
+  brandName     String     @map("brand_name") @db.VarChar(180)
+  headline      String?    @db.VarChar(280)
+  description   String?    @db.Text
+  phone         String?    @db.VarChar(40)
+  whatsapp      String?    @db.VarChar(40)
+  email         String?    @db.VarChar(180)
+  logoUrl       String?    @map("logo_url") @db.VarChar(900)
+  primaryColor  String     @default("#c8a24b") @map("primary_color") @db.VarChar(40)
+  settingsJson  Json       @map("settings_json")
+  seoJson       Json       @map("seo_json")
+  publishedAt   DateTime?  @map("published_at")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+  company       Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  siteLeads     SiteLead[]
+
+  @@unique([companyId, slug])
+  @@unique([customDomain])
+  @@index([slug, status])
+  @@index([companyId, status])
+  @@map("company_sites")
+}
+
+model Lead {
+  id                String     @id @default(uuid()) @db.Char(36)
+  companyId         String     @map("company_id") @db.Char(36)
+  stageId           String?    @map("stage_id") @db.Char(36)
+  assignedTo        String?    @map("assigned_to") @db.Char(36)
+  createdBy         String?    @map("created_by") @db.Char(36)
+  name              String     @db.VarChar(180)
+  email             String?    @db.VarChar(180)
+  emailNormalized   String?    @map("email_normalized") @db.VarChar(180)
+  phone             String?    @db.VarChar(40)
+  phoneNormalized   String?    @map("phone_normalized") @db.VarChar(40)
+  source            String     @default("site") @db.VarChar(80)
+  interestType      String     @default("not_defined") @map("interest_type") @db.VarChar(60)
+  propertyReference String?    @map("property_reference") @db.VarChar(220)
+  notes             String?    @db.Text
+  status            String     @default("open") @db.VarChar(40)
+  lostReason        String?    @map("lost_reason") @db.VarChar(500)
+  budgetCents       Int?       @map("budget_cents")
+  lastContactAt     DateTime?  @map("last_contact_at")
+  firstContactAt    DateTime?  @map("first_contact_at")
+  nextFollowUpAt    DateTime?  @map("next_follow_up_at")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+  company           Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignee          AppUser?   @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
+  stage             CrmStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  events            LeadEvent[]
+  siteLeads         SiteLead[]
+  activities        LeadActivity[]
+
+  @@index([companyId, source, createdAt])
+  @@index([companyId, stageId, status, createdAt])
+  @@index([companyId, emailNormalized, status])
+  @@index([companyId, phoneNormalized, status])
+  @@map("leads")
+}
+
+model CrmPipeline {
+  id        String     @id @default(uuid()) @db.Char(36)
+  companyId String     @map("company_id") @db.Char(36)
+  name      String     @db.VarChar(160)
+  isDefault Boolean    @default(false) @map("is_default")
+  status    String     @default("active") @db.VarChar(40)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stages    CrmStage[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isDefault, status])
+  @@map("crm_pipelines")
+}
+
+model CrmStage {
+  id          String      @id @default(uuid()) @db.Char(36)
+  companyId   String      @map("company_id") @db.Char(36)
+  pipelineId  String      @map("pipeline_id") @db.Char(36)
+  name        String      @db.VarChar(120)
+  position    Int
+  probability Int         @default(0)
+  color       String?     @db.VarChar(32)
+  status      String      @default("active") @db.VarChar(40)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  pipeline    CrmPipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads       Lead[]
+
+  @@unique([pipelineId, position])
+  @@unique([pipelineId, name])
+  @@index([companyId, pipelineId, status, position])
+  @@map("crm_stages")
+}
+
+model LeadEvent {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String   @map("company_id") @db.Char(36)
+  leadId      String   @map("lead_id") @db.Char(36)
+  userId      String?  @map("user_id") @db.Char(36)
+  eventType   String   @map("event_type") @db.VarChar(100)
+  payloadJson Json     @map("payload_json")
+  createdAt   DateTime @default(now()) @map("created_at")
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user        AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, leadId, createdAt])
+  @@map("lead_events")
+}
+
+model SiteLead {
+  id          String       @id @default(uuid()) @db.Char(36)
+  companyId   String       @map("company_id") @db.Char(36)
+  siteId      String?      @map("site_id") @db.Char(36)
+  propertyId  String?      @map("property_id") @db.Char(36)
+  leadId      String?      @map("lead_id") @db.Char(36)
+  name        String       @db.VarChar(180)
+  email       String?      @db.VarChar(180)
+  phone       String?      @db.VarChar(40)
+  message     String?      @db.Text
+  sourceUrl   String?      @map("source_url") @db.VarChar(900)
+  ipAddress   String?      @map("ip_address") @db.VarChar(80)
+  userAgent   String?      @map("user_agent") @db.VarChar(300)
+  metadata    Json
+  createdAt   DateTime     @default(now()) @map("created_at")
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  site        CompanySite? @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  property    Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  lead        Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, siteId, createdAt])
+  @@index([companyId, propertyId])
+  @@map("site_leads")
+}
+
+model CrmRoutingConfig {
+  id                String   @id @default(uuid()) @db.Char(36)
+  companyId         String   @unique @map("company_id") @db.Char(36)
+  mode              String   @default("manual") @db.VarChar(30)
+  lastAssignedUserId String? @map("last_assigned_user_id") @db.Char(36)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lastAssignedUser  AppUser? @relation("RoutingLastAssigned", fields: [lastAssignedUserId], references: [id], onDelete: SetNull)
+
+  @@map("crm_routing_configs")
+}
+
+model CrmRoutingMember {
+  id        String   @id @default(uuid()) @db.Char(36)
+  companyId String   @map("company_id") @db.Char(36)
+  userId    String   @map("user_id") @db.Char(36)
+  position  Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user      AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@unique([companyId, position])
+  @@index([companyId, active, position])
+  @@map("crm_routing_members")
+}
+
+model LeadActivity {
+  id         String   @id @default(uuid()) @db.Char(36)
+  companyId  String   @map("company_id") @db.Char(36)
+  leadId     String   @map("lead_id") @db.Char(36)
+  userId     String?  @map("user_id") @db.Char(36)
+  type       String   @db.VarChar(30)
+  body       String?  @db.Text
+  occurredAt DateTime @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user       AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, leadId, occurredAt])
+  @@map("lead_activities")
+}
+
+model Appointment {
+  id              String    @id @default(uuid()) @db.Char(36)
+  companyId       String    @map("company_id") @db.Char(36)
+  propertyId      String?   @map("property_id") @db.Char(36)
+  createdBy       String?   @map("created_by") @db.Char(36)
+  appointmentType String    @default("visit") @map("appointment_type") @db.VarChar(60)
+  title           String    @db.VarChar(180)
+  description     String?   @db.Text
+  locationText    String?   @map("location_text") @db.VarChar(240)
+  startsAt        DateTime  @map("starts_at")
+  endsAt          DateTime  @map("ends_at")
+  reminderAt      DateTime? @map("reminder_at")
+  metadata        Json
+  status          String    @default("scheduled") @db.VarChar(40)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property        Property? @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, propertyId])
+  @@index([companyId, startsAt])
+  @@map("appointments")
+}
+
+enum WebsiteStatus {
+  draft
+  published
+  offline
+  archived
+}
+
+enum WebsitePageStatus {
+  draft
+  published
+  hidden
+  archived
+}
+
+enum WebsitePageType {
+  home
+  property
+  about
+  contact
+  landing
+  blog
+  terms
+  privacy
+  custom
+}
+
+enum WebsiteAssetType {
+  image
+  video
+  document
+  icon
+  font
+  other
+}
+
+enum WebsiteAssetStatus {
+  pending_upload
+  uploaded
+  failed
+  deleted
+}
+
+enum WebsiteDomainStatus {
+  pending
+  verified
+  failed
+  disabled
+}
+
+enum WebsitePublishStatus {
+  queued
+  success
+  failed
+}
+
+enum WebsiteAuditAction {
+  website_created
+  website_updated
+  website_deleted
+  website_cloned
+  page_created
+  page_updated
+  page_deleted
+  section_created
+  section_updated
+  section_deleted
+  component_created
+  component_updated
+  component_deleted
+  asset_upload_requested
+  asset_uploaded
+  asset_deleted
+  domain_created
+  domain_updated
+  domain_deleted
+  seo_updated
+  code_editor_opened
+  code_file_selected
+  code_file_created
+  code_file_updated
+  code_file_deleted
+  code_editor_saved
+  site_settings_saved
+  site_published
+  site_unpublished
+  site_property_published
+  site_property_unpublished
+}
+
+model Website {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  templateId      String?             @map("template_id") @db.Char(36)
+  name            String              @db.VarChar(160)
+  slug            String              @db.VarChar(100)
+  status          WebsiteStatus       @default(draft)
+  settingsJson    Json                @map("settings_json")
+  themeJson       Json                @map("theme_json")
+  createdById     String?             @map("created_by_id") @db.Char(36)
+  updatedById     String?             @map("updated_by_id") @db.Char(36)
+  publishedAt     DateTime?           @map("published_at")
+  deletedAt       DateTime?           @map("deleted_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  template        WebsiteTemplate?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  pages           WebsitePage[]
+  assets          WebsiteAsset[]
+  domains         WebsiteDomain[]
+  seo             WebsiteSeo[]
+  versions        WebsiteVersion[]
+  publishLogs     WebsitePublishLog[]
+  auditLogs       WebsiteAuditLog[]
+  codeFiles       WebsiteCodeFile[]
+
+  @@unique([companyId, slug])
+  @@index([companyId, status])
+  @@map("websites")
+}
+
+model WebsitePage {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  websiteId       String              @map("website_id") @db.Char(36)
+  title           String              @db.VarChar(160)
+  slug            String              @db.VarChar(120)
+  pageType        WebsitePageType     @default(custom) @map("page_type")
+  status          WebsitePageStatus   @default(draft)
+  sortOrder       Int                 @default(0) @map("sort_order")
+  seoJson         Json                @map("seo_json")
+  settingsJson    Json                @map("settings_json")
+  createdById     String?             @map("created_by_id") @db.Char(36)
+  updatedById     String?             @map("updated_by_id") @db.Char(36)
+  deletedAt       DateTime?           @map("deleted_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  website         Website             @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  sections        WebsiteSection[]
+  seo             WebsiteSeo[]
+  auditLogs       WebsiteAuditLog[]
+  codeFiles       WebsiteCodeFile[]
+
+  @@unique([websiteId, slug])
+  @@index([companyId, websiteId, status])
+  @@map("website_pages")
+}
+
+model WebsiteSection {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  websiteId       String              @map("website_id") @db.Char(36)
+  pageId          String              @map("page_id") @db.Char(36)
+  name            String              @db.VarChar(160)
+  sectionType     String              @map("section_type") @db.VarChar(80)
+  sortOrder       Int                 @default(0) @map("sort_order")
+  propsJson       Json                @map("props_json")
+  styleJson       Json                @map("style_json")
+  responsiveJson  Json                @map("responsive_json")
+  animationJson   Json                @map("animation_json")
+  isVisible       Boolean             @default(true) @map("is_visible")
+  deletedAt       DateTime?           @map("deleted_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  page            WebsitePage         @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  components      WebsiteComponent[]
+  auditLogs       WebsiteAuditLog[]
+
+  @@index([companyId, websiteId, pageId])
+  @@index([pageId, sortOrder])
+  @@map("website_sections")
+}
+
+model WebsiteComponent {
+  id                  String          @id @default(uuid()) @db.Char(36)
+  companyId           String          @map("company_id") @db.Char(36)
+  websiteId           String          @map("website_id") @db.Char(36)
+  pageId              String          @map("page_id") @db.Char(36)
+  sectionId           String          @map("section_id") @db.Char(36)
+  parentComponentId   String?         @map("parent_component_id") @db.Char(36)
+  name                String          @db.VarChar(160)
+  componentType       String          @map("component_type") @db.VarChar(80)
+  sortOrder           Int             @default(0) @map("sort_order")
+  propsJson           Json            @map("props_json")
+  styleJson           Json            @map("style_json")
+  responsiveJson      Json            @map("responsive_json")
+  animationJson       Json            @map("animation_json")
+  interactionJson     Json            @map("interaction_json")
+  isVisible           Boolean         @default(true) @map("is_visible")
+  isLocked            Boolean         @default(false) @map("is_locked")
+  deletedAt           DateTime?       @map("deleted_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+  section             WebsiteSection  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  auditLogs           WebsiteAuditLog[]
+
+  @@index([companyId, websiteId, pageId, sectionId])
+  @@index([sectionId, sortOrder])
+  @@map("website_components")
+}
+
+model WebsiteTemplate {
+  id              String      @id @default(uuid()) @db.Char(36)
+  companyId       String      @map("company_id") @db.Char(36)
+  name            String      @db.VarChar(160)
+  slug            String      @db.VarChar(100)
+  description     String?     @db.Text
+  category        String      @default("system") @db.VarChar(80)
+  thumbnailUrl    String?     @map("thumbnail_url") @db.VarChar(500)
+  structureJson   Json        @map("structure_json")
+  themeJson       Json        @map("theme_json")
+  isSystem        Boolean     @default(false) @map("is_system")
+  isActive        Boolean     @default(true) @map("is_active")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  websites        Website[]
+
+  @@unique([companyId, slug])
+  @@index([companyId, isActive])
+  @@map("website_templates")
+}
+
+model WebsiteAsset {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  websiteId       String?             @map("website_id") @db.Char(36)
+  assetType       WebsiteAssetType    @default(other) @map("asset_type")
+  status          WebsiteAssetStatus  @default(pending_upload)
+  fileName        String              @map("file_name") @db.VarChar(220)
+  mimeType        String              @map("mime_type") @db.VarChar(120)
+  fileSize        Int?                @map("file_size")
+  storageProvider String              @default("cloudflare_r2") @map("storage_provider") @db.VarChar(60)
+  storageBucket   String?             @map("storage_bucket") @db.VarChar(160)
+  storageKey      String              @map("storage_key") @db.VarChar(700)
+  publicUrl       String?             @map("public_url") @db.VarChar(900)
+  metadataJson    Json                @map("metadata_json")
+  createdById     String?             @map("created_by_id") @db.Char(36)
+  deletedAt       DateTime?           @map("deleted_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  website         Website?            @relation(fields: [websiteId], references: [id], onDelete: SetNull)
+  auditLogs       WebsiteAuditLog[]
+
+  @@index([companyId, websiteId, assetType])
+  @@map("website_assets")
+}
+
+model WebsiteDomain {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  websiteId       String              @map("website_id") @db.Char(36)
+  domain          String              @db.VarChar(180)
+  status          WebsiteDomainStatus @default(pending)
+  isPrimary       Boolean             @default(false) @map("is_primary")
+  dnsJson         Json                @map("dns_json")
+  verifiedAt      DateTime?           @map("verified_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+  website         Website             @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, domain])
+  @@index([websiteId, status])
+  @@map("website_domains")
+}
+
+model WebsiteSeo {
+  id              String      @id @default(uuid()) @db.Char(36)
+  companyId       String      @map("company_id") @db.Char(36)
+  websiteId       String      @map("website_id") @db.Char(36)
+  pageId          String?     @map("page_id") @db.Char(36)
+  title           String?     @db.VarChar(180)
+  description     String?     @db.VarChar(320)
+  canonicalUrl    String?     @map("canonical_url") @db.VarChar(500)
+  ogImageAssetId  String?     @map("og_image_asset_id") @db.Char(36)
+  schemaJson      Json        @map("schema_json")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  website         Website     @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  page            WebsitePage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, websiteId, pageId])
+  @@map("website_seo")
+}
+
+model WebsiteVersion {
+  id              String      @id @default(uuid()) @db.Char(36)
+  companyId       String      @map("company_id") @db.Char(36)
+  websiteId       String      @map("website_id") @db.Char(36)
+  versionNumber   Int         @map("version_number")
+  label           String?     @db.VarChar(160)
+  snapshotJson    Json        @map("snapshot_json")
+  createdById     String?     @map("created_by_id") @db.Char(36)
+  createdAt       DateTime    @default(now()) @map("created_at")
+  website         Website     @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  @@unique([websiteId, versionNumber])
+  @@index([companyId, websiteId])
+  @@map("website_versions")
+}
+
+model WebsitePublishLog {
+  id              String                @id @default(uuid()) @db.Char(36)
+  companyId       String                @map("company_id") @db.Char(36)
+  websiteId       String                @map("website_id") @db.Char(36)
+  status          WebsitePublishStatus  @default(queued)
+  message         String?               @db.Text
+  metadataJson    Json                  @map("metadata_json")
+  createdById     String?               @map("created_by_id") @db.Char(36)
+  createdAt       DateTime              @default(now()) @map("created_at")
+  website         Website               @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, websiteId, status])
+  @@map("website_publish_logs")
+}
+
+model WebsiteCodeFile {
+  id              String        @id @default(uuid()) @db.Char(36)
+  companyId       String        @map("company_id") @db.Char(36)
+  websiteId       String        @map("website_id") @db.Char(36)
+  pageId          String?       @map("page_id") @db.Char(36)
+  filePath        String        @map("file_path") @db.VarChar(500)
+  fileType        String        @map("file_type") @db.VarChar(80)
+  language        String        @db.VarChar(40)
+  content         String        @db.LongText
+  createdById     String?       @map("created_by_id") @db.Char(36)
+  updatedById     String?       @map("updated_by_id") @db.Char(36)
+  deletedAt       DateTime?     @map("deleted_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  website         Website       @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  page            WebsitePage?  @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, websiteId, filePath])
+  @@index([companyId, websiteId, fileType])
+  @@index([pageId])
+  @@map("website_code_files")
+}
+
+model WebsiteAuditLog {
+  id              String              @id @default(uuid()) @db.Char(36)
+  companyId       String              @map("company_id") @db.Char(36)
+  websiteId       String?             @map("website_id") @db.Char(36)
+  pageId          String?             @map("page_id") @db.Char(36)
+  sectionId       String?             @map("section_id") @db.Char(36)
+  componentId     String?             @map("component_id") @db.Char(36)
+  assetId         String?             @map("asset_id") @db.Char(36)
+  actorUserId     String?             @map("actor_user_id") @db.Char(36)
+  action          WebsiteAuditAction
+  entityType      String              @map("entity_type") @db.VarChar(80)
+  entityId        String?             @map("entity_id") @db.Char(36)
+  summary         String?             @db.VarChar(240)
+  metadataJson    Json                @map("metadata_json")
+  ipAddress       String?             @map("ip_address") @db.VarChar(80)
+  userAgent       String?             @map("user_agent") @db.VarChar(300)
+  createdAt       DateTime            @default(now()) @map("created_at")
+  website         Website?            @relation(fields: [websiteId], references: [id], onDelete: SetNull)
+  page            WebsitePage?        @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  section         WebsiteSection?     @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  component       WebsiteComponent?   @relation(fields: [componentId], references: [id], onDelete: SetNull)
+  asset           WebsiteAsset?       @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, websiteId, createdAt])
+  @@index([companyId, action, createdAt])
+  @@map("website_audit_logs")
+}
