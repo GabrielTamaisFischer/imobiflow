@@ -134,14 +134,14 @@ function CrmPage() {
           Leads normalmente chegam automaticamente pelo site e por integrações. Cadastros manuais ficam disponíveis para exceções.
           </p>
         </div>
-        <button
+        {canManage ? <button
           type="button"
           onClick={() => setShowForm((current) => !current)}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" />
           Adicionar manualmente
-        </button>
+        </button> : null}
       </div>
 
       <section className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -192,8 +192,7 @@ function CrmPage() {
           icon={Users}
           title="Nenhum lead encontrado"
           description="O CRM começa vazio. Cadastre o primeiro lead real quando a operação comercial estiver pronta para usar o funil."
-          actionLabel="Cadastrar lead"
-          onAction={canManage ? () => setShowForm(true) : undefined}
+          {...(canManage ? { actionLabel: "Cadastrar lead", onAction: () => setShowForm(true) } : {})}
         />
       ) : (
         <section className="grid gap-4 xl:grid-cols-5">

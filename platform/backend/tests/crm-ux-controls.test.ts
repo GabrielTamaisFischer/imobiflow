@@ -18,10 +18,19 @@ describe("CRM follow-up and permission UX", () => {
   it("keeps CRM controls read-only without crm.manage and refreshes full activity detail", async () => {
     const source = await readFile(new URL("../../src/routes/app.crm.tsx", import.meta.url), "utf8");
     expect(source).toContain("const canManage = Boolean(session?.access.appUser?.permissions.includes(\"crm.manage\"))");
+    expect(source).toMatch(/\{canManage \? <button[\s\S]*Adicionar manualmente[\s\S]*<\/button> : null\}/);
     expect(source).toContain("showForm && canManage");
+    expect(source).toContain("...(canManage ? { actionLabel: \"Cadastrar lead\", onAction: () => setShowForm(true) } : {})");
+    expect(source).not.toContain('actionLabel="Cadastrar lead"');
     expect(source).toContain("draggable={canManage}");
     expect(source).toContain("canManage && lead.status === \"open\"");
     expect(source).toContain("disabled={!canManage}");
     expect(source).toContain("onSaved({ ...refreshed.lead, interests: refreshed.interests, activities: refreshed.activities, events: refreshed.events })");
+  });
+
+  it("keeps both registration controls available for crm.manage", async () => {
+    const source = await readFile(new URL("../../src/routes/app.crm.tsx", import.meta.url), "utf8");
+    expect(source).toContain("onClick={() => setShowForm((current) => !current)}");
+    expect(source).toContain("actionLabel: \"Cadastrar lead\"");
   });
 });
