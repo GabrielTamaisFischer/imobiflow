@@ -475,12 +475,40 @@ model StoredFile {
   importJobId      String?  @map("import_job_id") @db.Char(36)
   importSource     String?  @map("import_source") @db.VarChar(80)
   metadataJson     Json?    @map("metadata_json")
+  // A6 (Fase A): propósito real do documento — antes só existia como ideia
+  // documentada, nunca persistido. Usado pelo controle mínimo de acesso em
+  // services/storage/purposes.ts (STORED_FILE_PURPOSES).
+  purpose          String?  @db.VarChar(40)
 
   @@unique([provider, publicId])
   @@index([companyId, entityType, entityId])
   @@index([companyId, isTestData, testBatchId])
   @@index([companyId, importJobId])
+  @@index([companyId, purpose])
   @@map("stored_files")
+}
+
+// A4 (Fase A): ledger de idempotência para operações financeiras sensíveis a
+// duplicação (ex.: gerar cobrança a partir de contrato). Um duplo clique ou
+// retry de rede reenvia a mesma chave; a constraint única abaixo garante, no
+// nível do banco, que apenas uma execução vence a corrida — a segunda lê o
+// resultado já registrado em vez de duplicar o efeito colateral. Fica em
+// Prisma/MySQL (arquitetura canônica) mesmo protegendo endpoints cujos dados
+// de negócio ainda vivem no Supabase legado (Financeiro não foi migrado
+// nesta fase) — a chave é só o "portão" de concorrência, não o dado em si.
+model IdempotencyKey {
+  id           String    @id @default(uuid()) @db.Char(36)
+  companyId    String    @map("company_id") @db.Char(36)
+  scope        String    @db.VarChar(80)
+  idempotencyKey String  @map("idempotency_key") @db.VarChar(200)
+  status       String    @default("in_progress") @db.VarChar(20)
+  responseJson Json?     @map("response_json")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@unique([companyId, scope, idempotencyKey])
+  @@index([companyId, scope, createdAt])
+  @@map("idempotency_keys")
 }
 
 model ImportJob {

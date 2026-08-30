@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { Request } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
+import { prisma } from "../services/mysql-real-estate.js";
 
 export const publicPortalsRouter = Router();
 
@@ -40,76 +41,115 @@ async function logPortalAccess(input: {
   ip_address?: string | null;
   user_agent?: string | null;
 }) {
-  const { error } = await supabaseAdmin.from("portal_access_logs").insert({
-    ...input,
-    event_type: "view",
-  });
-
-  if (error) throw error;
+  // Legado (Supabase): tabela portal_access_logs não tem equivalente em
+  // Prisma/MySQL ainda. É apenas um log de auditoria complementar — o
+  // acesso "de verdade" já fica registrado em PropertyOwner.portalLastAccessAt
+  // (Prisma/MySQL). Por isso aqui é best-effort: nunca deve derrubar o portal
+  // quando o Supabase legado não está configurado (ambiente local R$0).
+  try {
+    const { error } = await supabaseAdmin.from("portal_access_logs").insert({
+      ...input,
+      event_type: "view",
+    });
+    if (error) throw error;
+  } catch {
+    // intencional: log de auditoria complementar, não é crítico para o portal.
+  }
 }
 
-publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
+/**
+ * Dados financeiros (repasses/cobranças) do proprietário ainda vivem no
+ * Supabase legado nesta fase (Financeiro não foi migrado na Fase A). Em vez
+ * de derrubar o portal inteiro quando o Supabase não está configurado
+ * (ambiente local R$0, sem projeto Supabase), essas seções degradam para
+ * lista vazia — o núcleo do portal (dados do proprietário + imóveis, que já
+ * são Prisma/MySQL) continua funcional e correto.
+ */
+async function loadOwnerFinancials(companyId: string, ownerId: string) {
   try {
-    const token = String(req.params.token ?? "");
-    if (!isUuid(token)) throw notFound("Portal do proprietário não encontrado.");
-
-    const { data: owner, error: ownerError } = await supabaseAdmin
-      .from("property_owners")
-      .select("id, company_id, owner_type, name, document, email, phone, whatsapp, status, portal_enabled")
-      .eq("portal_token", token)
-      .eq("portal_enabled", true)
-      .maybeSingle<{
-        id: string;
-        company_id: string;
-        owner_type: string;
-        name: string;
-        document: string | null;
-        email: string | null;
-        phone: string | null;
-        whatsapp: string | null;
-        status: string;
-        portal_enabled: boolean;
-      }>();
-
-    if (ownerError) throw ownerError;
-    if (!owner || owner.status !== "active") throw notFound("Portal do proprietário não encontrado.");
-
-    const [company, propertiesResponse, transfersResponse, chargesResponse] = await Promise.all([
-      getCompany(owner.company_id),
-      supabaseAdmin
-        .from("properties")
-        .select("id, code, title, operation, status, neighborhood, city, state, rent_price_cents, sale_price_cents")
-        .eq("company_id", owner.company_id)
-        .eq("owner_id", owner.id)
-        .neq("status", "archived")
-        .order("created_at", { ascending: false }),
+    const [transfersResponse, chargesResponse] = await Promise.all([
       supabaseAdmin
         .from("owner_transfers")
         .select("id, charge_id, contract_id, property_id, gross_amount_cents, deductions_cents, net_amount_cents, status, due_date, paid_at, payment_method, receipt_url, receipt_reference, notes, created_at, contracts(id, title, contract_number), properties(id, code, title)")
-        .eq("company_id", owner.company_id)
-        .eq("owner_id", owner.id)
+        .eq("company_id", companyId)
+        .eq("owner_id", ownerId)
         .order("due_date", { ascending: false, nullsFirst: false })
         .limit(24),
       supabaseAdmin
         .from("financial_charges")
         .select("id, contract_id, property_id, payment_method, gross_amount_cents, commission_amount_cents, fee_amount_cents, net_owner_amount_cents, due_date, paid_at, status, contracts(id, title, contract_number), properties(id, code, title)")
-        .eq("company_id", owner.company_id)
-        .eq("owner_id", owner.id)
+        .eq("company_id", companyId)
+        .eq("owner_id", ownerId)
         .order("due_date", { ascending: false })
         .limit(24),
     ]);
 
-    if (propertiesResponse.error) throw propertiesResponse.error;
     if (transfersResponse.error) throw transfersResponse.error;
     if (chargesResponse.error) throw chargesResponse.error;
 
+    return { transfers: transfersResponse.data ?? [], charges: chargesResponse.data ?? [] };
+  } catch {
+    return { transfers: [], charges: [] };
+  }
+}
+
+// A2 (corrigido): a Área do Proprietário lia de Supabase `property_owners`,
+// uma tabela que nunca recebe as escritas do cadastro atual de proprietário
+// (que grava em Prisma/MySQL via createMysqlOwner/updateMysqlOwner). Isso
+// fazia todo proprietário cadastrado hoje receber 404 ao acessar seu portal.
+// Corrigido para ler da mesma fonte que já é escrita: Prisma/MySQL.
+publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
+  try {
+    const token = String(req.params.token ?? "");
+    if (!isUuid(token)) throw notFound("Portal do proprietário não encontrado.");
+
+    const owner = await prisma().propertyOwner.findFirst({
+      where: { portalToken: token, portalEnabled: true },
+      select: {
+        id: true,
+        companyId: true,
+        ownerType: true,
+        name: true,
+        document: true,
+        email: true,
+        phone: true,
+        whatsapp: true,
+        status: true,
+      },
+    });
+
+    if (!owner || owner.status !== "active") throw notFound("Portal do proprietário não encontrado.");
+
+    const [company, properties, financials] = await Promise.all([
+      prisma().company.findFirst({ where: { id: owner.companyId }, select: { id: true, name: true, status: true } }),
+      prisma().property.findMany({
+        where: { companyId: owner.companyId, ownerId: owner.id, status: { not: "archived" } },
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          operation: true,
+          status: true,
+          neighborhood: true,
+          city: true,
+          state: true,
+          rentPriceCents: true,
+          salePriceCents: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+      loadOwnerFinancials(owner.companyId, owner.id),
+    ]);
+
+    if (!company) throw notFound("Portal do proprietário não encontrado.");
+
     await Promise.all([
-      supabaseAdmin
-        .from("property_owners")
-        .update({ portal_last_access_at: new Date().toISOString() })
-        .eq("id", owner.id),
+      prisma().propertyOwner.update({
+        where: { id: owner.id },
+        data: { portalLastAccessAt: new Date() },
+      }),
       logPortalAccess({
-        company_id: owner.company_id,
+        company_id: owner.companyId,
         portal_type: "owner",
         owner_id: owner.id,
         ip_address: clientIp(req),
@@ -118,11 +158,32 @@ publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
     ]);
 
     res.json({
-      owner,
+      owner: {
+        id: owner.id,
+        company_id: owner.companyId,
+        owner_type: owner.ownerType,
+        name: owner.name,
+        document: owner.document,
+        email: owner.email,
+        phone: owner.phone,
+        whatsapp: owner.whatsapp,
+        status: owner.status,
+      },
       company,
-      properties: propertiesResponse.data ?? [],
-      transfers: transfersResponse.data ?? [],
-      charges: chargesResponse.data ?? [],
+      properties: properties.map((property) => ({
+        id: property.id,
+        code: property.code,
+        title: property.title,
+        operation: property.operation,
+        status: property.status,
+        neighborhood: property.neighborhood,
+        city: property.city,
+        state: property.state,
+        rent_price_cents: property.rentPriceCents,
+        sale_price_cents: property.salePriceCents,
+      })),
+      transfers: financials.transfers,
+      charges: financials.charges,
     });
   } catch (error) {
     next(error);

@@ -8,6 +8,7 @@ import {
   requirePermission,
 } from "../middleware/auth.js";
 import { supabaseAdmin } from "../lib/supabase.js";
+import { prisma } from "../services/mysql-real-estate.js";
 import { buildInspectionPdfBuffer } from "../services/inspection-pdf.js";
 import {
   createStoredFileReference,
@@ -22,8 +23,15 @@ export const inspectionsRouter = Router();
 
 inspectionsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
 
+// A3 (corrigido): "properties(...)" era um embed relacional do PostgREST
+// (Supabase), que só resolve quando existe uma linha correspondente na
+// tabela `properties` do próprio Postgres legado. Imóveis cadastrados hoje
+// vivem em Prisma/MySQL (arquitetura canônica) e nunca aparecem nessa
+// tabela, então esse embed sempre voltava nulo para eles. O dado de imóvel
+// agora é buscado à parte, direto do Prisma/MySQL, e anexado em
+// attachPropertyInfo/attachPropertyInfoMany antes de qualquer resposta.
 const inspectionSelect =
-  "id, company_id, property_id, assigned_to, inspection_type, status, scheduled_at, started_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, pdf_url, metadata, created_at, updated_at, properties(id, code, title, neighborhood, city, state)";
+  "id, company_id, property_id, assigned_to, inspection_type, status, scheduled_at, started_at, completed_at, title, summary, tenant_name, tenant_document, owner_name, pdf_url, metadata, created_at, updated_at";
 
 const roomSelect =
   "id, company_id, inspection_id, name, position, general_condition, notes, created_at, updated_at";
@@ -178,23 +186,72 @@ function rejectClientStorageLocation(body: unknown) {
   }
 }
 
+// A3 (corrigido — BUG confirmado na auditoria): esta função validava o
+// imóvel contra a tabela `properties` do Supabase (legado). Imóveis
+// cadastrados pelo fluxo atual só existem em Prisma/MySQL, então toda
+// vistoria criada para um imóvel novo recebia 422 INVALID_PROPERTY. Corrigido
+// para validar contra a fonte canônica (Prisma/MySQL), reconhecendo qualquer
+// imóvel cadastrado hoje.
 async function ensurePropertyBelongsToCompany(propertyId: string, companyId: string) {
-  const { data, error } = await supabaseAdmin
-    .from("properties")
-    .select("id, title, property_owners(name)")
-    .eq("id", propertyId)
-    .eq("company_id", companyId)
-    .maybeSingle<{ id: string; title: string; property_owners: { name: string } | null }>();
+  const property = await prisma().property.findFirst({
+    where: { id: propertyId, companyId },
+    select: { id: true, title: true, owner: { select: { name: true } } },
+  });
 
-  if (error) throw error;
-  if (!data) {
+  if (!property) {
     throw Object.assign(new Error("Imóvel inválido para esta empresa."), {
       statusCode: 422,
       code: "INVALID_PROPERTY",
     });
   }
 
-  return data;
+  return { id: property.id, title: property.title, property_owners: property.owner };
+}
+
+type InspectionPropertySummary = {
+  id: string;
+  code: string | null;
+  title: string;
+  neighborhood: string | null;
+  city: string | null;
+  state: string | null;
+};
+
+/** Anexa os dados do imóvel (Prisma/MySQL) a uma única vistoria já carregada do Supabase. */
+async function attachPropertyInfo<T extends { property_id: string | null }>(
+  companyId: string,
+  inspection: T,
+): Promise<T & { properties: InspectionPropertySummary | null }> {
+  if (!inspection.property_id) return { ...inspection, properties: null };
+
+  const property = await prisma().property.findFirst({
+    where: { id: inspection.property_id, companyId },
+    select: { id: true, code: true, title: true, neighborhood: true, city: true, state: true },
+  });
+
+  return { ...inspection, properties: property ?? null };
+}
+
+/** Mesma anexação, em lote, para listas de vistorias (evita N+1 fazendo uma única query IN). */
+async function attachPropertyInfoMany<T extends { property_id: string | null }>(
+  companyId: string,
+  inspections: T[],
+): Promise<Array<T & { properties: InspectionPropertySummary | null }>> {
+  const propertyIds = [...new Set(inspections.map((i) => i.property_id).filter((id): id is string => Boolean(id)))];
+  if (propertyIds.length === 0) {
+    return inspections.map((inspection) => ({ ...inspection, properties: null }));
+  }
+
+  const properties = await prisma().property.findMany({
+    where: { id: { in: propertyIds }, companyId },
+    select: { id: true, code: true, title: true, neighborhood: true, city: true, state: true },
+  });
+  const byId = new Map(properties.map((property) => [property.id, property]));
+
+  return inspections.map((inspection) => ({
+    ...inspection,
+    properties: inspection.property_id ? (byId.get(inspection.property_id) ?? null) : null,
+  }));
 }
 
 async function ensureInspectionBelongsToCompany(inspectionId: string, companyId: string) {
@@ -314,12 +371,26 @@ function inspectionStorageBinding(
   return { file, bucket: inspectionStorageBucket, path: file.publicId };
 }
 
-async function requireInspectionStoredFile(companyId: string, inspectionId: string, storedFileId: string) {
+// A6 (Fase A, revisão de checkpoint): enforcement ponta a ponta do controle
+// de acesso por propósito. `requestingPermissions` é opcional para manter
+// retrocompatibilidade com qualquer outro chamador, mas todos os call sites
+// de Vistoria (as duas únicas rotas que de fato servem/assinam conteúdo de
+// StoredFile a um viewer) agora passam as permissões reais do usuário
+// autenticado. Sem isso, o mecanismo de A6 existia e era testável
+// isoladamente, mas não protegia nenhum consumidor real — daí o alerta do
+// checkpoint sobre "falsa sensação de segurança".
+async function requireInspectionStoredFile(
+  companyId: string,
+  inspectionId: string,
+  storedFileId: string,
+  requestingPermissions?: string[],
+) {
   const file = await findStoredFileByIdForEntity(
     companyId,
     storedFileId,
     inspectionMediaEntityType,
     storedFileId,
+    requestingPermissions,
   );
   const binding = inspectionStorageBinding(file, companyId, inspectionId);
   if (!binding) {
@@ -333,7 +404,7 @@ async function requireInspectionStoredFile(companyId: string, inspectionId: stri
 
 async function withSignedMediaUrls<
   T extends { id: string; storage_path?: string | null; file_url?: string | null },
->(companyId: string, inspectionId: string, media: T[]) {
+>(companyId: string, inspectionId: string, media: T[], requestingPermissions?: string[]) {
   return Promise.all(
     media.map(async (entry) => {
       if (!entry.storage_path) return { ...entry, signed_url: entry.file_url ?? null };
@@ -343,6 +414,7 @@ async function withSignedMediaUrls<
         entry.id,
         inspectionMediaEntityType,
         entry.id,
+        requestingPermissions,
       );
       const binding = inspectionStorageBinding(file, companyId, inspectionId);
       if (!binding) return { ...entry, signed_url: null };
@@ -424,7 +496,7 @@ async function loadInspectionDetail(companyId: string, inspectionId: string) {
   if (signaturesError) throw signaturesError;
 
   return {
-    inspection,
+    inspection: await attachPropertyInfo(companyId, inspection),
     rooms: rooms ?? [],
     items: items ?? [],
     media: media ?? [],
@@ -457,7 +529,7 @@ async function refreshInspectionSignatureStatus(companyId: string, inspectionId:
     .single();
 
   if (updateError) throw updateError;
-  return data;
+  return attachPropertyInfo(companyId, data);
 }
 
 inspectionsRouter.get(
@@ -479,7 +551,7 @@ inspectionsRouter.get(
       const { data, error } = await query;
       if (error) throw error;
 
-      res.json({ inspections: data ?? [] });
+      res.json({ inspections: await attachPropertyInfoMany(companyId, data ?? []) });
     } catch (error) {
       next(error);
     }
@@ -514,7 +586,7 @@ inspectionsRouter.post(
         await createDefaultRooms(companyId, inspection.id);
       }
 
-      res.status(201).json({ inspection });
+      res.status(201).json({ inspection: await attachPropertyInfo(companyId, inspection) });
     } catch (error) {
       next(error);
     }
@@ -542,7 +614,7 @@ inspectionsRouter.patch(
 
       if (error) throw error;
 
-      res.json({ inspection });
+      res.json({ inspection: await attachPropertyInfo(companyId, inspection) });
     } catch (error) {
       next(error);
     }
@@ -621,7 +693,7 @@ inspectionsRouter.get(
       res.json({
         rooms: rooms ?? [],
         items: items ?? [],
-        media: await withSignedMediaUrls(companyId, inspectionId, media ?? []),
+        media: await withSignedMediaUrls(companyId, inspectionId, media ?? [], req.access!.appUser.permissions),
       });
     } catch (error) {
       next(error);
@@ -648,7 +720,7 @@ inspectionsRouter.get(
 
       if (error) throw error;
 
-      res.json({ media: await withSignedMediaUrls(companyId, inspectionId, data ?? []) });
+      res.json({ media: await withSignedMediaUrls(companyId, inspectionId, data ?? [], req.access!.appUser.permissions) });
     } catch (error) {
       next(error);
     }
@@ -670,7 +742,7 @@ inspectionsRouter.get(
         inspection,
         rooms,
         items,
-        media: await withSignedMediaUrls(companyId, inspectionId, media),
+        media: await withSignedMediaUrls(companyId, inspectionId, media, req.access!.appUser.permissions),
         signatures,
       });
     } catch (error) {
@@ -1029,7 +1101,7 @@ inspectionsRouter.post(
       const input = mediaSchema.parse(req.body);
       const { stored_file_id: storedFileId, ...mediaInput } = input;
       const storageBinding = storedFileId
-        ? await requireInspectionStoredFile(companyId, inspectionId, storedFileId)
+        ? await requireInspectionStoredFile(companyId, inspectionId, storedFileId, req.access!.appUser.permissions)
         : null;
       const roomId = await ensureRoomBelongsToCompany(input.room_id || null, inspectionId, companyId);
       if (input.item_id) {
@@ -1064,7 +1136,7 @@ inspectionsRouter.post(
 
       if (error) throw error;
 
-      const [signedMedia] = await withSignedMediaUrls(companyId, inspectionId, [media]);
+      const [signedMedia] = await withSignedMediaUrls(companyId, inspectionId, [media], req.access!.appUser.permissions);
 
       const usageEvents = [];
       if (media.media_type === "photo") {
@@ -1141,7 +1213,7 @@ inspectionsRouter.delete(
       if (!media) throw Object.assign(new Error("Mídia não encontrada."), { statusCode: 404 });
 
       const storageBinding = media.storage_path
-        ? await requireInspectionStoredFile(companyId, inspectionId, media.id)
+        ? await requireInspectionStoredFile(companyId, inspectionId, media.id, req.access!.appUser.permissions)
         : null;
       if (storageBinding) {
         const { error: storageError } = await supabaseAdmin.storage

@@ -7,7 +7,7 @@ import {
   requireCompany,
   requirePermission,
 } from "../middleware/auth.js";
-import { prisma, serializeCompanySite } from "../services/mysql-real-estate.js";
+import { prisma, serializeCompanySite, syncMysqlPropertyPublication } from "../services/mysql-real-estate.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const sitesRouter = Router();
@@ -189,6 +189,17 @@ sitesRouter.get("/leads", requirePermission("site.manage"), async (req: RequestW
   }
 });
 
+// BUG-SITE-001 (corrigido): publicar um imóvel nunca deve sobrescrever o
+// status operacional dele. Antes, este endpoint forçava status="available"
+// incondicionalmente, o que fazia um imóvel "alugado"/"vendido"/"reservado"
+// voltar a aparecer como disponível só por ter sido (re)publicado no site.
+//
+// Correção: publicar/despublicar por aqui agora usa exatamente a mesma
+// lógica de prontidão (syncMysqlPropertyPublication) já usada pelo
+// formulário normal de edição de imóvel (toggle "Liberado no site?"),
+// evitando duas implementações divergentes da mesma regra de negócio.
+// O status do imóvel só é alterado pelo próprio usuário, via edição
+// explícita do imóvel — nunca como efeito colateral de publicar no site.
 sitesRouter.post(
   "/properties/:id/publish",
   requirePermission("site.manage"),
@@ -200,18 +211,28 @@ sitesRouter.post(
       const existing = await prisma().property.findFirst({ where: { id: propertyId, companyId } });
       if (!existing) throw propertyNotFound();
 
-      const property = await prisma().property.update({
+      if (!["available", "reserved"].includes(existing.status)) {
+        throw propertyNotPublishable(existing.status);
+      }
+
+      await prisma().property.update({
         where: { id: existing.id },
         data: {
-          status: "available",
-          publishedAt: new Date(),
           publicationSettingsJson: {
             ...asRecord(existing.publicationSettingsJson),
             site_enabled: true,
           } as Prisma.InputJsonValue,
         },
+      });
+
+      const { published } = await syncMysqlPropertyPublication(companyId, existing.id);
+      if (!published) throw propertyNotReadyForPublication();
+
+      const property = await prisma().property.findFirst({
+        where: { id: existing.id, companyId },
         select: { id: true, code: true, title: true, status: true, publishedAt: true },
       });
+      if (!property) throw propertyNotFound();
 
       await prisma().websiteAuditLog.create({
         data: {
@@ -220,7 +241,7 @@ sitesRouter.post(
           action: "site_property_published",
           entityType: "properties",
           entityId: property.id,
-          metadataJson: { code: property.code, title: property.title },
+          metadataJson: { code: property.code, title: property.title, status: property.status },
         },
       });
 
@@ -242,17 +263,23 @@ sitesRouter.post(
       const existing = await prisma().property.findFirst({ where: { id: propertyId, companyId } });
       if (!existing) throw propertyNotFound();
 
-      const property = await prisma().property.update({
+      await prisma().property.update({
         where: { id: existing.id },
         data: {
-          publishedAt: null,
           publicationSettingsJson: {
             ...asRecord(existing.publicationSettingsJson),
             site_enabled: false,
           } as Prisma.InputJsonValue,
         },
+      });
+
+      await syncMysqlPropertyPublication(companyId, existing.id);
+
+      const property = await prisma().property.findFirst({
+        where: { id: existing.id, companyId },
         select: { id: true, code: true, title: true, status: true, publishedAt: true },
       });
+      if (!property) throw propertyNotFound();
 
       await prisma().websiteAuditLog.create({
         data: {
@@ -261,7 +288,7 @@ sitesRouter.post(
           action: "site_property_unpublished",
           entityType: "properties",
           entityId: property.id,
-          metadataJson: { code: property.code, title: property.title },
+          metadataJson: { code: property.code, title: property.title, status: property.status },
         },
       });
 
@@ -315,4 +342,24 @@ function propertyNotFound() {
     statusCode: 404,
     code: "PROPERTY_NOT_FOUND",
   });
+}
+
+function propertyNotPublishable(currentStatus: string) {
+  return Object.assign(
+    new Error(
+      `Imóvel com status "${currentStatus}" não pode ser publicado no site. ` +
+        `Defina o status do imóvel como "available" (disponível) ou "reserved" (reservado) antes de publicar.`,
+    ),
+    { statusCode: 409, code: "PROPERTY_NOT_PUBLISHABLE" },
+  );
+}
+
+function propertyNotReadyForPublication() {
+  return Object.assign(
+    new Error(
+      "Imóvel ainda não está pronto para publicação no site: verifique proprietário, título, descrição, " +
+        "endereço completo, preço e ao menos uma foto de capa.",
+    ),
+    { statusCode: 422, code: "PROPERTY_NOT_READY_FOR_PUBLICATION" },
+  );
 }

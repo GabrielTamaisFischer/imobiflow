@@ -1,5 +1,6 @@
 import { getPrisma } from "../../lib/website-builder-prisma.js";
 import type { StoredFile } from "./types.js";
+import { assertStoredFilePurposeAccess, inferStoredFilePurpose } from "./purposes.js";
 
 export type StoredFileRecord = {
   id: string;
@@ -16,6 +17,7 @@ export type StoredFileRecord = {
   width: number | null;
   height: number | null;
   format: string | null;
+  purpose: string | null;
   createdAt: Date;
   uploadedBy: string | null;
   isTestData: boolean;
@@ -46,6 +48,7 @@ export async function createStoredFileReference(input: {
   sizeBytes?: number | null;
   uploadedBy?: string | null;
   metadata?: Record<string, unknown> | null;
+  purpose?: string | null;
 }) {
   return storedFileDelegate().create({
     data: {
@@ -62,6 +65,7 @@ export async function createStoredFileReference(input: {
       sizeBytes: input.sizeBytes ?? null,
       uploadedBy: input.uploadedBy ?? null,
       metadataJson: input.metadata ?? undefined,
+      purpose: input.purpose ?? inferStoredFilePurpose(input.entityType),
     },
   });
 }
@@ -78,6 +82,7 @@ export async function createStoredFileRecord(input: {
   importJobId?: string | null;
   importSource?: string | null;
   metadata?: Record<string, unknown> | null;
+  purpose?: string | null;
 }) {
   return storedFileDelegate().create({
     data: {
@@ -101,15 +106,31 @@ export async function createStoredFileRecord(input: {
       importJobId: input.importJobId ?? null,
       importSource: input.importSource ?? null,
       metadataJson: input.metadata ?? undefined,
+      purpose: input.purpose ?? inferStoredFilePurpose(input.entityType),
     },
   });
 }
 
-export async function findStoredFileForEntity(companyId: string, entityType: string, entityId: string) {
-  return storedFileDelegate().findFirst({
+/**
+ * `requestingPermissions`: quando informado (rotas autenticadas normais),
+ * aplica o controle mínimo de acesso por propósito (A6) — um usuário sem a
+ * permissão do módulo dono do documento (ex.: sem `finance.view` para um
+ * `financial_document`) recebe 403, mesmo sendo da empresa certa. Omitir o
+ * parâmetro (ex.: chamadas internas de sistema) mantém o comportamento
+ * anterior, apenas com isolamento por empresa.
+ */
+export async function findStoredFileForEntity(
+  companyId: string,
+  entityType: string,
+  entityId: string,
+  requestingPermissions?: string[],
+) {
+  const record = await storedFileDelegate().findFirst({
     where: { companyId, entityType, entityId },
     orderBy: { createdAt: "desc" },
   });
+  if (record && requestingPermissions) assertStoredFilePurposeAccess(record.purpose, requestingPermissions);
+  return record;
 }
 
 export async function findStoredFileByIdForEntity(
@@ -117,10 +138,13 @@ export async function findStoredFileByIdForEntity(
   storedFileId: string,
   entityType: string,
   entityId: string,
+  requestingPermissions?: string[],
 ) {
-  return storedFileDelegate().findFirst({
+  const record = await storedFileDelegate().findFirst({
     where: { id: storedFileId, companyId, entityType, entityId },
   });
+  if (record && requestingPermissions) assertStoredFilePurposeAccess(record.purpose, requestingPermissions);
+  return record;
 }
 
 export async function deleteStoredFileRecordsForEntity(companyId: string, entityType: string, entityId: string) {

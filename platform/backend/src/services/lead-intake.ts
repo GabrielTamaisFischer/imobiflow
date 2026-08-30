@@ -29,6 +29,47 @@ export function normalizeLeadPhone(value?: string | null) {
   return digits || null;
 }
 
+// A5 (corrigido — TD-GLOBAL-008): a checagem anterior ("existe lead aberto
+// com este e-mail/telefone?") era um SELECT comum seguido de um INSERT
+// condicional, tudo dentro de uma transação Prisma — mas isso NÃO impede
+// duas transações concorrentes de, ambas, verem "nenhum lead aberto" antes
+// de qualquer uma commitar, e ambas criarem um lead duplicado (o clássico
+// race de "check-then-act"). A correção usa SELECT ... FOR UPDATE via SQL
+// bruto contra os índices já existentes (@@index([companyId, emailNormalized,
+// status]) / phoneNormalized): no InnoDB/MySQL, uma leitura de bloqueio sobre
+// um predicado indexado toma um lock de linha (se existir) OU de "gap" (se
+// não existir), bloqueando qualquer segunda transação concorrente que tente
+// inserir na mesma lacuna até a primeira commitar/reverter. É proteção real
+// de banco, não uma checagem apenas na aplicação.
+async function lockExistingOpenLead(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  emailNormalized: string | null,
+  phoneNormalized: string | null,
+): Promise<{ id: string } | null> {
+  if (emailNormalized) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM leads
+      WHERE company_id = ${companyId} AND email_normalized = ${emailNormalized} AND status = 'open'
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+      FOR UPDATE
+    `;
+    if (rows[0]) return rows[0];
+  }
+  if (phoneNormalized) {
+    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM leads
+      WHERE company_id = ${companyId} AND phone_normalized = ${phoneNormalized} AND status = 'open'
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+      FOR UPDATE
+    `;
+    if (rows[0]) return rows[0];
+  }
+  return null;
+}
+
 async function routeNewLead(tx: Prisma.TransactionClient, companyId: string) {
   // Compare-and-swap makes the persisted cursor the coordinator across Render restarts.
   // TiDB/MySQL execute updateMany atomically; a failed CAS retries with the newer cursor.
@@ -49,6 +90,45 @@ async function routeNewLead(tx: Prisma.TransactionClient, companyId: string) {
   throw Object.assign(new Error("Não foi possível coordenar a distribuição do lead."), { statusCode: 409, code: "ROUTING_CONFLICT" });
 }
 
+function isTransientDbConflict(error: unknown): boolean {
+  // Achado durante a homologação da Fase A (A5): sob concorrência real (N
+  // submissões simultâneas do mesmo lead para uma empresa nova), múltiplas
+  // transações podem colidir tentando bootstrap do funil padrão de CRM
+  // (ensureDefaultCrmPipeline) ou do lock de dedupe de lead ao mesmo tempo.
+  // Isso é relatado pelo MySQL como deadlock/conflito de escrita — não como
+  // dado duplicado (o commit da transação perdedora nunca ocorre, então
+  // nenhuma duplicidade é criada). É uma condição transitória e esperada
+  // sob alta concorrência real; a resposta correta é reexecutar a transação
+  // inteira do zero, não propagar um 500 para quem enviou o lead.
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (error.code === "P2034" || error.code === "P2002") return true;
+  // P2010 = "raw query failed" — o código genérico do Prisma para qualquer
+  // erro do driver em $queryRaw (usado no lock FOR UPDATE do funil padrão e
+  // no lock FOR UPDATE de dedupe de lead). Aqui o MySQL devolve o erro 1213
+  // (deadlock) ou 1205 (lock wait timeout) dentro da mensagem — ambos são a
+  // mesma condição transitória de concorrência, não um bug de dado.
+  if (error.code === "P2010" && /deadlock|lock wait timeout/i.test(error.message)) return true;
+  return false;
+}
+
+async function runLeadIntakeTransaction<T>(
+  prisma: ReturnType<typeof getPrisma>,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await prisma.$transaction(fn);
+    } catch (error) {
+      if (!isTransientDbConflict(error) || attempt === maxAttempts) throw error;
+      // Pequeno atraso aleatório para reduzir a chance de as transações
+      // que colidiram tentarem de novo exatamente ao mesmo tempo.
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40));
+    }
+  }
+  throw new Error("unreachable");
+}
+
 export async function ingestLead(input: LeadIntakeInput) {
   const prisma = getPrisma();
   const email = input.email?.trim() || null;
@@ -64,7 +144,7 @@ export async function ingestLead(input: LeadIntakeInput) {
     received_at: (input.receivedAt ?? new Date()).toISOString(),
   } satisfies Prisma.InputJsonValue;
 
-  return prisma.$transaction(async (tx) => {
+  return runLeadIntakeTransaction(prisma, async (tx) => {
     let property: { id: string; code: string | null; title: string; operation: string; status: string; publishedAt: Date | null } | null = null;
     if (input.propertyId) {
       property = await tx.property.findFirst({
@@ -76,19 +156,10 @@ export async function ingestLead(input: LeadIntakeInput) {
       }
     }
 
-    const existing = emailNormalized || phoneNormalized
-      ? await tx.lead.findFirst({
-          where: {
-            companyId: input.companyId,
-            status: "open",
-            OR: [
-              ...(emailNormalized ? [{ emailNormalized }] : []),
-              ...(phoneNormalized ? [{ phoneNormalized }] : []),
-            ],
-          },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        })
+    const lockedLead = emailNormalized || phoneNormalized
+      ? await lockExistingOpenLead(tx, input.companyId, emailNormalized, phoneNormalized)
       : null;
+    const existing = lockedLead ? await tx.lead.findUnique({ where: { id: lockedLead.id } }) : null;
 
     let lead = existing;
     let created = false;

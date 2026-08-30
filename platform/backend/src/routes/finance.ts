@@ -16,6 +16,7 @@ import {
 } from "../services/payment-gateways.js";
 import { recordUsageEvent } from "../services/usage-costs.js";
 import { dispatchEventSelect } from "../services/notification-dispatcher.js";
+import { IdempotencyConflictError, resolveIdempotencyKey, withIdempotency } from "../services/idempotency.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const financeRouter = Router();
@@ -219,6 +220,15 @@ function addDays(date: string, days: number) {
 function chargeInitialStatus(paymentMethod: string) {
   return paymentMethod === "manual" ? "pending" : "waiting_payment";
 }
+
+// A4: status de financial_charges que ainda podem ser confirmados como
+// pagos. Usado como guarda compare-and-swap em /charges/:id/confirm-payment
+// para impedir confirmação duplicada sob concorrência.
+const UNPAID_CHARGE_STATUSES = ["pending", "waiting_payment", "overdue", "failed"];
+
+// A4: status de financial_entries que ainda podem receber pagamento. Usado
+// como guarda compare-and-swap em /entries/:id/payments.
+const PAYABLE_ENTRY_STATUSES = ["open", "overdue"];
 
 function buildChargeMetadata(input: {
   tenant?: {
@@ -2377,6 +2387,15 @@ financeRouter.post(
   },
 );
 
+// A4 (corrigido — RISCO-017 confirmado ativo): este endpoint não tinha
+// nenhuma proteção contra duplicação. Um duplo clique ou um retry de rede
+// criava, de forma independente, um financial_entries + financial_charges +
+// commissions + owner_transfers duplicados para o mesmo contrato/vencimento.
+// Corrigido com um ledger de idempotência real (Prisma/MySQL, constraint
+// UNIQUE) que serve de "portão" antes de qualquer insert: a chave é o
+// cabeçalho `Idempotency-Key` quando o cliente envia, ou, por padrão,
+// `contrato+vencimento` — exatamente o par que identifica "a mesma cobrança"
+// no cenário real de duplo clique.
 financeRouter.post(
   "/charges/from-contract",
   requirePermission("finance.manage"),
@@ -2385,6 +2404,32 @@ financeRouter.post(
       const companyId = req.access!.company.id;
       const userId = req.access!.appUser.id;
       const input = chargeFromContractSchema.parse(req.body);
+      const idempotencyKey = resolveIdempotencyKey(req, `${input.contract_id}:${input.due_date}`);
+
+      const { result, replayed } = await withIdempotency(
+        companyId,
+        "finance.charges.from_contract",
+        idempotencyKey,
+        () => createChargeFromContract(req, companyId, userId, input),
+      );
+
+      res.status(replayed ? 200 : 201).json(result);
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        return res.status(error.statusCode).json({ error: error.code, message: error.message });
+      }
+      next(error);
+    }
+  },
+);
+
+async function createChargeFromContract(
+  req: RequestWithAccess,
+  companyId: string,
+  userId: string,
+  input: z.infer<typeof chargeFromContractSchema>,
+) {
+  {
       const contract = await ensureContractForCharge(input.contract_id, companyId);
       const property = firstRelation(contract.properties);
       const tenant = await findContractTenant(contract.id, companyId);
@@ -2645,12 +2690,9 @@ financeRouter.post(
 
       await Promise.all(usageEvents);
 
-      res.status(201).json({ charge, entry });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
+      return { charge, entry };
+  }
+}
 
 financeRouter.post(
   "/charges/:id/confirm-payment",
@@ -2671,6 +2713,48 @@ financeRouter.post(
 
       const charge = await ensureChargeBelongsToCompany(chargeId, companyId);
       const paidAt = input.paid_at || new Date().toISOString();
+      const nextStatus = charge.owner_id ? "transfer_pending" : "paid";
+
+      // A4 (corrigido): antes, o insert em financial_payments era
+      // incondicional — duas confirmações concorrentes para a MESMA cobrança
+      // (duplo clique) inseriam dois pagamentos duplicados, mesmo a cobrança
+      // terminando no mesmo status final. A correção faz um UPDATE atômico
+      // "compare-and-swap" no banco (`UPDATE ... WHERE status IN (...)`)
+      // ANTES de qualquer insert: só a requisição que efetivamente mudar o
+      // status (0 → 1 linha afetada) segue adiante e cria o pagamento. A
+      // segunda requisição concorrente encontra 0 linhas afetadas — sinal de
+      // que já foi confirmada — e devolve o estado atual sem duplicar nada.
+      const { data: casResult, error: casError } = await supabaseAdmin
+        .from("financial_charges")
+        .update({ status: nextStatus, paid_at: paidAt })
+        .eq("id", charge.id)
+        .eq("company_id", companyId)
+        .in("status", UNPAID_CHARGE_STATUSES)
+        .select(chargeSelect);
+
+      if (casError) throw casError;
+
+      if (!casResult || casResult.length === 0) {
+        // Corrida perdida (ou cobrança já processada antes): resposta
+        // idempotente, sem duplicar nenhum efeito colateral.
+        const current = await ensureChargeBelongsToCompany(chargeId, companyId);
+        if (!UNPAID_CHARGE_STATUSES.includes(current.status) && current.status !== nextStatus) {
+          return res.status(409).json({
+            error: "FINANCIAL_CHARGE_NOT_CONFIRMABLE",
+            message: `Cobrança com status "${current.status}" não pode ser confirmada como paga.`,
+          });
+        }
+        const { data: currentCharge, error: currentChargeError } = await supabaseAdmin
+          .from("financial_charges")
+          .select(chargeSelect)
+          .eq("id", chargeId)
+          .eq("company_id", companyId)
+          .single();
+        if (currentChargeError) throw currentChargeError;
+        return res.json({ charge: currentCharge, already_confirmed: true });
+      }
+
+      const updatedCharge = casResult[0];
 
       if (charge.entry_id) {
         const { error: paymentError } = await supabaseAdmin.from("financial_payments").insert({
@@ -2697,19 +2781,6 @@ financeRouter.post(
 
         if (entryError) throw entryError;
       }
-
-      const { data: updatedCharge, error: chargeError } = await supabaseAdmin
-        .from("financial_charges")
-        .update({
-          status: charge.owner_id ? "transfer_pending" : "paid",
-          paid_at: paidAt,
-        })
-        .eq("id", charge.id)
-        .eq("company_id", companyId)
-        .select(chargeSelect)
-        .single();
-
-      if (chargeError) throw chargeError;
 
       await writeAuditLog({
         company_id: companyId,
@@ -3258,6 +3329,52 @@ financeRouter.post(
       const amountCents = input.amount_cents ?? entry.amount_cents;
       const paidAt = input.paid_at || new Date().toISOString();
 
+      // A4 (corrigido — mesma classe de bug do RISCO-017): o insert em
+      // financial_payments era incondicional, então duas chamadas
+      // concorrentes para o mesmo lançamento criavam dois pagamentos
+      // duplicados. Este módulo trata pagamento de lançamento como um evento
+      // único por lançamento (o entry vai direto para "paid"), então a
+      // guarda correta é o mesmo compare-and-swap: só quem realmente mudar o
+      // status de "pagável" para "paid" pode inserir o pagamento.
+      const { data: casResult, error: casError } = await supabaseAdmin
+        .from("financial_entries")
+        .update({ status: "paid", paid_at: paidAt, payment_method: input.payment_method || null })
+        .eq("id", entryId)
+        .eq("company_id", companyId)
+        .in("status", PAYABLE_ENTRY_STATUSES)
+        .select(entrySelect);
+
+      if (casError) throw casError;
+
+      if (!casResult || casResult.length === 0) {
+        const current = await ensureEntryBelongsToCompany(entryId, companyId);
+        if (current.status !== "paid") {
+          return res.status(409).json({
+            error: "FINANCIAL_ENTRY_NOT_PAYABLE",
+            message: `Lançamento com status "${current.status}" não pode receber pagamento.`,
+          });
+        }
+        const { data: existingPayment, error: existingPaymentError } = await supabaseAdmin
+          .from("financial_payments")
+          .select(paymentSelect)
+          .eq("entry_id", entryId)
+          .eq("company_id", companyId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (existingPaymentError) throw existingPaymentError;
+        const { data: currentEntry, error: currentEntryError } = await supabaseAdmin
+          .from("financial_entries")
+          .select(entrySelect)
+          .eq("id", entryId)
+          .eq("company_id", companyId)
+          .single();
+        if (currentEntryError) throw currentEntryError;
+        return res.status(200).json({ payment: existingPayment ?? null, entry: currentEntry, already_paid: true });
+      }
+
+      const updatedEntry = casResult[0];
+
       const { data: payment, error: paymentError } = await supabaseAdmin
         .from("financial_payments")
         .insert({
@@ -3273,20 +3390,6 @@ financeRouter.post(
         .single();
 
       if (paymentError) throw paymentError;
-
-      const { data: updatedEntry, error: entryError } = await supabaseAdmin
-        .from("financial_entries")
-        .update({
-          status: "paid",
-          paid_at: paidAt,
-          payment_method: input.payment_method || null,
-        })
-        .eq("id", entryId)
-        .eq("company_id", companyId)
-        .select(entrySelect)
-        .single();
-
-      if (entryError) throw entryError;
 
       res.status(201).json({ payment, entry: updatedEntry });
     } catch (error) {
