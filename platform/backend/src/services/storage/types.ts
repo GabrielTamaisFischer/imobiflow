@@ -1,4 +1,4 @@
-export type StorageProviderName = "cloudinary" | "cloudflare_r2" | "s3";
+export type StorageProviderName = "cloudinary" | "cloudflare_r2" | "s3" | "local";
 
 export type StorageResourceType = "image" | "video" | "raw";
 

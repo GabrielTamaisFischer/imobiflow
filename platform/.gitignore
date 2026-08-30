@@ -29,6 +29,9 @@ backend/.env*.backup-*
 .wrangler/
 .dev.vars
 
+# LocalStorageProvider (uploads reais em dev local, R$0) — nunca versionar.
+backend/uploads/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,10 +1,12 @@
 import { env, type Env } from "../../config/env.js";
 import { CloudinaryStorageProvider, getMissingCloudinaryConfig } from "./cloudinary-storage.js";
 import { getMissingR2Config, R2StorageProvider } from "./r2-storage-provider.js";
+import { LocalStorageProvider } from "./local-storage-provider.js";
 import type { StorageProvider, StorageProviderName, StoragePurpose } from "./types.js";
 
 type StorageStatusConfig = Pick<
   Partial<Env>,
+  | "NODE_ENV"
   | "STORAGE_PROVIDER"
   | "CLOUDINARY_CLOUD_NAME"
   | "CLOUDINARY_API_KEY"
@@ -18,7 +20,9 @@ type StorageStatusConfig = Pick<
 
 export function getStorageProviderName(config: StorageStatusConfig = env): StorageProviderName {
   const configured = (config.STORAGE_PROVIDER ?? "cloudinary").toLowerCase();
-  if (configured === "cloudinary" || configured === "cloudflare_r2" || configured === "s3") return configured;
+  if (configured === "cloudinary" || configured === "cloudflare_r2" || configured === "s3" || configured === "local") {
+    return configured;
+  }
   return "cloudinary";
 }
 
@@ -29,6 +33,7 @@ export function getStorageProvider(): StorageProvider {
 export function getStorageProviderForName(provider: StorageProviderName): StorageProvider {
   if (provider === "cloudinary") return new CloudinaryStorageProvider();
   if (provider === "cloudflare_r2") return new R2StorageProvider();
+  if (provider === "local") return new LocalStorageProvider();
   throw Object.assign(new Error("Provedor S3 ainda nao configurado nesta etapa."), {
     statusCode: 503,
     code: "STORAGE_NOT_CONFIGURED",
@@ -37,12 +42,15 @@ export function getStorageProviderForName(provider: StorageProviderName): Storag
 
 export function getStorageStatus(config: StorageStatusConfig = env) {
   const provider = getStorageProviderName(config);
+  const isProduction = (config.NODE_ENV ?? env.NODE_ENV) === "production";
   const missing =
     provider === "cloudinary"
       ? getMissingCloudinaryConfig(config)
       : provider === "cloudflare_r2"
         ? getMissingR2Config(config)
-        : ["S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET"];
+        : provider === "local"
+          ? (isProduction ? ["LOCAL_STORAGE_DISABLED_IN_PRODUCTION"] : [])
+          : ["S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET"];
 
   return {
     provider,
@@ -51,7 +59,9 @@ export function getStorageStatus(config: StorageStatusConfig = env) {
     message:
       missing.length === 0
         ? `${storageProviderLabel(provider)} configurado para uploads reais.`
-        : `${storageProviderLabel(provider)} ainda incompleto. Uploads retornarao erro controlado.`,
+        : provider === "local" && isProduction
+          ? "Provider local de storage nao pode ser usado em producao."
+          : `${storageProviderLabel(provider)} ainda incompleto. Uploads retornarao erro controlado.`,
   };
 }
 

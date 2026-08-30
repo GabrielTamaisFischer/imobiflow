@@ -8,6 +8,11 @@ type PropertyInput = Record<string, any>;
 
 const propertyInclude = {
   owner: true,
+  // B4 (Fase B): expõe o corretor/responsável só para consumo interno
+  // (admin). Nome apenas — telefone/e-mail do AppUser não entram aqui;
+  // exposição pública exigiria uma decisão de produto explícita, que esta
+  // fase não toma (ver publicPropertySelect, que não inclui responsibleUser).
+  responsibleUser: { select: { id: true, name: true } },
   media: {
     orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
   },
@@ -47,6 +52,13 @@ const publicPropertySelect = {
   videosJson: true,
   siteFeatured: true,
   publishedAt: true,
+  // Item 6 do escopo (2026-08-30): decisão de produto explícita, que a Fase
+  // B tinha propositalmente deixado em aberto (ver comentário em
+  // propertyInclude acima) — o site público mostra o NOME do corretor
+  // responsável apenas. Nunca telefone/e-mail do AppUser aqui: só "name" é
+  // selecionado, então não há como esses campos vazarem por engano nesta
+  // consulta mesmo que o serializer mude no futuro.
+  responsibleUser: { select: { name: true } },
   media: {
     orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }],
     select: {
@@ -333,11 +345,18 @@ export function buildPropertyListWhere(companyId: string, input: PropertyListInp
     ...(input.importExternalId ? { importExternalId: input.importExternalId } : {}),
     ...(search
       ? {
+          // Item 1 do escopo: busca central multi-tenant precisa cobrir
+          // código, título, endereço, bairro, cidade E proprietário — antes
+          // faltavam endereço (street) e proprietário (owner.name), o que
+          // deixava a busca por "906164"/"taboão" incompleta caso o usuário
+          // buscasse pela rua ou pelo nome do dono em vez do código exato.
           OR: [
             { code: { contains: search } },
             { title: { contains: search } },
+            { street: { contains: search } },
             { city: { contains: search } },
             { neighborhood: { contains: search } },
+            { owner: { name: { contains: search } } },
           ],
         }
       : {}),
@@ -360,6 +379,39 @@ export async function getMysqlPropertyByCode(companyId: string, code: string, da
   });
   if (!property) throw propertyNotFound();
   return serializeProperty(property);
+}
+
+// Serviço central de busca multi-tenant de Property (item 1 do escopo).
+//
+// Property (Prisma/MySQL) é a entidade canônica única do sistema — Vistoria,
+// Agendamento, Contratos, Financeiro, Site e CRM devem SEMPRE resolver um
+// imóvel através destas duas funções (nunca duplicar a entidade, nunca
+// consultar `code` sozinho sem companyId). Ambas já existiam como
+// getMysqlProperty/getMysqlPropertyByCode/listMysqlProperties — os nomes
+// abaixo são o ponto de entrada estável e documentado que os módulos
+// futuros devem importar; não duplicam a lógica de query, apenas nomeiam a
+// intenção "isto é o serviço central" de forma explícita.
+//
+// Regra dura, sempre respeitada aqui: toda query é escopada por
+// companyId. Nunca existe um caminho que aceite só `code` ou só `id` sem
+// companyId — reforçado pelo teste cross-tenant em
+// tests/property-central-search-multitenant.test.ts.
+export async function findPropertyForCompany(
+  companyId: string,
+  reference: { id?: string; code?: string },
+  database: PrismaClient = prisma(),
+) {
+  if (reference.id) return getMysqlProperty(companyId, reference.id, database);
+  if (reference.code) return getMysqlPropertyByCode(companyId, reference.code, database);
+  throw propertyNotFound();
+}
+
+export async function searchPropertiesForCompany(
+  companyId: string,
+  input: PropertyListInput,
+  database: PrismaClient = prisma(),
+) {
+  return listMysqlProperties(companyId, input, database);
 }
 
 export async function getMysqlPropertyByExternalId(
@@ -643,6 +695,23 @@ export async function getMysqlPublishedSite(slug: string) {
   return { site, company: site.company };
 }
 
+// P0 multiempresa: o slug precisa ser único GLOBALMENTE (não só por
+// empresa), pois a rota pública (GET /public/sites/:slug) resolve um único
+// site pelo slug, sem saber a qual empresa o visitante se referia. Sem esta
+// checagem, duas empresas podiam publicar o mesmo slug — a rota pública
+// sempre resolvia para a mesma (arbitrária), inclusive desviando leads
+// (nome/telefone/e-mail/mensagem) de visitantes da outra empresa. Ver
+// company_sites @@unique([slug]) (migração 202608300003) para o backstop
+// no banco; esta função é a checagem de aplicação que devolve um erro
+// amigável antes de depender só da constraint.
+export async function isSiteSlugTakenByAnotherCompany(companyId: string, slug: string) {
+  const existing = await prisma().companySite.findFirst({
+    where: { slug, companyId: { not: companyId } },
+    select: { id: true },
+  });
+  return Boolean(existing);
+}
+
 export async function loadMysqlPublicProperties(site: { companyId: string; settingsJson: unknown }, limit: number) {
   const properties = await prisma().property.findMany({
     where: {
@@ -672,10 +741,21 @@ export async function loadMysqlPublicPropertyByReference(
       },
       select: publicPropertySelect,
     });
-    if (!property) throw publicSiteNotFound();
+    if (!property) throw publicPropertyNotFound();
     return serializePublicProperty(property, site);
   }
 
+  // B2 (Fase B): o sufixo de 8 caracteres hex do id já identifica o imóvel de
+  // forma praticamente única dentro da empresa (escopo companyId + status +
+  // publishedAt). Antes desta correção, um segundo passo (matchesPropertySlug
+  // contra o texto completo do slug) invalidava esse casamento sempre que
+  // código OU título mudavam depois que o link já tinha sido publicado/
+  // compartilhado — ou seja, qualquer edição de imóvel quebrava a própria
+  // página pública que a Fase B pede para continuar funcionando após editar
+  // (ver B2: "atualiza após edição"). Um link antigo (ex.: já indexado,
+  // salvo pelo cliente, enviado por WhatsApp) deve continuar resolvendo o
+  // mesmo imóvel mesmo que o texto do slug tenha ficado desatualizado — o
+  // texto é só uma âncora de legibilidade, o id é a chave real.
   const shortId = reference.match(/-([a-f0-9]{8})$/i)?.[1];
   const property = await prisma().property.findFirst({
     where: {
@@ -689,10 +769,8 @@ export async function loadMysqlPublicPropertyByReference(
     },
     select: publicPropertySelect,
   });
-  if (!property) throw publicSiteNotFound();
-  const serialized = serializePublicProperty(property, site);
-  if (!matchesPropertySlug(serialized, reference)) throw publicSiteNotFound();
-  return serialized;
+  if (!property) throw publicPropertyNotFound();
+  return serializePublicProperty(property, site);
 }
 
 export async function createMysqlPublicLead(params: {
@@ -852,6 +930,11 @@ export function serializeProperty(property: any) {
           email: property.owner.email,
         }
       : null,
+    // B4 (Fase B): apenas nome (uso interno/admin). Nunca telefone/e-mail
+    // aqui — ver nota em propertyInclude.
+    responsible_user: property.responsibleUser
+      ? { id: property.responsibleUser.id, name: property.responsibleUser.name }
+      : null,
     property_media: (property.media ?? property.property_media ?? []).map(serializeMedia),
   };
 }
@@ -895,6 +978,9 @@ export function serializePropertySummary(property: any) {
           id: property.owner.id,
           name: property.owner.name,
         }
+      : null,
+    responsible_user: property.responsibleUser
+      ? { id: property.responsibleUser.id, name: property.responsibleUser.name }
       : null,
     property_media: (property.media ?? []).map(serializeMediaSummary),
   };
@@ -990,6 +1076,9 @@ function serializePublicProperty(property: any, site: { settingsJson: unknown })
     videos_json: Array.isArray(property.videosJson) ? property.videosJson : [],
     site_featured: property.siteFeatured === true,
     published_at: toIso(property.publishedAt),
+    // Nome apenas (nunca telefone/e-mail) — ver comentário em
+    // publicPropertySelect.responsibleUser.
+    responsible_user_name: property.responsibleUser?.name ?? null,
     property_media: (property.media ?? []).map((media: any) => ({
       media_type: media.mediaType,
       url: media.url,
@@ -1129,6 +1218,20 @@ function publicSiteNotFound() {
   return Object.assign(new Error("Site não encontrado."), {
     statusCode: 404,
     code: "PUBLIC_SITE_NOT_FOUND",
+  });
+}
+
+// Achado real em QA (2026-08-30): loadMysqlPublicPropertyByReference usava
+// publicSiteNotFound() também quando o SITE existe e está publicado, mas o
+// IMÓVEL específico não foi encontrado, não está publicado, ou foi
+// despublicado — fazendo a página pública de um imóvel despublicado exibir
+// "Site não encontrado", confundindo o usuário (o site continua no ar; só
+// aquele anúncio não está mais visível). Mensagem e código dedicados,
+// mesmo status HTTP 404, sem afetar nenhum outro chamador (só usado aqui).
+function publicPropertyNotFound() {
+  return Object.assign(new Error("Imóvel não encontrado ou não está mais disponível."), {
+    statusCode: 404,
+    code: "PUBLIC_PROPERTY_NOT_FOUND",
   });
 }
 

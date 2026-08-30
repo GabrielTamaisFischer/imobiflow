@@ -24,7 +24,7 @@ import {
   Video,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   createPublicSiteLead,
   getPublicSiteProperties,
@@ -470,7 +470,28 @@ function MediaSection({ videos, tours }: { videos: PropertyMedia[]; tours: Prope
 
 function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: LucideIcon; label: string }) {
   if (!media.url) return null;
-  const canEmbed = isEmbeddableUrl(media.url);
+  // Um "tour" cujo arquivo é de fato uma IMAGEM (upload real via
+  // LocalStorageProvider/Cloudinary/R2) é uma foto panorâmica
+  // (equirretangular) enviada pelo próprio usuário — precisa do
+  // visualizador interativo real, não um iframe/link estático. Checado
+  // ANTES de isEmbeddableUrl de propósito: isEmbeddableUrl casa por
+  // substring solta ("360", "panorama") pensada para links de provedores
+  // externos (Matterport/Kuula), e um arquivo hospedado por nós pode ter
+  // um nome de arquivo com essas mesmas palavras (ex.: "foto-panorama.jpg")
+  // sem ser um link externo — nesse caso a foto própria sempre vence.
+  const isOwnPanoramaPhoto = isTourMedia(media) && isLikelyImageUrl(media.url);
+  // Achado real em QA de video (2026-08-30): um arquivo de video PRÓPRIO
+  // (upload real via LocalStorageProvider/Cloudinary/R2, ou um link direto
+  // para um .mp4/.webm) caía no ramo genérico de iframe abaixo — pensado
+  // para players de terceiros (YouTube/Vimeo, que têm sua própria UI
+  // dentro do iframe). Um arquivo de vídeo cru dentro de um <iframe> não
+  // mostra nenhum controle visível (confirmado via screenshot real: caixa
+  // preta vazia, sem play, sem barra de progresso) — o elemento HTML
+  // correto para isso é <video controls>, nunca um iframe. YouTube/Vimeo
+  // continuam pelo caminho de iframe (têm sua própria UI); só o arquivo de
+  // vídeo cru precisa do player nativo.
+  const isDirectVideoFile = isVideoMedia(media) && !/(youtube\.com|youtu\.be|vimeo\.com)/i.test(media.url);
+  const canEmbed = !isOwnPanoramaPhoto && !isDirectVideoFile && isEmbeddableUrl(media.url);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/24">
@@ -483,7 +504,12 @@ function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: 
           Abrir
         </a>
       </div>
-      {canEmbed ? (
+      {isOwnPanoramaPhoto ? (
+        <PanoramaViewer url={media.url} caption={media.caption} />
+      ) : isDirectVideoFile ? (
+        // eslint-disable-next-line jsx-a11y/media-has-caption -- legenda em portugues indisponivel nesta fase
+        <video src={media.url} controls preload="metadata" className="h-72 w-full bg-black" />
+      ) : canEmbed ? (
         <iframe src={toEmbedUrl(media.url)} title={media.caption || label} className="h-72 w-full" allow="autoplay; fullscreen; picture-in-picture; xr-spatial-tracking" allowFullScreen />
       ) : (
         <a href={media.url} target="_blank" rel="noreferrer" className="grid h-72 place-items-center bg-[radial-gradient(circle_at_50%_30%,rgba(200,162,75,0.22),transparent_42%),#090909] text-center">
@@ -497,6 +523,98 @@ function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: 
       )}
     </div>
   );
+}
+
+// Interface ambiente mínima para a lib Pannellum (MIT, R$0, sem pacote de
+// tipos publicado). Carregada dinamicamente (código + CSS) só quando existe
+// de fato uma foto panorâmica própria na página — nunca no bundle inicial.
+interface PannellumViewerInstance {
+  destroy: () => void;
+}
+interface PannellumGlobal {
+  viewer: (
+    container: HTMLElement,
+    config: { type: "equirectangular"; panorama: string; autoLoad?: boolean; compass?: boolean; showControls?: boolean; title?: string },
+  ) => PannellumViewerInstance;
+}
+declare global {
+  interface Window {
+    pannellum?: PannellumGlobal;
+  }
+}
+
+let pannellumLoadPromise: Promise<void> | null = null;
+function loadPannellum(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (window.pannellum) return Promise.resolve();
+  if (!pannellumLoadPromise) {
+    pannellumLoadPromise = Promise.all([import("pannellum/build/pannellum.css"), import("pannellum/build/pannellum.js")]).then(() => undefined);
+  }
+  return pannellumLoadPromise;
+}
+
+function PanoramaViewer({ url, caption }: { url: string; caption?: string | null }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    let viewer: PannellumViewerInstance | null = null;
+    setStatus("loading");
+
+    loadPannellum()
+      .then(() => {
+        if (cancelled || !containerRef.current || !window.pannellum) return;
+        // A chave "title" só entra no config quando há legenda real: o
+        // Pannellum renderiza a string literal "undefined" na barra de
+        // titulo quando a chave existe com valor undefined (bug real
+        // observado visualmente em QA — a legenda é opcional no upload,
+        // então este é o caso comum, não a exceção).
+        viewer = window.pannellum.viewer(containerRef.current, {
+          type: "equirectangular",
+          panorama: url,
+          autoLoad: true,
+          compass: false,
+          showControls: true,
+          ...(caption ? { title: caption } : {}),
+        });
+        setStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setStatus("error");
+      });
+
+    return () => {
+      cancelled = true;
+      viewer?.destroy();
+    };
+  }, [url, caption]);
+
+  if (status === "error") {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="grid h-72 place-items-center bg-[radial-gradient(circle_at_50%_30%,rgba(200,162,75,0.22),transparent_42%),#090909] text-center">
+        <span className="inline-flex flex-col items-center gap-3">
+          <span className="grid size-16 place-items-center rounded-full bg-[var(--site-primary)] text-black">
+            <Play className="size-7" />
+          </span>
+          <span className="text-sm text-white/68">Nao foi possivel carregar o tour 360. Abrir a foto panoramica.</span>
+        </span>
+      </a>
+    );
+  }
+
+  return (
+    <div className="relative h-72 w-full bg-black">
+      {status === "loading" ? (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-black/60 text-sm text-white/68">Carregando tour 360...</div>
+      ) : null}
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
+  );
+}
+
+function isLikelyImageUrl(url: string) {
+  return /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i.test(url) || url.includes("/uploads/") || url.includes("cloudinary.com") || url.includes("r2.dev") || url.includes("r2.cloudflarestorage.com");
 }
 
 function DetailsSection({ property, features }: { property: ExtendedProperty; features: string[] }) {
@@ -761,7 +879,12 @@ function getContactPhone(property: ExtendedProperty | null, site: PublicProperty
 
 function getPublisher(property: ExtendedProperty, site: PublicPropertyResponse["site"]) {
   return {
-    name: property.broker_name || property.agent_name || site.brand_name || "Imobiliaria",
+    // Item 6 do escopo: corretor responsavel selecionado no cadastro, exposto
+    // no site publico so pelo NOME (responsible_user_name, backend
+    // ja garante nunca incluir telefone/e-mail do AppUser nessa consulta).
+    // O telefone exibido aqui e SEMPRE o contato oficial da imobiliaria
+    // (site.phone/whatsapp) - nunca um telefone pessoal do corretor.
+    name: property.responsible_user_name || property.broker_name || property.agent_name || site.brand_name || "Imobiliaria",
     phone: property.broker_phone || property.agent_phone || site.phone || site.whatsapp || null,
     creci: property.broker_creci || property.agent_creci || null,
     photo: property.broker_photo_url || property.agent_photo_url || site.logo_url || null,

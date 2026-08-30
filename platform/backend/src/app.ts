@@ -30,6 +30,8 @@ import { usageCostsRouter } from "./routes/usage-costs.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { websiteBuilderRouter } from "./routes/website-builder.js";
 import { buildAppBootstrap } from "./services/app-bootstrap.js";
+import { getStorageProviderName } from "./services/storage/index.js";
+import { localUploadsRoot } from "./services/storage/local-storage-provider.js";
 import type { RequestWithAccess } from "./types/access.js";
 
 function corsOrigins() {
@@ -57,6 +59,25 @@ export function createApp() {
       },
     }),
   );
+
+  // Servico estatico dos arquivos enviados via LocalStorageProvider — SOMENTE
+  // quando o provider "local" esta ativo e fora de producao (ver
+  // services/storage/local-storage-provider.ts). Nao versiona nada: a pasta
+  // e gitignored (platform/.gitignore -> backend/uploads/).
+  if (env.NODE_ENV !== "production" && getStorageProviderName() === "local") {
+    app.use(
+      "/uploads",
+      (_req, res, next) => {
+        // helmet() aplica Cross-Origin-Resource-Policy: same-origin por
+        // padrao, o que bloquearia o frontend (porta/origem diferente) de
+        // carregar essas imagens. Relaxamos apenas nesta rota, apenas em
+        // dev, apenas para o provider local.
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        next();
+      },
+      express.static(localUploadsRoot()),
+    );
+  }
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "imobiflow-api" });

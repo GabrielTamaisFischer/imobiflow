@@ -141,14 +141,30 @@ function SitePage() {
     if (pathname === "/app/site" && !isLoading && session) void refresh();
   }, [isLoading, pathname, session]);
 
+  // BUG-SITE-003 (correção, 2026-08-30): esta métrica usava o toggle
+  // "Publicar automaticamente..." como filtro — quando ligado, contava TODOS
+  // os imóveis como "visíveis no site", mesmo sem nenhum publicado de fato.
+  // A publicação real é 100% controlada por published_at (ações explícitas
+  // Salvar e publicar / Publicar no site / Despublicar — nunca automática),
+  // então a métrica precisa refletir isso sempre, sem exceção.
   const visibleOnSiteProperties = useMemo(
-    () => (form.auto_publish_properties ? properties : properties.filter((property) => Boolean(property.published_at))),
-    [form.auto_publish_properties, properties],
+    () => properties.filter((property) => Boolean(property.published_at)),
+    [properties],
   );
   const activeTemplate = useMemo(() => siteTemplates.find((template) => template.key === form.template_key) ?? siteTemplates[0], [form.template_key]);
   const primaryBuilderSite = builderSites[0] ?? null;
   const previewSlug = form.slug || slugify(form.brand_name) || "imoveis-premium-gold";
-  const publicUrl = site?.slug ? `/site/${site.slug}` : `/site/${previewSlug}`;
+  // BUG-SITE-002 (correção): o site público só resolve de fato quando existe
+  // um CompanySite salvo E publicado (mesmo gate de site/:slug no backend —
+  // ver getMysqlPublishedSite). Antes disso, "publicUrl" NUNCA deve apontar
+  // para uma URL real/clicável — apenas um slug adivinhado que sempre
+  // resultava em "Site não encontrado". Ver Bugs Resolvidos.md.
+  const publicUrl = site?.slug && site.status === "published" ? `/site/${site.slug}` : null;
+  const siteNotLiveReason = !site
+    ? "Salve os dados do site abaixo para criar o seu site."
+    : site.status !== "published"
+      ? "Clique em “Ativar site” para publicar e gerar o link público."
+      : null;
   const favoriteTemplates = siteTemplates.filter((template) => favoriteTemplateKeys.includes(template.key));
 
   if (pathname !== "/app/site") {
@@ -375,7 +391,7 @@ function SitePage() {
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
               Este é o visual atualmente escolhido para o site público. Os imóveis cadastrados e liberados entram automaticamente na vitrine.
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               {publicUrl ? (
                 <Button variant="outline" asChild>
                   <a href={publicUrl} target="_blank" rel="noreferrer">
@@ -383,7 +399,9 @@ function SitePage() {
                     Visualizar site
                   </a>
                 </Button>
-              ) : null}
+              ) : (
+                <span className="text-xs text-muted-foreground">{siteNotLiveReason}</span>
+              )}
               <Button type="button" onClick={() => void handleEditBuilderSite()} disabled={isBusy}>
                 <Layers3 className="size-4" />
                 Editar site
@@ -561,12 +579,14 @@ function SitePage() {
                     ))}
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" size="sm" asChild>
-                      <a href={templatePreviewUrl} target="_blank" rel="noreferrer">
-                        <ExternalLink className="size-4" />
-                        Preview
-                      </a>
-                    </Button>
+                    {templatePreviewUrl ? (
+                      <Button type="button" variant="outline" size="sm" asChild>
+                        <a href={templatePreviewUrl} target="_blank" rel="noreferrer">
+                          <ExternalLink className="size-4" />
+                          Preview
+                        </a>
+                      </Button>
+                    ) : null}
                     <Button type="button" variant="outline" size="sm" onClick={() => void toggleFavoriteTemplate(template.key)} disabled={isBusy}>
                       <Heart className={isFavorite ? "size-4 fill-primary text-primary" : "size-4"} />
                       {isFavorite ? "Favorito" : "Favoritar"}
@@ -640,11 +660,15 @@ function SitePage() {
               <input type="checkbox" checked={form.allow_lead_capture} onChange={(event) => setForm({ ...form, allow_lead_capture: event.target.checked })} />
               Capturar leads
             </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.auto_publish_properties} onChange={(event) => setForm({ ...form, auto_publish_properties: event.target.checked })} />
-              Publicar automaticamente imóveis cadastrados no modelo escolhido
-            </label>
           </div>
+          {/* BUG-SITE-003 (correção): removido o toggle "Publicar
+              automaticamente imóveis cadastrados" — nunca teve efeito real no
+              backend (nenhuma rota de criação/edição de imóvel o lia); a
+              publicação é sempre uma ação explícita (Salvar e publicar, ou
+              Publicar no site / Despublicar na edição), nunca automática. */}
+          <p className="md:col-span-2 text-xs text-muted-foreground">
+            Imóveis só aparecem no site depois de publicados explicitamente (botão “Salvar e publicar” no cadastro, ou “Publicar no site” na edição do imóvel).
+          </p>
           <div className="md:col-span-2">
             <Button type="submit" disabled={isBusy}>
               {isBusy ? <Loader2 className="size-4 animate-spin" /> : <Globe2 className="size-4" />}
@@ -679,7 +703,7 @@ function MySitesShowcase({
 }: {
   builderSites: WebsiteBuilderWebsite[];
   favoriteTemplates: SiteTemplate[];
-  publicUrl: string;
+  publicUrl: string | null;
   onEdit: (websiteId: string) => void;
   onPreview: (website: WebsiteBuilderWebsite) => string;
   onUseTemplate: (templateKey: SiteTemplateKey) => void;
@@ -754,12 +778,14 @@ function MySitesShowcase({
             <p className="mt-1 text-sm text-muted-foreground">{template.subtitle}</p>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">{template.description}</p>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" asChild>
-                <a href={publicUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink className="size-4" />
-                  Preview
-                </a>
-              </Button>
+              {publicUrl ? (
+                <Button type="button" variant="outline" size="sm" asChild>
+                  <a href={publicUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-4" />
+                    Preview
+                  </a>
+                </Button>
+              ) : null}
               <Button type="button" size="sm" onClick={() => onUseTemplate(template.key)}>
                 Usar modelo
               </Button>
@@ -795,7 +821,7 @@ function SiteProjectPreview({ url, title }: { url: string; title: string }) {
   );
 }
 
-function SiteTemplateLivePreview({ url, template, compact = false }: { url: string; template: SiteTemplate; compact?: boolean }) {
+function SiteTemplateLivePreview({ url, template, compact = false }: { url: string | null; template: SiteTemplate; compact?: boolean }) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-neutral-950 shadow-sm">
       <div className="flex h-9 items-center gap-2 border-b border-white/10 bg-neutral-900 px-3">
@@ -803,25 +829,36 @@ function SiteTemplateLivePreview({ url, template, compact = false }: { url: stri
         <span className="size-2.5 rounded-full bg-amber-300" />
         <span className="size-2.5 rounded-full bg-emerald-400" />
         <span className="ml-2 truncate rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/65">
-          Preview real do site - {template.name}
+          {url ? `Preview real do site - ${template.name}` : `Preview indisponível - ${template.name}`}
         </span>
       </div>
       <div className={compact ? "relative h-[300px] overflow-hidden bg-neutral-950 sm:h-[340px]" : "relative h-[360px] overflow-hidden bg-neutral-950 sm:h-[420px]"}>
-        <iframe
-          className={compact ? "h-[680px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]" : "h-[840px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"}
-          sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
-          referrerPolicy="no-referrer"
-          src={url}
-          title={`Preview ${template.name}`}
-          loading="lazy"
-        />
-        <a
-          className="absolute inset-0"
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`Abrir preview do modelo ${template.name}`}
-        />
+        {url ? (
+          <>
+            <iframe
+              className={compact ? "h-[680px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]" : "h-[840px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"}
+              sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
+              referrerPolicy="no-referrer"
+              src={url}
+              title={`Preview ${template.name}`}
+              loading="lazy"
+            />
+            <a
+              className="absolute inset-0"
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Abrir preview do modelo ${template.name}`}
+            />
+          </>
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+            <Globe2 className="size-6 text-white/40" />
+            <p className="text-xs text-white/55">
+              O preview real aparece aqui depois que o site é salvo e publicado.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

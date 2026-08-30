@@ -150,6 +150,28 @@ describe("public property data boundary", () => {
     });
   });
 
+  it("still resolves an old shared slug by id suffix after the title/code changes (B2 — não quebra link público após edição)", async () => {
+    // O slug público é derivado de code+title (texto de leitura), mas quem
+    // realmente identifica o imóvel é o sufixo de 8 caracteres do id no
+    // final do slug. Um link já compartilhado (WhatsApp, indexação, favorito
+    // do cliente) foi gerado com o título ANTIGO — precisa continuar
+    // resolvendo o mesmo imóvel mesmo depois que title/code mudam.
+    const staleSlugFromBeforeTheEdit = "casa-antiga-11111111";
+
+    const property = await loadMysqlPublicPropertyByReference(
+      { companyId: "company-a", settingsJson: {} },
+      staleSlugFromBeforeTheEdit,
+    );
+
+    expect(property.id).toBe(publishedProperty.id);
+    expect(database.property.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        companyId: "company-a",
+        OR: expect.arrayContaining([{ id: { startsWith: "11111111" } }]),
+      }),
+    }));
+  });
+
   it("preserves explicitly configured public address, prices and company contact", async () => {
     const property = await loadMysqlPublicPropertyByReference(
       { companyId: "company-a", settingsJson: { show_full_address: true, show_prices: true } },

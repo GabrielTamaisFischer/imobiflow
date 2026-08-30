@@ -74,6 +74,7 @@ model AppUser {
   leadActivities LeadActivity[]
   routingLastAssigned CrmRoutingConfig[] @relation("RoutingLastAssigned")
   leadEvents LeadEvent[]
+  responsibleForProperties Property[] @relation("PropertyResponsibleUser")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -401,6 +402,12 @@ model Property {
   updatedAt               DateTime        @updatedAt @map("updated_at")
   company                 Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   owner                   PropertyOwner?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  // B4 (Fase B): antes desta migração, responsibleUserId era uma coluna solta
+  // sem FK nem relation Prisma (o "corretor responsável" existia só como um
+  // scalar não validado). Agora é uma relation real para AppUser (nenhuma
+  // entidade Broker nova — reaproveita AppUser/roles, conforme escopo da
+  // Fase B). onDelete: SetNull para nunca bloquear a remoção de um usuário.
+  responsibleUser         AppUser?        @relation("PropertyResponsibleUser", fields: [responsibleUserId], references: [id], onDelete: SetNull)
   media                   PropertyMedia[]
   siteLeads               SiteLead[]
   appointments            Appointment[]
@@ -602,7 +609,7 @@ model CompanySite {
   company       Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   siteLeads     SiteLead[]
 
-  @@unique([companyId, slug])
+  @@unique([slug])
   @@unique([customDomain])
   @@index([slug, status])
   @@index([companyId, status])
@@ -882,6 +889,8 @@ enum WebsiteAuditAction {
   site_unpublished
   site_property_published
   site_property_unpublished
+  property_published_owner_notified
+  property_published_owner_notification_skipped
 }
 
 model Website {

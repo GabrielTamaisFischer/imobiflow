@@ -7,7 +7,13 @@ import {
   requireCompany,
   requirePermission,
 } from "../middleware/auth.js";
-import { prisma, serializeCompanySite, syncMysqlPropertyPublication } from "../services/mysql-real-estate.js";
+import {
+  isSiteSlugTakenByAnotherCompany,
+  prisma,
+  serializeCompanySite,
+  syncMysqlPropertyPublication,
+} from "../services/mysql-real-estate.js";
+import { emitPropertyPublishedEvent } from "../services/property-events.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const sitesRouter = Router();
@@ -23,7 +29,19 @@ const siteSchema = z.object({
   phone: z.string().max(40).optional().or(z.literal("")),
   whatsapp: z.string().max(40).optional().or(z.literal("")),
   email: z.string().email().optional().or(z.literal("")),
-  logo_url: z.string().url().optional().or(z.literal("")),
+  // Achado real em QA (2026-08-30): z.string().url() exige URL absoluta com
+  // protocolo (https://...), mas o próprio formulário do frontend usa como
+  // valor padrão um caminho RELATIVO ("/site-templates/imoveis-logo.png",
+  // asset estático do próprio app) — válido como src de <img>, mas
+  // rejeitado por esta validação. Resultado: qualquer empresa nova que
+  // clicasse em "Salvar site" pela primeira vez, sem trocar o logo padrão,
+  // recebia um 400 genérico ("Dados inválidos. Revise os campos.") sem
+  // indicar qual campo, e ficava sem conseguir criar o CompanySite — a
+  // própria pergunta que o item 7 do escopo pede para nunca deixar sem
+  // resposta. logo_url aceita tanto um caminho relativo (asset local)
+  // quanto uma URL absoluta (upload real via Local/Cloudinary/R2); o que
+  // importa é ser uma string razoável, não uma URL RFC-estrita.
+  logo_url: z.string().max(300).optional().or(z.literal("")),
   primary_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#111827"),
   settings_json: z
     .object({
@@ -58,6 +76,20 @@ sitesRouter.put("/settings", requirePermission("site.manage"), async (req: Reque
     const userId = req.access!.appUser.id;
     const input = siteSchema.parse(req.body);
     const existing = await prisma().companySite.findFirst({ where: { companyId } });
+
+    // P0 multiempresa: o schema ja garante slug globalmente unico
+    // (@@unique([slug]) em CompanySite), exatamente para que o roteamento
+    // publico (GET /public/sites/:slug, que nao tem como saber qual empresa
+    // o visitante pretendia) sempre resolva para uma unica empresa. Esta
+    // checagem aplicativa complementa a constraint do banco: ela distingue
+    // "este e o MEU proprio site, estou apenas atualizando" (permitido) de
+    // "outra empresa ja publicou este slug" (bloqueado), retornando um erro
+    // de negocio claro em vez de um erro generico de constraint violation —
+    // sem isso, duas empresas tentando o mesmo slug so descobririam o
+    // conflito por um 500/erro de banco pouco informativo. Ver auditoria de
+    // isolamento multiempresa do site publico.
+    if (await isSiteSlugTakenByAnotherCompany(companyId, input.slug)) throw siteSlugTaken();
+
     const data = {
       companyId,
       createdBy: uuidOrNull(userId),
@@ -245,6 +277,14 @@ sitesRouter.post(
         },
       });
 
+      // Item 15 do escopo: evento property.published -> WhatsAppProvider
+      // sintético, nunca hardcoded aqui — toda a lógica (validar a URL
+      // pública antes de notificar, escolher o provider, registrar o log)
+      // vive em property-events.ts. Nunca deve derrubar esta resposta.
+      void emitPropertyPublishedEvent(companyId, property.id).catch((eventError) => {
+        console.error("[property.published] evento falhou de forma inesperada", eventError);
+      });
+
       res.json({ property: serializeSiteProperty(property) });
     } catch (error) {
       next(error);
@@ -335,6 +375,13 @@ function siteNotFound() {
     statusCode: 404,
     code: "SITE_NOT_FOUND",
   });
+}
+
+function siteSlugTaken() {
+  return Object.assign(
+    new Error("Este endereço (slug) já está em uso por outra imobiliária. Escolha outro."),
+    { statusCode: 409, code: "SITE_SLUG_TAKEN" },
+  );
 }
 
 function propertyNotFound() {

@@ -4,6 +4,7 @@ import {
   Download,
   Eye,
   FileText,
+  Globe,
   GripVertical,
   Home,
   ImagePlus,
@@ -42,6 +43,9 @@ import {
   type PropertySummary,
   type PropertySummaryMedia,
 } from "@/product/real-estate";
+import { listUsers, type AppUserSummary } from "@/product/auth";
+import { getPropertyDetailUrl } from "@/product/public-site-helpers";
+import { getSiteSettings, publishSiteProperty, unpublishSiteProperty } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/imoveis")({
@@ -220,6 +224,47 @@ function PropertiesPage() {
   });
   const [reloadVersion, setReloadVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
+  const [siteSlug, setSiteSlug] = useState<string | null>(null);
+  const [appUsers, setAppUsers] = useState<AppUserSummary[]>([]);
+
+  useEffect(() => {
+    // B4 (Fase B): lista de usuários da empresa para o seletor de "corretor
+    // responsável". Requer users.manage — quem não tiver a permissão
+    // simplesmente não vê o seletor (o imóvel continua com o responsável
+    // padrão definido na criação); não bloqueia a página.
+    if (isLoading || !session) return;
+    let canceled = false;
+    void listUsers()
+      .then((response) => {
+        if (!canceled) setAppUsers(response.users.filter((user) => user.status === "active"));
+      })
+      .catch(() => {
+        if (!canceled) setAppUsers([]);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [isLoading, session]);
+
+  useEffect(() => {
+    // B1 (Fase B): carrega o slug do site público apenas para montar o link
+    // "Ver página pública" e decidir se a ação de publicar deve ficar
+    // disponível. Não decide publicabilidade — isso continua sendo
+    // responsabilidade exclusiva do backend (syncMysqlPropertyPublication).
+    if (isLoading || !session) return;
+    let canceled = false;
+    void getSiteSettings()
+      .then((response) => {
+        if (!canceled) setSiteSlug(response.site?.slug ?? null);
+      })
+      .catch(() => {
+        if (!canceled) setSiteSlug(null);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [isLoading, session]);
 
   useEffect(() => {
     if (isLoading || !session) return;
@@ -309,15 +354,23 @@ function PropertiesPage() {
       {showForm ? (
         <PropertyForm
           owners={owners}
+          appUsers={appUsers}
           currentUserId={session?.access.appUser?.id}
           onCancel={() => setShowForm(false)}
-          onCreated={(_property, owner) => {
+          onCreated={(_property, owner, notice) => {
             if (owner) setOwners((current) => [owner, ...current]);
             setPropertyPage(1);
             reloadProperties();
             setShowForm(false);
+            setPageNotice(notice ?? null);
           }}
         />
+      ) : null}
+
+      {pageNotice ? (
+        <div className="mb-4 rounded-lg border border-border bg-card p-4 text-sm">
+          {pageNotice}
+        </div>
       ) : null}
 
       {error ? (
@@ -396,6 +449,8 @@ function PropertiesPage() {
               key={property.id}
               property={property}
               owners={owners}
+              siteSlug={siteSlug}
+              appUsers={appUsers}
               onPropertyUpdated={(updatedProperty) => {
                 setProperties((current) =>
                   current.map((item) => (item.id === updatedProperty.id ? toPropertySummary(updatedProperty) : item)),
@@ -476,18 +531,25 @@ function FilterSelect({
 
 function PropertyForm({
   owners,
+  appUsers,
   currentUserId,
   onCancel,
   onCreated,
 }: {
   owners: PropertyOwner[];
+  appUsers: AppUserSummary[];
   currentUserId?: string;
   onCancel: () => void;
-  onCreated: (property: Property, owner?: PropertyOwner) => void;
+  onCreated: (property: Property, owner?: PropertyOwner, notice?: string) => void;
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedOwnerId, setSelectedOwnerId] = useState("");
+  // Item 6 do escopo: o corretor responsável precisa ser SELECIONÁVEL já no
+  // cadastro (antes só existia essa opção na edição — ver EditSection
+  // "1. Proprietário, código e status"). Mantém currentUserId como padrão
+  // (comportamento anterior) mas permite trocar antes de salvar.
+  const [selectedResponsibleUserId, setSelectedResponsibleUserId] = useState(currentUserId ?? "");
   const [ownerSearch, setOwnerSearch] = useState("");
   const [propertyCepStatus, setPropertyCepStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
   const [description, setDescription] = useState("");
@@ -602,6 +664,15 @@ function PropertyForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Item 12 do escopo: 3 ações explícitas no cadastro — SALVAR RASCUNHO
+    // (força status=draft, nunca tenta publicar), SALVAR (mantém o status
+    // escolhido no formulário, comportamento anterior, nunca publica
+    // sozinho) e SALVAR E PUBLICAR (salva e, na sequência, chama a MESMA
+    // rota de publicação real usada na edição — POST /site/properties/:id/
+    // publish — nunca um status fictício). Detectado via SubmitEvent.
+    // submitter (padrão da spec de forms), não por heurística de clique.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const intent = (submitter?.value as "draft" | "save" | "publish" | undefined) ?? "save";
     setIsSaving(true);
     setError(null);
 
@@ -622,13 +693,13 @@ function PropertyForm({
       const priceCalculation = calculateCommercialPrices(form);
       const propertyInput: PropertyInput = {
         owner_id: ownerId,
-        responsible_user_id: currentUserId,
+        responsible_user_id: selectedResponsibleUserId || currentUserId,
         code: text(form, "code"),
         title: text(form, "title"),
         description,
         property_type: normalizePropertyType(text(form, "property_type")),
         operation: normalizeOperation(text(form, "operation")),
-        status: text(form, "status") as PropertyInput["status"],
+        status: intent === "draft" ? "draft" : (text(form, "status") as PropertyInput["status"]),
         street: text(form, "property_street"),
         number: text(form, "property_number"),
         complement: text(form, "property_complement"),
@@ -669,8 +740,30 @@ function PropertyForm({
         videoFiles,
         tourFiles,
       });
-      const refreshed = uploadedMedia.length ? await getProperty(response.property.id) : response;
-      onCreated({ ...refreshed.property, property_media: uploadedMedia.length ? uploadedMedia : refreshed.property.property_media }, createdOwner);
+      let refreshed = uploadedMedia.length ? await getProperty(response.property.id) : response;
+      let notice: string | undefined;
+
+      if (intent === "publish") {
+        try {
+          const published = await publishSiteProperty(response.property.id);
+          refreshed = { property: { ...refreshed.property, ...published.property } };
+          notice = "Imóvel salvo e publicado no site.";
+        } catch (publishError) {
+          // O imóvel FOI salvo — não perder o trabalho do usuário. Mas a
+          // publicação falhou (ex.: checklist incompleto) e isso precisa
+          // ficar claro, nunca escondido atrás de um "salvo com sucesso"
+          // genérico (mesmo princípio do BUG-SITE-001: nunca fingir estado
+          // que não existe).
+          notice =
+            publishError instanceof Error
+              ? `Imóvel salvo, mas não foi possível publicar: ${publishError.message}`
+              : "Imóvel salvo, mas não foi possível publicar no site.";
+        }
+      } else if (intent === "draft") {
+        notice = "Imóvel salvo como rascunho. Ele não aparece no site até ser publicado.";
+      }
+
+      onCreated({ ...refreshed.property, property_media: uploadedMedia.length ? uploadedMedia : refreshed.property.property_media }, createdOwner, notice);
       formElement.reset();
       setDescription("");
       setMainPhoto(null);
@@ -765,6 +858,24 @@ function PropertyForm({
             Proprietário vinculado: <strong className="text-foreground">{selectedOwner.name}</strong>. O código do imóvel ficará ligado a este cadastro.
           </div>
         )}
+        {appUsers.length ? (
+          <label className="space-y-1 text-sm">
+            <span className="font-medium">Corretor responsável</span>
+            <select
+              name="responsible_user_id"
+              value={selectedResponsibleUserId}
+              onChange={(event) => setSelectedResponsibleUserId(event.target.value)}
+              className={fieldClass}
+            >
+              <option value="">Sem responsável definido</option>
+              {appUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </FormSection>
 
       <FormSection step={1} activeStep={stepIndex} title="2. Localização do imóvel" description="Endereço, coordenadas, condomínio e referências de acesso.">
@@ -895,13 +1006,16 @@ function PropertyForm({
       <FormSection step={7} activeStep={stepIndex} title="8. Vídeo" description="Adicione vídeos MP4 ou links externos do imóvel.">
         <FilePicker
           label="Adicionar vídeo MP4"
-          description="Envie vídeos reais do imóvel. Eles serão vinculados automaticamente após salvar."
+          description="Envie vídeos reais do imóvel (limite prático de ~10MB por arquivo). Para vídeos maiores, use o campo de link externo abaixo."
           accept="video/mp4"
           multiple
           files={videoFiles}
           onFilesChange={setVideoFiles}
         />
         <TextArea label="Links de vídeo" name="videos" placeholder="YouTube, Vimeo ou tour externo, um link por linha" />
+        <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-4">
+          Upload direto de MP4 é indicado para vídeos curtos/leves. Para vídeos maiores ou de melhor qualidade, prefira hospedar em YouTube/Vimeo e colar o link acima — o site do imóvel exibe ambos normalmente.
+        </p>
       </FormSection>
 
       <FormSection step={8} activeStep={stepIndex} title="9. Descrição" description="Gere textos por modelos locais, sem custo de IA real nesta fase.">
@@ -1003,14 +1117,41 @@ function PropertyForm({
             Próxima etapa
           </button>
         </div>
-        <button
-          type="submit"
-          disabled={isSaving}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-          Salvar imóvel
-        </button>
+        {/* Item 12 do escopo: 3 ações explícitas, cada uma um botão submit
+            com name="intent" — o navegador inclui o value do botão clicado
+            no SubmitEvent.submitter (lido em handleSubmit), sem heurística. */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="submit"
+            name="intent"
+            value="draft"
+            disabled={isSaving}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Salvar rascunho
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="save"
+            disabled={isSaving}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Salvar
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="publish"
+            disabled={isSaving}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+            Salvar e publicar
+          </button>
+        </div>
       </div>
     </form>
   );
@@ -1288,6 +1429,8 @@ function FeatureGroup({ group, items }: { group: string; items: string[] }) {
 function PropertyCard({
   property,
   owners,
+  siteSlug,
+  appUsers,
   onPropertyUpdated,
   onPropertyRemoved,
   onMediaUploaded,
@@ -1295,6 +1438,8 @@ function PropertyCard({
 }: {
   property: PropertySummary;
   owners: PropertyOwner[];
+  siteSlug: string | null;
+  appUsers: AppUserSummary[];
   onPropertyUpdated: (property: Property) => void;
   onPropertyRemoved: (propertyId: string) => void;
   onMediaUploaded: (media: NonNullable<Property["property_media"]>[number]) => void;
@@ -1371,9 +1516,16 @@ function PropertyCard({
           <p className="text-xs font-medium uppercase text-muted-foreground">{property.code || property.property_type}</p>
           <h2 className="mt-1 line-clamp-2 text-sm font-semibold">{property.title}</h2>
         </div>
-        <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-          {statusLabels[property.status]}
-        </span>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+            {statusLabels[property.status]}
+          </span>
+          {property.published_at ? (
+            <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-700">
+              Publicado no site
+            </span>
+          ) : null}
+        </div>
       </div>
       {location ? (
         <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
@@ -1393,6 +1545,9 @@ function PropertyCard({
         {property.property_owners?.name ? (
           <p className="text-xs text-muted-foreground">Proprietário: {property.property_owners.name}</p>
         ) : null}
+        {property.responsible_user?.name ? (
+          <p className="text-xs text-muted-foreground">Corretor responsável: {property.responsible_user.name}</p>
+        ) : null}
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
         <ActionButton icon={Eye} label="Visualizar" onClick={() => void openProperty("report")} disabled={isActionLoading} />
@@ -1404,6 +1559,13 @@ function PropertyCard({
           disabled={isActionLoading}
         />
         <ActionButton icon={Trash2} label="Excluir" onClick={() => void handleArchive()} disabled={isActionLoading} danger />
+        {property.published_at && siteSlug ? (
+          <ActionButton
+            icon={Globe}
+            label="Ver página pública"
+            onClick={() => window.open(getPropertyDetailUrl(siteSlug, property), "_blank", "noopener,noreferrer")}
+          />
+        ) : null}
       </div>
       {actionError ? <p className="mt-2 text-xs text-destructive">{actionError}</p> : null}
       </div>
@@ -1425,11 +1587,20 @@ function PropertyCard({
         <EditPropertyDialog
           property={detailProperty}
           owners={owners}
+          siteSlug={siteSlug}
+          appUsers={appUsers}
           onClose={() => setIsEditOpen(false)}
           onSaved={(updated) => {
             setDetailProperty(updated);
             onPropertyUpdated(updated);
             setIsEditOpen(false);
+          }}
+          onPublicationChanged={(updated) => {
+            // Publicar/despublicar é uma ação dedicada (B1): atualiza o estado
+            // local e o card, mas não fecha o diálogo de edição nem passa por
+            // handleEditSubmit — nunca é um efeito colateral de "Salvar edição".
+            setDetailProperty(updated);
+            onPropertyUpdated(updated);
           }}
         />
       ) : null}
@@ -1572,16 +1743,25 @@ function PropertyReportModal({
 function EditPropertyDialog({
   property,
   owners,
+  siteSlug,
+  appUsers,
   onClose,
   onSaved,
+  onPublicationChanged,
 }: {
   property: Property;
   owners: PropertyOwner[];
+  siteSlug: string | null;
+  appUsers: AppUserSummary[];
   onClose: () => void;
   onSaved: (property: Property) => void;
+  onPublicationChanged: (property: Property) => void;
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publicationError, setPublicationError] = useState<string | null>(null);
+  const [publicationNotice, setPublicationNotice] = useState<string | null>(null);
   const capture = property.capture_json ?? {};
   const primary = property.primary_details_json ?? {};
   const measurements = property.measurements_json ?? {};
@@ -1599,6 +1779,7 @@ function EditPropertyDialog({
       const priceCalculation = calculateCommercialPrices(form);
       const response = await updateProperty(property.id, {
         owner_id: text(form, "owner_id"),
+        responsible_user_id: text(form, "responsible_user_id") || undefined,
         code: text(form, "code"),
         title: text(form, "title"),
         description: text(form, "description"),
@@ -1642,9 +1823,52 @@ function EditPropertyDialog({
     }
   }
 
+  // B1 (Fase B): publicar/despublicar é uma ação explícita e dedicada, que
+  // chama diretamente POST /site/properties/:id/publish|unpublish (a mesma
+  // rota já corrigida na Fase A para nunca alterar o status comercial do
+  // imóvel como efeito colateral). A UI não recalcula a regra de
+  // publicabilidade — apenas reflete o que syncMysqlPropertyPublication
+  // decidiu no backend.
+  async function handlePublishToggle(nextEnabled: boolean) {
+    setIsPublishing(true);
+    setPublicationError(null);
+    setPublicationNotice(null);
+    try {
+      const response = nextEnabled ? await publishSiteProperty(property.id) : await unpublishSiteProperty(property.id);
+      const updated: Property = {
+        ...property,
+        status: response.property.status,
+        published_at: response.property.published_at,
+        publication_settings_json: {
+          ...property.publication_settings_json,
+          site_enabled: nextEnabled,
+        },
+      };
+      onPublicationChanged(updated);
+      setPublicationNotice(nextEnabled ? "Imóvel publicado no site." : "Imóvel despublicado do site.");
+    } catch (publishError) {
+      setPublicationError(
+        publishError instanceof Error ? publishError.message : "Não foi possível atualizar a publicação deste imóvel.",
+      );
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <form onSubmit={handleEditSubmit} className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl">
+      <form
+        // B1 (Fase B): o formulário usa campos não controlados (defaultValue),
+        // então publicar/despublicar pela ação dedicada (que não passa por
+        // aqui) não atualiza sozinho o <select> "Liberado no site?" já
+        // montado — key força remontar o formulário quando published_at
+        // muda, para o campo nunca ficar mostrando "Sim" desatualizado logo
+        // após "Despublicar" (o que faria "Salvar edição" reativar a
+        // publicação como efeito colateral surpresa, o oposto do que B1 pede).
+        key={String(property.published_at)}
+        onSubmit={handleEditSubmit}
+        className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl"
+      >
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-medium uppercase text-muted-foreground">Editar anúncio</p>
@@ -1665,6 +1889,21 @@ function EditPropertyDialog({
                 ))}
               </select>
             </label>
+            {appUsers.length ? (
+              <label className="space-y-1 text-sm">
+                <span className="font-medium">Corretor responsável</span>
+                <select
+                  name="responsible_user_id"
+                  defaultValue={property.responsible_user_id ?? property.responsible_user?.id ?? ""}
+                  className={fieldClass}
+                >
+                  <option value="">Sem responsável definido</option>
+                  {appUsers.map((user) => (
+                    <option key={user.id} value={user.id}>{user.name}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <Field label="Código" name="code" defaultValue={property.code ?? ""} />
             <Field label="Título" name="title" defaultValue={property.title} required />
             <SelectField label="Status" name="status" defaultValue={property.status} options={[
@@ -1752,6 +1991,42 @@ function EditPropertyDialog({
             <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 md:col-span-2 xl:col-span-4">
               Banner e publicação automática em portais/redes estão indisponíveis. Configure e valide cada integração antes de publicar; esta edição não cria status fictício.
             </div>
+            <div className="md:col-span-2 xl:col-span-4">
+              <PropertyPublicationSummary property={property} />
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isPublishing || Boolean(property.published_at)}
+                  onClick={() => void handlePublishToggle(true)}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
+                  Publicar no site
+                </button>
+                <button
+                  type="button"
+                  disabled={isPublishing || !property.published_at}
+                  onClick={() => void handlePublishToggle(false)}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  Despublicar
+                </button>
+                {property.published_at && siteSlug ? (
+                  <a
+                    href={getPropertyDetailUrl(siteSlug, property)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold underline-offset-2 hover:bg-accent hover:underline"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    Ver página pública
+                  </a>
+                ) : null}
+              </div>
+              {publicationError ? <p className="mt-2 text-xs text-destructive">{publicationError}</p> : null}
+              {publicationNotice ? <p className="mt-2 text-xs text-emerald-700">{publicationNotice}</p> : null}
+            </div>
           </EditSection>
         </div>
         {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
@@ -1775,10 +2050,32 @@ function EditSection({ title, children }: { title: string; children: React.React
   );
 }
 
+// B1 (Fase B): estado visual da publicação — quatro estados exigidos pelo
+// checkpoint (rascunho / pronto para publicar / publicado / indisponível-não
+// publicável). Apenas exibe o que o backend já decidiu (published_at,
+// status, checklist local só orienta o usuário) — não é uma segunda fonte
+// de verdade sobre publicabilidade.
+function getPropertyPublicationState(property: Property, allReady: boolean) {
+  if (property.published_at) {
+    return { key: "published" as const, label: "Publicado no site e pronto para acesso público.", className: "bg-emerald-500/10 text-emerald-700" };
+  }
+  if (!["available", "reserved"].includes(property.status)) {
+    return {
+      key: "unavailable" as const,
+      label: `Indisponível para publicação: status atual é "${statusLabels[property.status]}". Só imóveis disponíveis ou reservados podem ser publicados.`,
+      className: "bg-destructive/10 text-destructive",
+    };
+  }
+  if (allReady) {
+    return { key: "ready" as const, label: "Pronto para publicar: todos os itens mínimos foram preenchidos.", className: "bg-amber-500/10 text-amber-800" };
+  }
+  return { key: "draft" as const, label: "Rascunho: ainda há pendências antes de publicar.", className: "bg-muted text-muted-foreground" };
+}
+
 function PropertyPublicationSummary({ property }: { property: Property }) {
   const items = buildPropertyPublicationChecklist(property);
   const readyCount = items.filter((item) => item.ready).length;
-  const requested = property.publication_settings_json?.site_enabled === true;
+  const state = getPropertyPublicationState(property, readyCount === items.length);
 
   return (
     <div className="mt-4 rounded-md border border-border bg-background p-3">
@@ -1795,9 +2092,7 @@ function PropertyPublicationSummary({ property }: { property: Property }) {
           </p>
         ))}
       </div>
-      <p className={`mt-3 rounded-md p-2 text-xs font-medium ${property.published_at ? "bg-emerald-500/10 text-emerald-700" : requested ? "bg-amber-500/10 text-amber-800" : "bg-muted text-muted-foreground"}`}>
-        {property.published_at ? "Publicado no site e pronto para acesso público." : requested ? "Liberação solicitada; publicação aguardando os itens pendentes." : "Não liberado no site."}
-      </p>
+      <p className={`mt-3 rounded-md p-2 text-xs font-medium ${state.className}`}>{state.label}</p>
     </div>
   );
 }
@@ -1946,6 +2241,7 @@ function PropertyMediaUpload({
         {isUploading ? "Enviando..." : "Enviar foto/vídeo"}
         <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" className="sr-only" disabled={isUploading} onChange={handleFileChange} />
       </label>
+      <p className="mt-1 text-xs text-muted-foreground">Vídeos: limite prático de ~10MB por arquivo enviado. Para vídeos maiores, use o campo de link externo na etapa 8 do cadastro.</p>
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
     </div>
   );

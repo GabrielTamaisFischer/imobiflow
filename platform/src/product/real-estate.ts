@@ -71,6 +71,9 @@ export type Property = {
   description_template_key: string | null;
   published_at: string | null;
   site_featured?: boolean;
+  // Item 6 do escopo (2026-08-30): presente apenas na resposta pública do
+  // site (GET /public/sites/...). Só o nome — nunca telefone/e-mail.
+  responsible_user_name?: string | null;
   created_at: string;
   updated_at: string;
   property_owners?: {
@@ -79,6 +82,9 @@ export type Property = {
     phone: string | null;
     email: string | null;
   } | null;
+  // B4 (Fase B): corretor/responsável — só nome (uso interno/admin), nunca
+  // telefone/e-mail. Reaproveita AppUser (não é uma entidade Broker nova).
+  responsible_user?: { id: string; name: string } | null;
   property_media?: PropertyMedia[];
 };
 
@@ -145,6 +151,7 @@ export type PropertySummary = Pick<
   import_source?: string | null;
   import_external_id?: string | null;
   property_owners?: Pick<NonNullable<Property["property_owners"]>, "id" | "name"> | null;
+  responsible_user?: { id: string; name: string } | null;
   property_media?: PropertySummaryMedia[];
 };
 
@@ -578,6 +585,7 @@ export function toPropertySummary(property: Property): PropertySummary {
     property_owners: property.property_owners
       ? { id: property.property_owners.id, name: property.property_owners.name }
       : null,
+    responsible_user: property.responsible_user ?? null,
     property_media: (property.property_media ?? []).slice(0, 1).map((media) => ({
       id: media.id,
       media_type: media.media_type,
