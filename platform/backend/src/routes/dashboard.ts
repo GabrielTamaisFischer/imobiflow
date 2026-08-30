@@ -38,16 +38,16 @@ dashboardRouter.get(
         propertiesWithoutMedia,
         contractsExpiring,
       ] = await Promise.all([
-        countRows("properties", companyId, range),
-        countRows("leads", companyId, range),
-        countRows("contracts", companyId, range, { status: "active" }),
-        countRows("inspections", companyId, range),
-        sumFinancialEntries(companyId, range, ["open", "overdue"]),
-        sumFinancialEntries(companyId, range, ["paid"]),
-        countOverdueCharges(companyId),
-        countLeadsWithoutContact(companyId),
-        countPropertiesWithoutMedia(companyId),
-        countContractsExpiring(companyId),
+        degradeIfSupabaseUnavailable(countRows("properties", companyId, range)),
+        degradeIfSupabaseUnavailable(countRows("leads", companyId, range)),
+        degradeIfSupabaseUnavailable(countRows("contracts", companyId, range, { status: "active" })),
+        degradeIfSupabaseUnavailable(countRows("inspections", companyId, range)),
+        degradeIfSupabaseUnavailable(sumFinancialEntries(companyId, range, ["open", "overdue"])),
+        degradeIfSupabaseUnavailable(sumFinancialEntries(companyId, range, ["paid"])),
+        degradeIfSupabaseUnavailable(countOverdueCharges(companyId)),
+        degradeIfSupabaseUnavailable(countLeadsWithoutContact(companyId)),
+        degradeIfSupabaseUnavailable(countPropertiesWithoutMedia(companyId)),
+        degradeIfSupabaseUnavailable(countContractsExpiring(companyId)),
       ]);
 
       res.json({
@@ -112,6 +112,24 @@ dashboardRouter.get(
     }
   },
 );
+
+/**
+ * Ambiente local: o Supabase (legado) nao esta configurado de proposito
+ * (custo zero, ver .env). Sem isso, o Dashboard inteiro quebrava (500) por
+ * causa de um unico Promise.all sem tratamento por item. Aqui cada metrica
+ * degrada para 0 quando o Supabase nao esta disponivel (503), em vez de
+ * derrubar a rota inteira. Erros reais do Supabase (quando configurado)
+ * continuam sendo propagados normalmente.
+ */
+async function degradeIfSupabaseUnavailable<T>(promise: Promise<T>): Promise<T | 0> {
+  try {
+    return await promise;
+  } catch (error) {
+    const statusCode = (error as { statusCode?: number } | undefined)?.statusCode;
+    if (statusCode === 503) return 0;
+    throw error;
+  }
+}
 
 function resolveDateRange(period: string): DateRange {
   const now = new Date();
