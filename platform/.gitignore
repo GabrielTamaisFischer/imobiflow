@@ -21,6 +21,8 @@ dist-ssr
 !backend/.env.example
 !backend/.env.*.example
 *.local
+*.local.ts
+prisma/schema.client-test.prisma
 .local-logs/
 .env*.backup-*
 backend/.env*.backup-*
