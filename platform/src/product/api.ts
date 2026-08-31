@@ -1,5 +1,24 @@
 const configuredApiUrl = import.meta.env.VITE_IMOBIFLOW_API_URL?.trim();
-export const API_URL = configuredApiUrl || (import.meta.env.DEV ? "http://localhost:3333" : "/api");
+
+// Workaround for the same build-time dev/prod mode detection bug covered in
+// vite-shims/jsx-dev-runtime-prod-shim.mjs: in the current nitro (v3 beta) +
+// @tanstack/react-start + Vite 7 Environment API combination,
+// `import.meta.env.DEV` was observed to bake in as `true` for this module in
+// an otherwise-correct `vite build` production build, which made the app
+// fall back to `http://localhost:3333` as its API base URL in production and
+// silently block every API call (registration included) behind
+// API_SETUP_MESSAGE. Since this only needs to be right in the browser, we use
+// the same reliable runtime hostname check already used below in
+// `isUnavailableProductionApi`/`getConfiguredApiUrl` as the source of truth
+// whenever we're actually running in a browser, and only fall back to the
+// build-time DEV flag for true SSR (no `window`), where this bug was not
+// observed.
+const isBrowserOnNonLocalHost =
+  typeof window !== "undefined" && !["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+export const API_URL =
+  configuredApiUrl ||
+  (isBrowserOnNonLocalHost ? "/api" : import.meta.env.DEV ? "http://localhost:3333" : "/api");
 export const API_SETUP_MESSAGE =
   "O acesso antecipado ao produto SaaS está em ativação. A equipe ImobiFlow está conectando a área interna ao ambiente seguro de autenticação, empresa e assinatura.";
 
