@@ -12,9 +12,13 @@ Nao use VPS Hostinger, systemd, PM2, NGINX, Render/Railway para hospedar backend
 
 ## Modelo serverless
 
-O backend Express existente e reaproveitado por `api/[...path].ts`.
+O backend Express existente e reaproveitado por `api/index.ts` (Function de nome fixo — nao usamos mais
+a sintaxe de catch-all `[...path].ts`, ver nota abaixo).
 
-A Function remove o prefixo `/api` antes de encaminhar a requisicao para o app Express. Assim:
+A Function remove o prefixo `/api` antes de encaminhar a requisicao para o app Express. Um rewrite em
+`vercel.json` (`/api/:path*` -> `/api`) garante que toda requisicao com 1 ou mais segmentos depois de
+`/api` chegue a essa mesma Function; sem o rewrite, o roteamento por sistema de arquivos da Vercel so
+casaria com a URL exata `/api`. Assim:
 
 ```txt
 /api/auth/login -> /auth/login
@@ -34,7 +38,7 @@ npm run deploy:vercel
 
 O script:
 
-- valida a entrada serverless `api/[...path].ts`;
+- valida a entrada serverless `api/index.ts`;
 - linka o projeto com `vercel link`, se necessario;
 - grava variaveis em Production e Preview;
 - normaliza a `DATABASE_URL` com `connection_limit=1`, `connect_timeout=15` e `sslaccept` quando ausentes;

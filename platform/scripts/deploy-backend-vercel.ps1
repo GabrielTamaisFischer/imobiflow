@@ -277,7 +277,7 @@ function Invoke-DatabaseConnectionValidation([string]$DatabaseUrl) {
 }
 
 Write-Step "Validando estrutura serverless"
-Assert-File "api/[...path].ts"
+Assert-File "api/index.ts"
 Assert-File "backend/src/app.ts"
 Assert-File "backend/src/server.ts"
 Assert-File "prisma/schema.prisma"
@@ -286,12 +286,12 @@ Assert-File "vercel.json"
 Write-Ok "Arquivos esperados encontrados"
 
 $serverSource = Get-Content -LiteralPath "backend/src/server.ts" -Raw
-$apiSource = Get-Content -LiteralPath "api/[...path].ts" -Raw
+$apiSource = Get-Content -LiteralPath "api/index.ts" -Raw
 if ($serverSource -notmatch "app\.listen") {
   throw "backend/src/server.ts deveria conter apenas o servidor local com app.listen."
 }
 if ($apiSource -match "app\.listen") {
-  throw "A Function api/[...path].ts nao pode chamar app.listen."
+  throw "A Function api/index.ts nao pode chamar app.listen."
 }
 Write-Ok "Entrada /api usa createApp sem servidor permanente"
 

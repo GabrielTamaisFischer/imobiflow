@@ -84,9 +84,9 @@ export function buildWebsiteBuilderPreflight(env = loadProjectEnv(), projectRoot
       detail: "prisma/migrations",
     },
     {
-      ok: existsSync(path.join(projectRoot, "api/[...path].ts")),
+      ok: existsSync(path.join(projectRoot, "api/index.ts")),
       label: "Vercel Function",
-      detail: "api/[...path].ts",
+      detail: "api/index.ts",
     },
   ];
 
