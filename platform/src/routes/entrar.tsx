@@ -2,7 +2,10 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { LockKeyhole } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { login } from "@/product/auth";
+import { isFreeRegistrationUiEnabled } from "@/product/registration-access";
 import { isSubscriptionActive } from "@/product/subscription";
+
+const registrationUiEnabled = isFreeRegistrationUiEnabled(import.meta.env);
 
 export const Route = createFileRoute("/entrar")({
   component: LoginPage,
@@ -118,8 +121,8 @@ function LoginPage() {
 
           <p className="mt-5 text-center text-sm text-muted-foreground">
             Ainda não tem conta?{" "}
-            <Link to="/planos" className="font-medium text-primary">
-              Escolher um plano
+            <Link to={registrationUiEnabled ? "/cadastro" : "/planos"} className="font-medium text-primary">
+              {registrationUiEnabled ? "Criar conta" : "Escolher um plano"}
             </Link>
           </p>
         </form>

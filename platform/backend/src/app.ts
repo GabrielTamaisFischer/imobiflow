@@ -34,11 +34,28 @@ import { getStorageProviderName } from "./services/storage/index.js";
 import { localUploadsRoot } from "./services/storage/local-storage-provider.js";
 import type { RequestWithAccess } from "./types/access.js";
 
-function corsOrigins() {
-  return (env.CORS_ORIGIN || env.FRONTEND_URL || env.APP_URL)
+// Diretriz Mestre do MVP, Seção 14/Item 7: CORS_ORIGIN é uma allowlist
+// explícita, nunca wildcard — o staging na Vercel usa este mesmo mecanismo,
+// só configurando CORS_ORIGIN com o(s) domínio(s) reais de staging (ex.:
+// "https://imobiflow-staging.vercel.app"), sem nenhuma mudança de código.
+// Como a resposta é enviada com credentials:true (cookies/Authorization),
+// um "*" aqui seria espec-inválido (o navegador rejeitaria toda resposta
+// credenciada) e mascararia um erro de configuração em vez de falhar cedo —
+// por isso este fail-safe recusa subir o servidor nesse caso.
+export function corsOrigins() {
+  const origins = (env.CORS_ORIGIN || env.FRONTEND_URL || env.APP_URL)
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
+  if (origins.includes("*")) {
+    throw new Error(
+      "CORS_ORIGIN nao pode ser \"*\": as respostas desta API usam credentials:true, " +
+        "e um wildcard e incompativel com credenciais (alem de nunca ser a config " +
+        "pretendida para staging/producao). Configure o(s) dominio(s) reais separados " +
+        "por virgula.",
+    );
+  }
+  return origins;
 }
 
 export function createApp() {

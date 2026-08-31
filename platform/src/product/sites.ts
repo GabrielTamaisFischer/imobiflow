@@ -144,6 +144,43 @@ export async function publishSiteProperty(propertyId: string) {
   );
 }
 
+// Diretriz Mestre do MVP, Seção 7: só CALCULA se um deeplink de WhatsApp pode
+// ser oferecido (telefone do proprietário existe, site publicado, URL pública
+// validada) e monta o texto/link prontos. Nunca envia nada pelo servidor —
+// só o clique do usuário no botão que abre isto no navegador conta como
+// "enviar", e mesmo assim só de fato se o usuário confirmar dentro do
+// WhatsApp.
+export type PropertyWhatsAppLink =
+  | {
+      eligible: true;
+      provider: string;
+      phone: string;
+      ownerName: string | null;
+      companyName: string;
+      code: string;
+      title: string;
+      publicUrl: string;
+      message: string;
+      waUrl: string;
+    }
+  | { eligible: false; reason: string };
+
+export async function getPropertyWhatsAppLink(propertyId: string) {
+  return apiRequest<PropertyWhatsAppLink>(`/site/properties/${propertyId}/whatsapp-link`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+// Chamada no exato momento em que o link wa.me é aberto (após o clique do
+// usuário) — só para deixar auditável que o link foi aberto. Não implica que
+// a mensagem chegou ao proprietário.
+export async function markPropertyWhatsAppLinkOpened(propertyId: string) {
+  await apiRequest<void>(`/site/properties/${propertyId}/whatsapp-link-opened`, {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+  });
+}
+
 export async function unpublishSiteProperty(propertyId: string) {
   if (isPreviewSites()) {
     const property = updatePreviewPropertyPublication(propertyId, false);

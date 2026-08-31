@@ -13,7 +13,11 @@ import {
   serializeCompanySite,
   syncMysqlPropertyPublication,
 } from "../services/mysql-real-estate.js";
-import { emitPropertyPublishedEvent } from "../services/property-events.js";
+import {
+  emitPropertyPublishedEvent,
+  recordWhatsAppLinkOpened,
+  resolveWhatsAppOwnerNotification,
+} from "../services/property-events.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const sitesRouter = Router();
@@ -277,15 +281,60 @@ sitesRouter.post(
         },
       });
 
-      // Item 15 do escopo: evento property.published -> WhatsAppProvider
-      // sintético, nunca hardcoded aqui — toda a lógica (validar a URL
-      // pública antes de notificar, escolher o provider, registrar o log)
-      // vive em property-events.ts. Nunca deve derrubar esta resposta.
+      // Item 15 do escopo / Diretriz Mestre Seção 7: evento property.published
+      // só AVALIA se um deeplink de WhatsApp pode ser oferecido (e registra em
+      // auditoria quando não pode) — nunca envia nada pelo servidor. Toda a
+      // lógica vive em property-events.ts. Nunca deve derrubar esta resposta.
       void emitPropertyPublishedEvent(companyId, property.id).catch((eventError) => {
         console.error("[property.published] evento falhou de forma inesperada", eventError);
       });
 
       res.json({ property: serializeSiteProperty(property) });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Diretriz Mestre do MVP, Seção 7: chamada SOB DEMANDA pela UI (ex.: ao abrir
+// a tela do imóvel publicado) para decidir se mostra o botão "Enviar anúncio
+// ao proprietário pelo WhatsApp" e montar o texto/URL prontos. Não envia nada
+// — só calcula. A mesma validação real de URL pública de emitPropertyPublishedEvent
+// é reaproveitada (resolveWhatsAppOwnerNotification), nunca reimplementada aqui.
+sitesRouter.get(
+  "/properties/:id/whatsapp-link",
+  requirePermission("site.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const propertyId = String(req.params.id);
+      const result = await resolveWhatsAppOwnerNotification(companyId, propertyId);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Diretriz Mestre do MVP, Seção 7: chamada pelo FRONTEND no exato momento em
+// que o link wa.me é aberto (após o clique do usuário no botão), só para
+// deixar auditável que o link foi aberto. NUNCA implica que a mensagem foi
+// enviada/recebida — só que o usuário abriu o WhatsApp com o texto pronto.
+sitesRouter.post(
+  "/properties/:id/whatsapp-link-opened",
+  requirePermission("site.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const userId = req.access!.appUser.id;
+      const propertyId = String(req.params.id);
+      const existing = await prisma().property.findFirst({
+        where: { id: propertyId, companyId },
+        select: { id: true },
+      });
+      if (!existing) throw propertyNotFound();
+      await recordWhatsAppLinkOpened(companyId, propertyId, uuidOrNull(userId));
+      res.status(204).send();
     } catch (error) {
       next(error);
     }

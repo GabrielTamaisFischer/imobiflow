@@ -10,6 +10,7 @@ import {
   ImagePlus,
   Loader2,
   MapPin,
+  MessageCircle,
   Pencil,
   Plus,
   Share2,
@@ -45,7 +46,13 @@ import {
 } from "@/product/real-estate";
 import { listUsers, type AppUserSummary } from "@/product/auth";
 import { getPropertyDetailUrl } from "@/product/public-site-helpers";
-import { getSiteSettings, publishSiteProperty, unpublishSiteProperty } from "@/product/sites";
+import {
+  getPropertyWhatsAppLink,
+  getSiteSettings,
+  markPropertyWhatsAppLinkOpened,
+  publishSiteProperty,
+  unpublishSiteProperty,
+} from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/imoveis")({
@@ -1497,6 +1504,31 @@ function PropertyCard({
     }
   }
 
+  // Diretriz Mestre do MVP, Seção 7: o backend só CALCULA o link — nunca
+  // envia nada. O envio só acontece se o WhatsApp abrir no navegador do
+  // usuário E o usuário confirmar dentro do próprio WhatsApp. Por isso o
+  // texto do botão diz "enviar" mas o código nunca afirma que enviou —
+  // só abre o link e registra a abertura para auditoria.
+  async function handleWhatsAppShare() {
+    setIsActionLoading(true);
+    setActionError(null);
+    try {
+      const result = await getPropertyWhatsAppLink(property.id);
+      if (!result.eligible) {
+        setActionError(whatsAppIneligibleReasonLabel(result.reason));
+        return;
+      }
+      window.open(result.waUrl, "_blank", "noopener,noreferrer");
+      void markPropertyWhatsAppLinkOpened(property.id).catch(() => undefined);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Não foi possível preparar o link do WhatsApp.",
+      );
+    } finally {
+      setIsActionLoading(false);
+    }
+  }
+
   return (
     <article className="overflow-hidden rounded-lg border border-border bg-card">
       {coverMedia ? (
@@ -1564,6 +1596,14 @@ function PropertyCard({
             icon={Globe}
             label="Ver página pública"
             onClick={() => window.open(getPropertyDetailUrl(siteSlug, property), "_blank", "noopener,noreferrer")}
+          />
+        ) : null}
+        {property.published_at ? (
+          <ActionButton
+            icon={MessageCircle}
+            label="Enviar ao proprietário pelo WhatsApp"
+            onClick={() => void handleWhatsAppShare()}
+            disabled={isActionLoading}
           />
         ) : null}
       </div>
@@ -2070,6 +2110,21 @@ function getPropertyPublicationState(property: Property, allReady: boolean) {
     return { key: "ready" as const, label: "Pronto para publicar: todos os itens mínimos foram preenchidos.", className: "bg-amber-500/10 text-amber-800" };
   }
   return { key: "draft" as const, label: "Rascunho: ainda há pendências antes de publicar.", className: "bg-muted text-muted-foreground" };
+}
+
+// Diretriz Mestre do MVP, Seção 7: motivos pelos quais o backend decidiu que
+// o deeplink de WhatsApp NÃO pode ser oferecido agora (ver
+// resolveWhatsAppOwnerNotification em property-events.ts, backend).
+function whatsAppIneligibleReasonLabel(reason: string) {
+  const labels: Record<string, string> = {
+    PROPERTY_NOT_FOUND: "Imóvel não encontrado.",
+    COMPANY_NOT_FOUND: "Empresa não encontrada.",
+    SITE_NOT_PUBLISHED: "O site da imobiliária ainda não está publicado.",
+    PUBLIC_URL_NOT_READY: "A página pública deste imóvel ainda não está disponível para acesso.",
+    OWNER_WITHOUT_PHONE: "O proprietário não tem telefone/WhatsApp cadastrado.",
+    ERROR: "Não foi possível verificar se o link do WhatsApp pode ser oferecido agora.",
+  };
+  return labels[reason] ?? "Não foi possível preparar o link do WhatsApp para este imóvel.";
 }
 
 function PropertyPublicationSummary({ property }: { property: Property }) {

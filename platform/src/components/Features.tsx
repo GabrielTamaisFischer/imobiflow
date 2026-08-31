@@ -3,7 +3,7 @@ import { Brain, MessageSquare, FileSignature, Camera, BarChart3, Wallet } from "
 const items = [
   { icon: Brain, title: "Lead Scoring com IA", desc: "Cada lead recebe uma nota automática por intenção, ticket e urgência." },
   { icon: MessageSquare, title: "WhatsApp Automático", desc: "Respostas, follow-ups e disparo de imóveis em segundos, no número do corretor." },
-  { icon: Camera, title: "Vistoria Inteligente", desc: "App offline, comparação entrada/saída e laudo PDF profissional gerado por IA." },
+  { icon: Camera, title: "Vistoria Inteligente", desc: "Comparação entrada/saída e laudo PDF profissional gerado por IA (funcionamento offline em desenvolvimento)." },
   { icon: FileSignature, title: "Contratos & Assinatura", desc: "Geração automática, assinatura digital e renovação programada de locação." },
   { icon: BarChart3, title: "Funil & Pipeline", desc: "Kanban visual, etapa por etapa, com previsão de fechamento por corretor." },
   { icon: Wallet, title: "Financeiro Completo", desc: "Repasses, comissões, inadimplência e fluxo de caixa em tempo real." },

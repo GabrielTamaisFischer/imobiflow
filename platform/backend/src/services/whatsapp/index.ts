@@ -1,12 +1,13 @@
-import { SyntheticWhatsAppProvider } from "./synthetic-whatsapp-provider.js";
+import { DeepLinkWhatsAppProvider } from "./deeplink-whatsapp-provider.js";
 import type { WhatsAppProvider } from "./types.js";
 
 // Mesmo padrão de seleção usado em services/storage/index.ts. Hoje só existe
-// o provider sintético (R$0) — a função existe para que ativar um provider
-// HTTP real no futuro seja trocar esta função, nunca as rotas/eventos que
-// já chamam getWhatsAppProvider().
+// o provider de deeplink (R$0, sem envio pelo servidor) — a função existe
+// para que ativar um provider HTTP real (WhatsApp Business API paga) no
+// futuro seja trocar esta função, nunca as rotas/eventos que já chamam
+// getWhatsAppProvider().
 export function getWhatsAppProvider(): WhatsAppProvider {
-  return new SyntheticWhatsAppProvider();
+  return new DeepLinkWhatsAppProvider();
 }
 
-export type { SentWhatsAppMessage, WhatsAppMessageInput, WhatsAppProvider } from "./types.js";
+export type { WhatsAppDeepLink, WhatsAppDeepLinkInput, WhatsAppProvider } from "./types.js";

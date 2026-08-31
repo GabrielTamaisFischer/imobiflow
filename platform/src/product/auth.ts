@@ -157,6 +157,25 @@ export async function activateAccount(input: {
   return response;
 }
 
+export async function registerFreeAccount(input: {
+  email: string;
+  name: string;
+  password: string;
+  company_name: string;
+  company_document?: string;
+  phone?: string;
+}) {
+  const response = await apiRequest<
+    AccessResponse & {
+      message: string;
+      company: CompanyIdentity;
+      owner: { id: string; name: string; email: string; role: string };
+    }
+  >("/auth/register", { method: "POST", body: JSON.stringify(input) });
+  if (response.session) storeSession(response.session);
+  return response;
+}
+
 export async function validateAccountActivation(token: string) {
   return apiRequest<{
     activation: {

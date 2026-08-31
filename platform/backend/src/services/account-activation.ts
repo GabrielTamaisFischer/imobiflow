@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { env, isFreeRegistrationEnabled } from "../config/env.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import {
   assertPasswordPolicy,
@@ -7,8 +8,11 @@ import {
   createSession,
   hashOpaqueToken,
   hashPassword,
+  normalizeEmail,
 } from "./mysql-auth.js";
 import { ensureDefaultCompanyRoles } from "./roles.js";
+
+const FREE_REGISTRATION_PLAN_SLUG = "staging-free-registration";
 
 type ActivationDatabase = PrismaClient | Prisma.TransactionClient;
 
@@ -194,6 +198,152 @@ export async function activatePaidAccount(
       activated.company.id,
       database,
     ),
+  };
+}
+
+/**
+ * Cadastro aberto (sem cobranca) — Diretriz Mestre do MVP, Secoes 3 e 52/54.
+ *
+ * SOMENTE valido quando isFreeRegistrationEnabled() retorna true (nunca em producao,
+ * mesmo que as flags estejam mal configuradas — ver config/env.ts). Reaproveita
+ * exatamente o mesmo pipeline de criacao de Company/Role/AppUser/Subscription/Session
+ * que activatePaidAccount(), sem exigir AccountProvisioning/CheckoutSession/pagamento.
+ * Nao remove nem contorna o fluxo comercial de producao: activatePaidAccount() continua
+ * intocado e e o unico caminho valido quando billing e obrigatorio.
+ */
+export async function registerFreeAccount(
+  input: {
+    email: string;
+    ownerName: string;
+    password: string;
+    companyName: string;
+    companyDocument?: string;
+    phone?: string;
+  },
+  metadata: { ipAddress?: string | null; userAgent?: string | null } = {},
+  database: PrismaClient = getPrisma(),
+) {
+  if (!isFreeRegistrationEnabled()) {
+    throw authError(
+      "PAID_ACTIVATION_REQUIRED",
+      "Para criar sua conta ImobiFlow, escolha um plano.",
+      403,
+    );
+  }
+  assertPasswordPolicy(input.password);
+  const email = normalizeEmail(input.email);
+  const passwordHash = await hashPassword(input.password);
+  const now = new Date();
+
+  const created = await database.$transaction(
+    async (transaction) => {
+      const existingUser = await transaction.appUser.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      if (existingUser) {
+        throw authError("REGISTRATION_EMAIL_IN_USE", "Este e-mail ja possui uma conta.", 409);
+      }
+
+      const company = await transaction.company.create({
+        data: {
+          name: input.companyName.slice(0, 160),
+          document: input.companyDocument || null,
+          phone: input.phone || null,
+          email,
+          status: "active",
+          isSynthetic: false,
+        },
+      });
+      await ensureDefaultCompanyRoles(company.id, transaction);
+      const ownerRole = await transaction.role.findFirstOrThrow({
+        where: { companyId: company.id, systemKey: "owner" },
+      });
+      const owner = await transaction.appUser.create({
+        data: {
+          companyId: company.id,
+          roleId: ownerRole.id,
+          name: input.ownerName.slice(0, 160),
+          email,
+          phone: input.phone || null,
+          passwordHash,
+          passwordChangedAt: now,
+          status: "active",
+          isSynthetic: false,
+          role: "owner",
+          permissionsJson: [],
+        },
+      });
+      const plan = await transaction.plan.upsert({
+        where: { slug: FREE_REGISTRATION_PLAN_SLUG },
+        update: { active: true },
+        create: {
+          slug: FREE_REGISTRATION_PLAN_SLUG,
+          name: "Cadastro aberto (desenvolvimento/staging)",
+          description:
+            "Conta criada via cadastro aberto em ambiente de desenvolvimento/staging, sem cobranca. Nunca disponivel em producao (ver isFreeRegistrationEnabled).",
+          billingInterval: "monthly",
+          priceCents: 0,
+          currency: "BRL",
+          active: true,
+          isSynthetic: false,
+          featuresJson: ["staging-free-registration"],
+        },
+      });
+      const currentPeriodEnd = subscriptionPeriodEnd(now, plan.billingInterval);
+      const subscription = await transaction.subscription.create({
+        data: {
+          companyId: company.id,
+          planId: plan.id,
+          status: "ACTIVE",
+          planSlug: plan.slug,
+          billingProvider: FREE_REGISTRATION_PLAN_SLUG,
+          externalSubscriptionId: `free-registration-${company.id}`,
+          currentPeriodStart: now,
+          currentPeriodEnd,
+          expiresAt: currentPeriodEnd,
+          isSynthetic: false,
+        },
+      });
+      await transaction.authAuditLog.create({
+        data: {
+          companyId: company.id,
+          actorUserId: owner.id,
+          action: "auth.free_registration",
+          entityType: "companies",
+          entityId: company.id,
+          metadataJson: {
+            environment: env.NODE_ENV,
+            plan_slug: plan.slug,
+          },
+        },
+      });
+      return { company, owner, subscription, plan };
+    },
+    { maxWait: 5_000, timeout: 20_000 },
+  );
+
+  const session = await createSession(created.owner.id, created.company.id, metadata, database);
+  return {
+    message: "Conta criada com sucesso.",
+    company: {
+      id: created.company.id,
+      name: created.company.name,
+      status: created.company.status,
+    },
+    owner: {
+      id: created.owner.id,
+      name: created.owner.name,
+      email: created.owner.email,
+      role: "owner",
+    },
+    subscription: {
+      id: created.subscription.id,
+      status: created.subscription.status,
+      plan_slug: created.plan.slug,
+    },
+    session: session.publicSession,
+    access: await buildMysqlAccessContextForUser(created.owner.id, created.company.id, database),
   };
 }
 

@@ -891,6 +891,7 @@ enum WebsiteAuditAction {
   site_property_unpublished
   property_published_owner_notified
   property_published_owner_notification_skipped
+  property_published_whatsapp_link_opened
 }
 
 model Website {

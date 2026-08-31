@@ -42,6 +42,8 @@ export type Env = {
   AUTH_EXPOSE_TEST_TOKENS?: string;
   BILLING_PROVIDER?: string;
   BILLING_PAST_DUE_GRACE_DAYS?: string;
+  REGISTRATION_ENABLED?: string;
+  BILLING_REQUIRED?: string;
   ALLOW_SYNTHETIC_BILLING_PROVISIONING?: string;
   SYNTHETIC_BILLING_ADMIN_SECRET?: string;
   STORAGE_PROVIDER?: string;
@@ -122,6 +124,8 @@ function readEnv(): Env {
     AUTH_EXPOSE_TEST_TOKENS: process.env.AUTH_EXPOSE_TEST_TOKENS,
     BILLING_PROVIDER: process.env.BILLING_PROVIDER,
     BILLING_PAST_DUE_GRACE_DAYS: process.env.BILLING_PAST_DUE_GRACE_DAYS,
+    REGISTRATION_ENABLED: process.env.REGISTRATION_ENABLED,
+    BILLING_REQUIRED: process.env.BILLING_REQUIRED,
     ALLOW_SYNTHETIC_BILLING_PROVISIONING: process.env.ALLOW_SYNTHETIC_BILLING_PROVISIONING,
     SYNTHETIC_BILLING_ADMIN_SECRET: process.env.SYNTHETIC_BILLING_ADMIN_SECRET,
     STORAGE_PROVIDER: process.env.STORAGE_PROVIDER,
@@ -172,3 +176,21 @@ function readEnv(): Env {
 }
 
 export const env = readEnv();
+
+/**
+ * Diretriz Mestre do MVP, Secoes 3 e 54.3 — cadastro aberto (sem cobranca) so pode
+ * existir fora de producao. Este e um fail-safe DELIBERADO em duas camadas:
+ *
+ *   1. NODE_ENV === "production" bloqueia incondicionalmente, mesmo que
+ *      REGISTRATION_ENABLED/BILLING_REQUIRED estejam configuradas errado no ambiente
+ *      (nunca assumir cadastro gratuito silenciosamente em producao);
+ *   2. fora de producao, exige REGISTRATION_ENABLED="true" E BILLING_REQUIRED
+ *      explicitamente diferente de "true" (ausente ou "false").
+ *
+ * Nao remove nem substitui o fluxo comercial (/auth/activate-account); apenas libera
+ * um caminho adicional de cadastro quando as duas condicoes acima sao verdadeiras.
+ */
+export function isFreeRegistrationEnabled(): boolean {
+  if (env.NODE_ENV === "production") return false;
+  return env.REGISTRATION_ENABLED === "true" && env.BILLING_REQUIRED !== "true";
+}

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { env } from "../config/env.js";
+import { env, isFreeRegistrationEnabled } from "../config/env.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import {
   getAuthenticatedCompanyId,
@@ -36,7 +36,11 @@ import {
 } from "../services/roles.js";
 import type { RequestWithAccess } from "../types/access.js";
 import { updateCompanyUser } from "../services/user-management.js";
-import { activatePaidAccount, validateAccountActivation } from "../services/account-activation.js";
+import {
+  activatePaidAccount,
+  registerFreeAccount,
+  validateAccountActivation,
+} from "../services/account-activation.js";
 
 export const authRouter = Router();
 
@@ -53,6 +57,14 @@ const activationSchema = z.object({
   plan_slug: z.never().optional(),
   company_id: z.never().optional(),
   payment_status: z.never().optional(),
+});
+const freeRegistrationSchema = z.object({
+  email: z.string().email().max(180),
+  name: z.string().trim().min(2).max(160),
+  password: passwordSchema,
+  company_name: z.string().trim().min(2).max(160),
+  company_document: z.string().trim().max(40).optional(),
+  phone: z.string().trim().max(40).optional(),
 });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1).max(128) });
 const refreshSchema = z.object({ refresh_token: z.string().min(40).max(300) });
@@ -115,12 +127,36 @@ const roleUpdateSchema = z.object({
   permissionKeys: z.array(z.string().min(1).max(120)).min(1).max(100).optional(),
 });
 
-authRouter.post("/register", (_req, res) => {
-  res.status(403).json({
-    error: "PAID_ACTIVATION_REQUIRED",
-    message: "Para criar sua conta ImobiFlow, escolha um plano.",
-    plans_path: "/planos",
-  });
+authRouter.post("/register", async (req, res, next) => {
+  try {
+    // Cadastro aberto (Diretriz Mestre do MVP, Secoes 3/52/54): disponivel SOMENTE
+    // fora de producao e com as flags REGISTRATION_ENABLED/BILLING_REQUIRED explicitas.
+    // Fora dessas condicoes, preserva o 403 comercial original — /auth/activate-account
+    // continua sendo o unico caminho valido em producao.
+    if (!isFreeRegistrationEnabled()) {
+      res.status(403).json({
+        error: "PAID_ACTIVATION_REQUIRED",
+        message: "Para criar sua conta ImobiFlow, escolha um plano.",
+        plans_path: "/planos",
+      });
+      return;
+    }
+    const input = freeRegistrationSchema.parse(req.body);
+    const result = await registerFreeAccount(
+      {
+        email: input.email,
+        ownerName: input.name,
+        password: input.password,
+        companyName: input.company_name,
+        companyDocument: input.company_document,
+        phone: input.phone,
+      },
+      requestMetadata(req),
+    );
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 authRouter.get("/activations/validate", async (req, res, next) => {
