@@ -256,8 +256,9 @@ export async function listMysqlProperties(
   companyId: string,
   input: PropertyListInput,
   database: PrismaClient = prisma(),
+  resourceScope?: Prisma.PropertyWhereInput,
 ) {
-  const where = buildPropertyListWhere(companyId, input);
+  const where = buildPropertyListWhere(companyId, input, resourceScope);
   const [total, properties] = await database.$transaction([
     database.property.count({ where }),
     database.property.findMany({
@@ -303,8 +304,9 @@ export async function listMysqlPropertyContent(
   companyId: string,
   input: PropertyListInput,
   database: PrismaClient = prisma(),
+  resourceScope?: Prisma.PropertyWhereInput,
 ) {
-  const where = buildPropertyListWhere(companyId, input);
+  const where = buildPropertyListWhere(companyId, input, resourceScope);
   const [total, properties] = await database.$transaction([
     database.property.count({ where }),
     database.property.findMany({
@@ -329,7 +331,11 @@ export async function listMysqlPropertyContent(
   };
 }
 
-export function buildPropertyListWhere(companyId: string, input: PropertyListInput): Prisma.PropertyWhereInput {
+export function buildPropertyListWhere(
+  companyId: string,
+  input: PropertyListInput,
+  resourceScope?: Prisma.PropertyWhereInput,
+): Prisma.PropertyWhereInput {
   const statusFilter = input.status && input.status !== "all"
     ? input.status === "not_archived" ? { not: "archived" } : input.status
     : undefined;
@@ -343,38 +349,53 @@ export function buildPropertyListWhere(companyId: string, input: PropertyListInp
     ...(input.code ? { code: input.code } : {}),
     ...(input.importSource ? { importSource: input.importSource } : {}),
     ...(input.importExternalId ? { importExternalId: input.importExternalId } : {}),
-    ...(search
+    ...((resourceScope || search)
       ? {
+          AND: [
+            ...(resourceScope ? [resourceScope] : []),
+            ...(search ? [{
           // Item 1 do escopo: busca central multi-tenant precisa cobrir
           // código, título, endereço, bairro, cidade E proprietário — antes
           // faltavam endereço (street) e proprietário (owner.name), o que
           // deixava a busca por "906164"/"taboão" incompleta caso o usuário
           // buscasse pela rua ou pelo nome do dono em vez do código exato.
-          OR: [
+              OR: [
             { code: { contains: search } },
             { title: { contains: search } },
             { street: { contains: search } },
             { city: { contains: search } },
             { neighborhood: { contains: search } },
             { owner: { name: { contains: search } } },
+              ],
+            }] : []),
           ],
         }
       : {}),
   };
 }
 
-export async function getMysqlProperty(companyId: string, propertyId: string, database: PrismaClient = prisma()) {
+export async function getMysqlProperty(
+  companyId: string,
+  propertyId: string,
+  database: PrismaClient = prisma(),
+  resourceScope?: Prisma.PropertyWhereInput,
+) {
   const property = await database.property.findFirst({
-    where: { id: propertyId, companyId },
+    where: { id: propertyId, companyId, ...(resourceScope ? { AND: [resourceScope] } : {}) },
     include: propertyInclude,
   });
   if (!property) throw propertyNotFound();
   return serializeProperty(property);
 }
 
-export async function getMysqlPropertyByCode(companyId: string, code: string, database: PrismaClient = prisma()) {
+export async function getMysqlPropertyByCode(
+  companyId: string,
+  code: string,
+  database: PrismaClient = prisma(),
+  resourceScope?: Prisma.PropertyWhereInput,
+) {
   const property = await database.property.findFirst({
-    where: { companyId, code },
+    where: { companyId, code, ...(resourceScope ? { AND: [resourceScope] } : {}) },
     include: propertyInclude,
   });
   if (!property) throw propertyNotFound();
@@ -419,12 +440,14 @@ export async function getMysqlPropertyByExternalId(
   externalId: string,
   importSource?: string,
   database: PrismaClient = prisma(),
+  resourceScope?: Prisma.PropertyWhereInput,
 ) {
   const properties = await database.property.findMany({
     where: {
       companyId,
       importExternalId: externalId,
       ...(importSource ? { importSource } : {}),
+      ...(resourceScope ? { AND: [resourceScope] } : {}),
     },
     include: propertyInclude,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

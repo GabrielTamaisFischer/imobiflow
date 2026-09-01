@@ -37,6 +37,7 @@ export const permissionCatalog = [
   ["site.manage", "Gerenciar site"],
   ["settings.manage", "Gerenciar empresa"],
   ["users.manage", "Gerenciar usuários e papéis"],
+  ["data.export", "Exportar dados administrativos"],
 ] as const;
 
 export type SystemRoleKey =
@@ -75,6 +76,7 @@ export const roleTemplates: ReadonlyArray<{
       "crm.view",
       "crm.manage",
       "properties.view",
+      "properties.manage",
       "owners.view",
       "appointments.view",
       "appointments.manage",
@@ -165,7 +167,12 @@ export async function ensureDefaultCompanyRoles(
     if (!roleId) return [];
     return template.permissions.flatMap((key) => {
       const permissionId = permissions.get(key);
-      return permissionId ? [{ roleId, permissionId }] : [];
+      const resourceScoped =
+        template.systemKey === "broker" &&
+        ["properties.view", "properties.manage", "crm.view", "crm.manage"].includes(key);
+      return permissionId
+        ? [{ roleId, permissionId, scope: resourceScoped ? "shared" : "company" }]
+        : [];
     });
   });
   if (assignments.length) {
@@ -201,7 +208,7 @@ export function serializeRole(role: {
   name: string;
   systemKey: string | null;
   isSystem: boolean;
-  permissions: Array<{ permission: { key: string; description: string } }>;
+  permissions: Array<{ scope: string; permission: { key: string; description: string } }>;
   _count?: { users: number };
 }) {
   return {
@@ -210,7 +217,7 @@ export function serializeRole(role: {
     name: role.name,
     system_key: role.systemKey,
     is_system: role.isSystem,
-    permissions: role.permissions.map(({ permission }) => permission),
+    permissions: role.permissions.map(({ permission, scope }) => ({ ...permission, scope })),
     users_count: role._count?.users ?? 0,
   };
 }

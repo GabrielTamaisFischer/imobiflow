@@ -76,7 +76,12 @@ describe("property HTTP handlers", () => {
     expect(response.status).toBe(200);
     expect(response.body.items).toHaveLength(25);
     expect(response.body.pagination).toMatchObject({ page: 1, page_size: 25, total: 50, has_next: true });
-    expect(service).toHaveBeenCalledWith("company-a", expect.objectContaining({ page: 1, pageSize: 25 }));
+    expect(service).toHaveBeenCalledWith(
+      "company-a",
+      expect.objectContaining({ page: 1, pageSize: 25 }),
+      undefined,
+      { companyId: "company-a" },
+    );
   });
 
   it("does not let a malicious company_id replace the session company", async () => {
@@ -100,14 +105,14 @@ describe("property HTTP handlers", () => {
     const service = vi.fn(async () => { throw notFound; });
     const response = await request(createGetPropertyHandler(service as never), "/properties/property-a", "company-b", "/properties/:id");
     expect(response.status).toBe(404);
-    expect(service).toHaveBeenCalledWith("company-b", "property-a");
+    expect(service).toHaveBeenCalledWith("company-b", "property-a", undefined, { companyId: "company-b" });
   });
 
   it("reads code inside the company context", async () => {
     const service = vi.fn(async () => ({ id: "property-a" }));
     const response = await request(createGetPropertyByCodeHandler(service as never), "/properties/by-code/A-10", "company-a", "/properties/by-code/:code");
     expect(response.status).toBe(200);
-    expect(service).toHaveBeenCalledWith("company-a", "A-10");
+    expect(service).toHaveBeenCalledWith("company-a", "A-10", undefined, { companyId: "company-a" });
   });
 
   it("passes import_source when looking up an external id", async () => {
@@ -119,7 +124,7 @@ describe("property HTTP handlers", () => {
       "/properties/by-external-id/:externalId",
     );
     expect(response.status).toBe(200);
-    expect(service).toHaveBeenCalledWith("company-a", "EXT-10", "csv");
+    expect(service).toHaveBeenCalledWith("company-a", "EXT-10", "csv", undefined, { companyId: "company-a" });
   });
 });
 
@@ -191,7 +196,7 @@ describe("company-scoped property filters and lookups", () => {
 
   it("builds a bounded parameterized text search through Prisma", () => {
     const where = buildPropertyListWhere("company-a", input({ search: "Centro" }));
-    expect(where).toMatchObject({ companyId: "company-a", OR: expect.any(Array) });
+    expect(where).toMatchObject({ companyId: "company-a", AND: [expect.objectContaining({ OR: expect.any(Array) })] });
     expect(JSON.stringify(where)).toContain("Centro");
   });
 
@@ -340,7 +345,18 @@ function pageResult(count: number, total: number, page: number) {
 async function request(handler: RequestHandler, path: string, companyId: string, route = "/properties") {
   const app = express();
   app.use((req, _res, next) => {
-    Object.assign(req, { access: { company: { id: companyId } } });
+    Object.assign(req, {
+      access: {
+        company: { id: companyId, name: "QA", status: "active" },
+        appUser: {
+          id: "admin-a",
+          company_id: companyId,
+          role: "admin",
+          permissions: ["properties.view", "properties.manage"],
+          permissionScopes: { "properties.view": "company", "properties.manage": "company" },
+        },
+      },
+    });
     next();
   });
   app.get(route, handler);

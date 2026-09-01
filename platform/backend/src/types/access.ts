@@ -16,6 +16,8 @@ export type SubscriptionStatus =
 
 export type UserRole = "owner" | "admin" | "broker" | "assistant" | string;
 
+export type ResourceScope = "own" | "shared" | "company";
+
 export type AccessContext = {
   authUser: {
     id: string;
@@ -30,6 +32,7 @@ export type AccessContext = {
     status: string;
     role: UserRole;
     permissions: string[];
+    permissionScopes: Record<string, ResourceScope>;
   };
   company: {
     id: string;

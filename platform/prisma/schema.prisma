@@ -39,6 +39,8 @@ model Company {
   appointments  Appointment[]
   importJobs    ImportJob[]
   importRows    ImportRow[]
+  propertyAccessGrants PropertyAccess[]
+  leadAccessGrants LeadAccess[]
 
   @@index([status])
   @@map("companies")
@@ -75,6 +77,10 @@ model AppUser {
   routingLastAssigned CrmRoutingConfig[] @relation("RoutingLastAssigned")
   leadEvents LeadEvent[]
   responsibleForProperties Property[] @relation("PropertyResponsibleUser")
+  propertyAccessGrants PropertyAccess[] @relation("PropertyAccessUser")
+  propertyAccessGranted PropertyAccess[] @relation("PropertyAccessGrantedBy")
+  leadAccessGrants LeadAccess[] @relation("LeadAccessUser")
+  leadAccessGranted LeadAccess[] @relation("LeadAccessGrantedBy")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -114,6 +120,7 @@ model Role {
 model RolePermission {
   roleId       String     @map("role_id") @db.Char(36)
   permissionId String     @map("permission_id") @db.Char(36)
+  scope        String     @default("company") @db.VarChar(20)
   role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
@@ -413,6 +420,7 @@ model Property {
   appointments            Appointment[]
   importJob               ImportJob?      @relation(fields: [importJobId], references: [id], onDelete: SetNull)
   importRows              ImportRow[]
+  accessGrants            PropertyAccess[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -424,6 +432,25 @@ model Property {
   @@index([companyId, propertyType])
   @@index([companyId, status, siteFeatured, publishedAt])
   @@map("properties")
+}
+
+model PropertyAccess {
+  id            String   @id @default(uuid()) @db.Char(36)
+  companyId     String   @map("company_id") @db.Char(36)
+  propertyId    String   @map("property_id") @db.Char(36)
+  userId        String   @map("user_id") @db.Char(36)
+  permission    String   @db.VarChar(20)
+  grantedBy     String   @map("granted_by") @db.Char(36)
+  createdAt     DateTime @default(now()) @map("created_at")
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property      Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  user          AppUser  @relation("PropertyAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser AppUser  @relation("PropertyAccessGrantedBy", fields: [grantedBy], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, userId, permission])
+  @@index([companyId, userId])
+  @@index([propertyId])
+  @@map("property_access")
 }
 
 model PropertyOwnerLink {
@@ -645,12 +672,32 @@ model Lead {
   events            LeadEvent[]
   siteLeads         SiteLead[]
   activities        LeadActivity[]
+  accessGrants      LeadAccess[]
 
   @@index([companyId, source, createdAt])
   @@index([companyId, stageId, status, createdAt])
   @@index([companyId, emailNormalized, status])
   @@index([companyId, phoneNormalized, status])
   @@map("leads")
+}
+
+model LeadAccess {
+  id            String   @id @default(uuid()) @db.Char(36)
+  companyId     String   @map("company_id") @db.Char(36)
+  leadId        String   @map("lead_id") @db.Char(36)
+  userId        String   @map("user_id") @db.Char(36)
+  permission    String   @db.VarChar(20)
+  grantedBy     String   @map("granted_by") @db.Char(36)
+  createdAt     DateTime @default(now()) @map("created_at")
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user          AppUser  @relation("LeadAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser AppUser  @relation("LeadAccessGrantedBy", fields: [grantedBy], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, userId, permission])
+  @@index([companyId, userId])
+  @@index([leadId])
+  @@map("lead_access")
 }
 
 model CrmPipeline {

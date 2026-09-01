@@ -87,6 +87,7 @@ export async function buildAccessContext(authUser: User): Promise<AccessContext>
         .map((item) => item.permissions)
         .map((permission) => permission?.key)
         .filter((key): key is string => Boolean(key)),
+      permissionScopes: {},
     },
     company: {
       id: appUser.companies.id,

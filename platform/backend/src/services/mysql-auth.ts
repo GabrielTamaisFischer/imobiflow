@@ -365,6 +365,12 @@ export async function buildMysqlAccessContextForUser(
     orderBy: { createdAt: "desc" },
   });
   const permissions = user.roleRecord.permissions.map(({ permission }) => permission.key);
+  const permissionScopes = Object.fromEntries(
+    user.roleRecord.permissions.map(({ permission, scope }) => [
+      permission.key,
+      scope === "own" || scope === "shared" || scope === "company" ? scope : "own",
+    ]),
+  );
   const role = user.roleRecord.systemKey ?? user.roleRecord.name;
 
   return {
@@ -381,6 +387,7 @@ export async function buildMysqlAccessContextForUser(
       status: user.status,
       role,
       permissions,
+      permissionScopes,
     },
     company: { id: user.company.id, name: user.company.name, status: user.company.status },
     subscription: subscription

@@ -2,10 +2,11 @@ import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
 import { getPrisma } from "../lib/website-builder-prisma.js";
-import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
+import { requireActiveSubscription, requireAuth, requireCompany, requirePermission, requireRole } from "../middleware/auth.js";
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
 import { normalizeLeadEmail, normalizeLeadPhone } from "../services/lead-intake.js";
 import { saoPauloDayBounds } from "../services/crm-time.js";
+import { assertLeadAccess, buildLeadScopeFilter, resolveScope } from "../services/authorization.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const crmRouter = Router();
@@ -70,6 +71,17 @@ async function assignedFor(companyId: string, userId: string | undefined) {
   if (!user) throw invalid("Responsável inválido para esta empresa.", "INVALID_ASSIGNEE");
   return user.id;
 }
+async function assignedForRequest(req: RequestWithAccess, userId: string | undefined) {
+  const assignedTo = await assignedFor(req.access!.company.id, userId);
+  if (
+    assignedTo &&
+    resolveScope(req.access!, "crm.manage") !== "company" &&
+    assignedTo !== req.access!.appUser.id
+  ) {
+    throw invalid("Corretor não pode atribuir lead a outro usuário.", "ASSIGNEE_SCOPE_DENIED");
+  }
+  return assignedTo;
+}
 function inputData(input: z.infer<typeof updateLeadSchema>) {
   return {
     ...(input.name !== undefined ? { name: input.name } : {}),
@@ -118,7 +130,7 @@ crmRouter.get("/routing", requirePermission("crm.view"), async (req: RequestWith
   } catch (error) { next(error); }
 });
 
-crmRouter.patch("/routing", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+crmRouter.patch("/routing", requirePermission("crm.manage"), requireRole("owner", "admin", "manager"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, input = routingSchema.parse(req.body), prisma = getPrisma();
     const users = input.user_ids.length ? await prisma.appUser.findMany({
@@ -146,12 +158,19 @@ crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAc
     const status = typeof req.query.status === "string" ? req.query.status : "open";
     if (!statuses.options.includes(status as never)) throw invalid("Status inválido.", "INVALID_STATUS");
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const where: Prisma.LeadWhereInput = { companyId, status };
+    const where: Prisma.LeadWhereInput = {
+      companyId,
+      status,
+      AND: [buildLeadScopeFilter(req.access!, "crm.view")],
+    };
     if (typeof req.query.stage_id === "string") where.stageId = await stageFor(companyId, req.query.stage_id);
     if (typeof req.query.assigned_to === "string") where.assignedTo = await assignedFor(companyId, req.query.assigned_to);
     if (typeof req.query.source === "string" && req.query.source.trim()) where.source = req.query.source.trim();
     if (typeof req.query.interest_type === "string") where.interestType = req.query.interest_type;
-    if (search) where.OR = [{ name: { contains: search } }, { email: { contains: search } }, { phone: { contains: search } }];
+    if (search) where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : [where.AND!]),
+      { OR: [{ name: { contains: search } }, { email: { contains: search } }, { phone: { contains: search } }] },
+    ];
     const prisma = getPrisma();
     const [total, rows] = await prisma.$transaction([
       prisma.lead.count({ where }),
@@ -164,11 +183,12 @@ crmRouter.get("/leads", requirePermission("crm.view"), async (req: RequestWithAc
 crmRouter.get("/summary", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, { start, end } = saoPauloDayBounds(new Date());
+    const scope = buildLeadScopeFilter(req.access!, "crm.view");
     const [unassigned, withoutFirstContact, followUpOverdue, followUpToday] = await Promise.all([
-      getPrisma().lead.count({ where: { companyId, status: "open", assignedTo: null } }),
-      getPrisma().lead.count({ where: { companyId, status: "open", firstContactAt: null } }),
-      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { lt: start } } }),
-      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { gte: start, lt: end } } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", assignedTo: null, AND: [scope] } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", firstContactAt: null, AND: [scope] } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { lt: start }, AND: [scope] } }),
+      getPrisma().lead.count({ where: { companyId, status: "open", nextFollowUpAt: { gte: start, lt: end }, AND: [scope] } }),
     ]);
     res.json({ unassigned, without_first_contact: withoutFirstContact, follow_up_overdue: followUpOverdue, follow_up_today: followUpToday });
   } catch (error) { next(error); }
@@ -176,7 +196,10 @@ crmRouter.get("/summary", requirePermission("crm.view"), async (req: RequestWith
 
 crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
-    const lead = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId: req.access!.company.id }, select: leadSelect });
+    const lead = await getPrisma().lead.findFirst({
+      where: { id: req.params.id, AND: [buildLeadScopeFilter(req.access!, "crm.view")] },
+      select: leadSelect,
+    });
     if (!lead) throw notFound();
     const interests = await getPrisma().siteLead.findMany({
       where: { companyId: req.access!.company.id, leadId: lead.id },
@@ -213,7 +236,9 @@ crmRouter.post("/leads", requirePermission("crm.manage"), async (req: RequestWit
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = leadSchema.parse(req.body);
     const pipeline = await ensureDefaultCrmPipeline(companyId, userId);
     const stageId = await stageFor(companyId, input.stage_id ?? pipeline.stages[0]?.id);
-    const assignedTo = await assignedFor(companyId, input.assigned_to);
+    const assignedTo = input.assigned_to
+      ? await assignedForRequest(req, input.assigned_to)
+      : resolveScope(req.access!, "crm.manage") === "company" ? null : userId;
     const lead = await getPrisma().$transaction(async (tx) => {
       const created = await tx.lead.create({ data: { companyId, createdBy: userId, stageId, assignedTo, name: input.name, ...inputData(input) }, select: leadSelect });
       await tx.leadEvent.create({ data: { companyId, leadId: created.id, userId, eventType: "lead.created", payloadJson: { source: created.source, stage_id: created.stageId } as Prisma.InputJsonValue } });
@@ -227,9 +252,10 @@ crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: Reque
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = updateLeadSchema.parse(req.body);
     ensureStatusRules(input);
+    await assertLeadAccess(req.access!, req.params.id, "crm.manage", "EDIT");
     const existing = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, status: true, stageId: true, assignedTo: true } });
     if (!existing) throw notFound();
-    const stageId = await stageFor(companyId, input.stage_id), assignedTo = await assignedFor(companyId, input.assigned_to);
+    const stageId = await stageFor(companyId, input.stage_id), assignedTo = await assignedForRequest(req, input.assigned_to);
     const lead = await getPrisma().$transaction(async (tx) => {
       const updated = await tx.lead.update({ where: { id: existing.id }, data: { ...inputData(input), ...(input.stage_id !== undefined ? { stageId } : {}), ...(input.assigned_to !== undefined ? { assignedTo } : {}) }, select: leadSelect });
       const eventType = input.status === "won" ? "lead.won" : input.status === "lost" ? "lead.lost" : input.stage_id !== undefined && input.stage_id !== existing.stageId ? "lead.stage_changed" : "lead.updated";
@@ -251,6 +277,7 @@ crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: Reque
 crmRouter.post("/leads/:id/activities", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = activitySchema.parse(req.body), prisma = getPrisma();
+    await assertLeadAccess(req.access!, req.params.id, "crm.manage", "EDIT");
     const lead = await prisma.lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, firstContactAt: true, lastContactAt: true } }).catch(() => null);
     if (!lead) throw notFound();
     const occurredAt = input.occurred_at ? new Date(input.occurred_at) : new Date();
@@ -270,6 +297,7 @@ crmRouter.post("/leads/:id/activities", requirePermission("crm.manage"), async (
 crmRouter.patch("/leads/:id/stage", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = stageMoveSchema.parse(req.body), stageId = await stageFor(companyId, input.stage_id);
+    await assertLeadAccess(req.access!, req.params.id, "crm.manage", "EDIT");
     const existing = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, stageId: true } });
     if (!existing) throw notFound();
     const lead = await getPrisma().$transaction(async (tx) => {

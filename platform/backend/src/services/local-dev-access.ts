@@ -118,6 +118,17 @@ export function buildLocalDevAccessContext(
         "appointments.view",
         "appointments.manage",
       ],
+      permissionScopes: {
+        "site.manage": "company",
+        "properties.view": "company",
+        "properties.manage": "company",
+        "owners.view": "company",
+        "owners.manage": "company",
+        "crm.view": "company",
+        "crm.manage": "company",
+        "appointments.view": "company",
+        "appointments.manage": "company",
+      },
     },
     company: {
       id: companyId,

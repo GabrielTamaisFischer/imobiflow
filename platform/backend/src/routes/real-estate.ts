@@ -43,6 +43,11 @@ import {
 } from "../services/storage/stored-files.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
 import { isValidBrazilianDocument } from "../services/brazilian-document.js";
+import {
+  assertPropertyAccess,
+  buildPropertyScopeFilter,
+  resolveScope,
+} from "../services/authorization.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const realEstateRouter = Router();
@@ -197,7 +202,12 @@ export function createListPropertiesHandler(
 ): RequestHandler {
   return async (request: RequestWithAccess, response, next) => {
     try {
-      response.json(await service(request.access!.company.id, parsePropertyListQuery(request.query)));
+      response.json(await service(
+        request.access!.company.id,
+        parsePropertyListQuery(request.query),
+        undefined,
+        buildPropertyScopeFilter(request.access!, "properties.view"),
+      ));
     } catch (error) {
       next(error);
     }
@@ -207,7 +217,12 @@ export function createListPropertiesHandler(
 export function createGetPropertyHandler(service: typeof getMysqlProperty = getMysqlProperty): RequestHandler {
   return async (request: RequestWithAccess, response, next) => {
     try {
-      response.json({ property: await service(request.access!.company.id, String(request.params.id)) });
+      response.json({ property: await service(
+        request.access!.company.id,
+        String(request.params.id),
+        undefined,
+        buildPropertyScopeFilter(request.access!, "properties.view"),
+      ) });
     } catch (error) {
       next(error);
     }
@@ -220,7 +235,12 @@ export function createGetPropertyByCodeHandler(
   return async (request: RequestWithAccess, response, next) => {
     try {
       const code = parsePropertyReference(request.params.code, 40);
-      response.json({ property: await service(request.access!.company.id, code) });
+      response.json({ property: await service(
+        request.access!.company.id,
+        code,
+        undefined,
+        buildPropertyScopeFilter(request.access!, "properties.view"),
+      ) });
     } catch (error) {
       next(error);
     }
@@ -236,7 +256,13 @@ export function createGetPropertyByExternalIdHandler(
       const parsedQuery = propertyExternalIdQuerySchema.safeParse(request.query);
       if (!parsedQuery.success) throw invalidPropertyQuery();
       response.json({
-        property: await service(request.access!.company.id, externalId, parsedQuery.data.import_source),
+        property: await service(
+          request.access!.company.id,
+          externalId,
+          parsedQuery.data.import_source,
+          undefined,
+          buildPropertyScopeFilter(request.access!, "properties.view"),
+        ),
       });
     } catch (error) {
       next(error);
@@ -286,7 +312,12 @@ realEstateRouter.get("/properties", requirePermission("properties.view"), create
 
 realEstateRouter.get("/properties/content", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
   try {
-    res.json(await listMysqlPropertyContent(req.access!.company.id, parsePropertyListQuery(req.query)));
+    res.json(await listMysqlPropertyContent(
+      req.access!.company.id,
+      parsePropertyListQuery(req.query),
+      undefined,
+      buildPropertyScopeFilter(req.access!, "properties.view"),
+    ));
   } catch (error) {
     next(error);
   }
@@ -304,10 +335,13 @@ realEstateRouter.get("/properties/:id", requirePermission("properties.view"), cr
 
 realEstateRouter.post("/properties", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
+    const input = propertySchema.parse(req.body);
     const property = await createMysqlProperty(
       req.access!.company.id,
       req.access!.appUser.id,
-      propertySchema.parse(req.body),
+      resolveScope(req.access!, "properties.manage") === "company"
+        ? input
+        : { ...input, responsible_user_id: req.access!.appUser.id },
     );
     res.status(201).json({ property });
   } catch (error) {
@@ -317,6 +351,7 @@ realEstateRouter.post("/properties", requirePermission("properties.manage"), asy
 
 realEstateRouter.patch("/properties/:id", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
+    await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
     const property = await updateMysqlProperty(
       req.access!.company.id,
       String(req.params.id),
@@ -330,6 +365,7 @@ realEstateRouter.patch("/properties/:id", requirePermission("properties.manage")
 
 realEstateRouter.delete("/properties/:id", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
+    await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
     const property = await archiveMysqlProperty(req.access!.company.id, String(req.params.id));
     res.json({ property });
   } catch (error) {
@@ -339,6 +375,7 @@ realEstateRouter.delete("/properties/:id", requirePermission("properties.manage"
 
 realEstateRouter.get("/properties/:id/media", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
   try {
+    await assertPropertyAccess(req.access!, String(req.params.id), "properties.view");
     res.json({ media: await listMysqlPropertyMedia(req.access!.company.id, String(req.params.id)) });
   } catch (error) {
     next(error);
@@ -350,6 +387,7 @@ realEstateRouter.post("/properties/:id/media", requirePermission("properties.man
     const companyId = req.access!.company.id;
     const input = mediaUploadSchema.parse(req.body);
     const propertyId = String(req.params.id);
+    await assertPropertyAccess(req.access!, propertyId, "properties.manage", "EDIT");
     const body = decodeBase64File(input.content_base64);
     const purpose = storagePurposeFromPropertyMedia(input.media_type);
     const policy = validateUploadFile({
@@ -408,6 +446,7 @@ realEstateRouter.post("/properties/:id/media", requirePermission("properties.man
 
 realEstateRouter.patch("/properties/:id/media-order", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
+    await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
     const input = mediaOrderSchema.parse(req.body);
     const media = await reorderMysqlPropertyMedia(req.access!.company.id, String(req.params.id), input.media);
     res.json({ media });
@@ -418,6 +457,7 @@ realEstateRouter.patch("/properties/:id/media-order", requirePermission("propert
 
 realEstateRouter.patch("/properties/:id/media-cover", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
+    await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
     const input = mediaCoverSchema.parse(req.body);
     const media = await setMysqlPropertyMediaCover(req.access!.company.id, String(req.params.id), input.media_id);
     res.json({ media });
@@ -431,6 +471,7 @@ realEstateRouter.delete("/properties/:id/media/:mediaId", requirePermission("pro
     const companyId = req.access!.company.id;
     const propertyId = String(req.params.id);
     const mediaId = String(req.params.mediaId);
+    await assertPropertyAccess(req.access!, propertyId, "properties.manage", "EDIT");
     const storedFile = await deleteRemoteFileForEntity(companyId, "property_media", mediaId);
     await deleteMysqlPropertyMedia(companyId, propertyId, mediaId);
     await deleteStoredFileRecordsForEntity(companyId, "property_media", mediaId);
