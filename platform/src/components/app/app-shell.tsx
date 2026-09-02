@@ -3,6 +3,7 @@ import { LogOut } from "lucide-react";
 import type { AccessResponse } from "@/product/auth";
 import { logout } from "@/product/auth";
 import { appModules } from "@/product/app-modules";
+import { getVisibleModules } from "@/product/app-access";
 
 type AppShellProps = {
   session: AccessResponse | null;
@@ -16,6 +17,7 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
   const userName = session?.access.appUser?.name ?? "Usuário";
   const subscription = session?.access.subscription;
   const isPreview = subscription?.plan_slug === "preview";
+  const visibleModules = getVisibleModules(session?.access.appUser, appModules);
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -28,7 +30,7 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
           </div>
 
           <nav className="space-y-1 p-3">
-            {appModules.map((module) => {
+            {visibleModules.map((module) => {
               const Icon = module.icon;
               const isActive = activeModule === module.key;
 
@@ -90,7 +92,7 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
 
           <div className="border-b border-border bg-card lg:hidden">
             <nav className="flex gap-2 overflow-x-auto px-4 py-3">
-              {appModules.map((module) => {
+              {visibleModules.map((module) => {
                 const Icon = module.icon;
                 const isActive = activeModule === module.key;
 

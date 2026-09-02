@@ -54,6 +54,7 @@ import {
   unpublishSiteProperty,
 } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { getSafeApiErrorMessage } from "@/product/app-access";
 
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
@@ -282,7 +283,7 @@ function PropertiesPage() {
       })
       .catch((ownersError) => {
         if (!canceled) {
-          setError(ownersError instanceof Error ? ownersError.message : "Não foi possível carregar proprietários.");
+          setError(getSafeApiErrorMessage(ownersError, "Não foi possível carregar proprietários."));
         }
       });
     return () => {
@@ -310,7 +311,7 @@ function PropertiesPage() {
       })
       .catch((propertiesError) => {
         if (!canceled) {
-          setError(propertiesError instanceof Error ? propertiesError.message : "Não foi possível carregar imóveis.");
+          setError(getSafeApiErrorMessage(propertiesError, "Não foi possível carregar imóveis."));
         }
       })
       .finally(() => {

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Building2, ClipboardList, FileSignature, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyState } from "@/components/app/empty-state";
@@ -11,6 +11,7 @@ import {
   type DashboardSummary,
 } from "@/product/dashboard";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { isAdministrative } from "@/product/app-access";
 
 export const Route = createFileRoute("/app/")({
   component: AppDashboard,
@@ -33,6 +34,7 @@ function AppDashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const administrative = isAdministrative(session?.access.appUser);
 
   useEffect(() => {
     if (isLoading || !session) return;
@@ -94,19 +96,36 @@ function AppDashboard() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {buildMetrics(summary, isDashboardLoading).map((metric) => (
+        {buildMetrics(summary, isDashboardLoading, administrative).map((metric) => (
           <MetricCard key={metric.label} {...metric} />
         ))}
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <EmptyState
-          icon={module.icon}
-          title={module.emptyTitle}
-          description={module.emptyDescription}
-          actionLabel={module.actionLabel}
-        />
-        <section className="rounded-lg border border-border bg-card p-6">
+        {administrative ? (
+          <EmptyState
+            icon={module.icon}
+            title={module.emptyTitle}
+            description={module.emptyDescription}
+            actionLabel={module.actionLabel}
+          />
+        ) : (
+          <section className="rounded-lg border border-border bg-card p-6 lg:col-span-2">
+            <h2 className="text-lg font-semibold tracking-tight">Minha operação</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Acesse os imóveis e leads disponibilizados para o seu perfil.
+            </p>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <Link to="/app/imoveis" className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">
+                Ver meus imóveis
+              </Link>
+              <Link to="/app/crm" className="inline-flex h-10 items-center justify-center rounded-md border border-border px-4 text-sm font-semibold">
+                Ver meus leads
+              </Link>
+            </div>
+          </section>
+        )}
+        {administrative ? <section className="rounded-lg border border-border bg-card p-6">
           <h2 className="text-lg font-semibold tracking-tight">Alertas inteligentes</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             Alertas baseados em dados reais: leads sem contato, imóveis sem fotos,
@@ -132,29 +151,35 @@ function AppDashboard() {
               </div>
             )}
           </div>
-        </section>
+        </section> : null}
       </div>
     </ModulePage>
   );
 }
 
-function buildMetrics(summary: DashboardSummary | null, loading: boolean) {
+function buildMetrics(summary: DashboardSummary | null, loading: boolean, administrative: boolean) {
   const metrics = summary?.metrics;
   const pending = loading ? "..." : "0";
 
-  return [
+  const scopedMetrics = [
     {
-      label: "Imóveis cadastrados",
+      label: "Imóveis no meu escopo",
       value: metrics ? String(metrics.properties_total) : pending,
-      caption: metrics?.properties_total ? "Imóveis reais no período" : "Nenhum imóvel real cadastrado",
+      caption: metrics?.properties_total ? "Imóveis disponíveis para o seu acesso" : "Nenhum imóvel disponível",
       icon: Building2,
     },
     {
-      label: "Leads recebidos",
+      label: "Leads no meu escopo",
       value: metrics ? String(metrics.leads_total) : pending,
-      caption: metrics?.leads_total ? "Leads reais no período" : "Aguardando cadastros ou integrações",
+      caption: metrics?.leads_total ? "Leads disponíveis para o seu acesso" : "Nenhum lead disponível",
       icon: Users,
     },
+  ];
+
+  if (!administrative) return scopedMetrics;
+
+  return [
+    ...scopedMetrics,
     {
       label: "Contratos ativos",
       value: metrics ? String(metrics.active_contracts_total) : pending,

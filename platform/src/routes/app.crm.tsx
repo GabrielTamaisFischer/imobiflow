@@ -25,6 +25,7 @@ import {
 } from "@/product/crm";
 import { useSessionGuard } from "@/product/use-session-guard";
 import { toDateTimeLocalValue, toIsoOrEmpty } from "@/product/crm-date";
+import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
 
 export const Route = createFileRoute("/app/crm")({
   component: CrmPage,
@@ -42,7 +43,8 @@ type LeadDetailData = Lead & { interests?: LeadInterest[]; activities?: LeadActi
 
 function CrmPage() {
   const { session, isLoading } = useSessionGuard();
-  const canManage = Boolean(session?.access.appUser?.permissions.includes("crm.manage"));
+  const canManageCrm = canManage(session?.access.appUser, "crm.manage");
+  const canManageRouting = canManageCrm && isAdministrative(session?.access.appUser);
   const module = getModuleByKey("crm");
   const [stages, setStages] = useState<CrmStage[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -76,7 +78,7 @@ function CrmPage() {
       setSummary(summaryResponse);
       setRouting({ mode: routingResponse.mode, user_ids: routingResponse.user_ids });
     } catch (crmError) {
-      setError(crmError instanceof Error ? crmError.message : "Não foi possível carregar o CRM.");
+      setError(getSafeApiErrorMessage(crmError, "Não foi possível carregar o CRM."));
     } finally {
       setIsCrmLoading(false);
     }
@@ -98,7 +100,7 @@ function CrmPage() {
   );
 
   async function handleMoveLead(leadId: string, stageId: string) {
-    if (!canManage) return;
+    if (!canManageCrm) return;
     const currentLead = leads.find((lead) => lead.id === leadId);
     if (!currentLead || currentLead.stage_id === stageId) return;
 
@@ -113,7 +115,7 @@ function CrmPage() {
       setLeads((current) =>
         current.map((lead) => (lead.id === leadId ? { ...lead, stage_id: currentLead.stage_id } : lead)),
       );
-      setError(moveError instanceof Error ? moveError.message : "Não foi possível mover o lead.");
+      setError(getSafeApiErrorMessage(moveError, "Não foi possível mover o lead."));
     }
   }
 
@@ -134,7 +136,7 @@ function CrmPage() {
           Leads normalmente chegam automaticamente pelo site e por integrações. Cadastros manuais ficam disponíveis para exceções.
           </p>
         </div>
-        {canManage ? <button
+        {canManageCrm ? <button
           type="button"
           onClick={() => setShowForm((current) => !current)}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
@@ -147,8 +149,8 @@ function CrmPage() {
       <section className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[["Sem responsável", summary.unassigned], ["Sem primeiro contato", summary.without_first_contact], ["Follow-up atrasado", summary.follow_up_overdue], ["Follow-up hoje", summary.follow_up_today]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-border bg-card p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>)}
       </section>
-      <button type="button" onClick={() => setShowRouting((value) => !value)} className="mb-4 rounded-md border border-border px-3 py-2 text-sm">Distribuição de leads</button>
-      {showRouting ? <RoutingPanel users={users} routing={routing} onSaved={(next) => { setRouting(next); setShowRouting(false); }} canManage={Boolean(session?.access.appUser?.permissions.includes("crm.manage"))} /> : null}
+      {canManageRouting ? <button type="button" onClick={() => setShowRouting((value) => !value)} className="mb-4 rounded-md border border-border px-3 py-2 text-sm">Distribuição de leads</button> : null}
+      {showRouting && canManageRouting ? <RoutingPanel users={users} routing={routing} onSaved={(next) => { setRouting(next); setShowRouting(false); }} canManage /> : null}
 
       {session?.access.subscription?.plan_slug === "preview" ? (
         <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
@@ -165,7 +167,7 @@ function CrmPage() {
         <button type="button" onClick={() => void refreshCrm()} className="h-9 rounded-md border border-border px-3 text-sm font-medium">Pesquisar</button>
       </div>
 
-      {showForm && canManage ? (
+      {showForm && canManageCrm ? (
         <LeadForm
           stages={stages}
           onCancel={() => setShowForm(false)}
@@ -192,7 +194,7 @@ function CrmPage() {
           icon={Users}
           title="Nenhum lead encontrado"
           description="O CRM começa vazio. Cadastre o primeiro lead real quando a operação comercial estiver pronta para usar o funil."
-          {...(canManage ? { actionLabel: "Cadastrar lead", onAction: () => setShowForm(true) } : {})}
+          {...(canManageCrm ? { actionLabel: "Cadastrar lead", onAction: () => setShowForm(true) } : {})}
         />
       ) : (
         <section className="grid gap-4 xl:grid-cols-5">
@@ -200,12 +202,12 @@ function CrmPage() {
             <div
               key={stage.id}
               className="min-h-[360px] rounded-lg border border-border bg-card"
-              onDragOver={(event) => { if (canManage) event.preventDefault(); }}
+          onDragOver={(event) => { if (canManageCrm) event.preventDefault(); }}
               onDrop={(event) => {
                 event.preventDefault();
                 const leadId = event.dataTransfer.getData("text/plain") || draggingLeadId;
                 setDraggingLeadId(null);
-                if (leadId && canManage) void handleMoveLead(leadId, stage.id);
+                if (leadId && canManageCrm) void handleMoveLead(leadId, stage.id);
               }}
             >
               <div className="border-b border-border p-4">
@@ -233,16 +235,16 @@ function CrmPage() {
                       )
                     }
                     users={users}
-                    canManage={canManage}
+                    canManage={canManageCrm}
                     onOpen={async () => {
                       try {
                         const response = await getLead(lead.id);
                         setSelectedLead({ ...response.lead, interests: response.interests, activities: response.activities, events: response.events });
                       } catch (detailError) {
-                        setError(detailError instanceof Error ? detailError.message : "Não foi possível abrir o lead.");
+                        setError(getSafeApiErrorMessage(detailError, "Não foi possível abrir o lead."));
                       }
                     }}
-                    onStatus={(status, reason) => { if (!canManage) return; void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
+                    onStatus={(status, reason) => { if (!canManageCrm) return; void updateLead(lead.id, { status, lost_reason: reason }).then((response) => {
                       setLeads((current) => statusFilter === response.lead.status ? current.map((item) => item.id === lead.id ? response.lead : item) : current.filter((item) => item.id !== lead.id));
                     }).catch((statusError) => setError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o status.")); }}
                   />
@@ -257,7 +259,7 @@ function CrmPage() {
           ))}
         </section>
       )}
-      {selectedLead ? <LeadDetail lead={selectedLead} users={users} canManage={canManage} onClose={() => setSelectedLead(null)} onSaved={(detail) => { setSelectedLead(detail); setLeads((current) => current.map((item) => item.id === detail.id ? detail : item)); }} /> : null}
+      {selectedLead ? <LeadDetail lead={selectedLead} users={users} canManage={canManageCrm} onClose={() => setSelectedLead(null)} onSaved={(detail) => { setSelectedLead(detail); setLeads((current) => current.map((item) => item.id === detail.id ? detail : item)); }} /> : null}
     </ModulePage>
   );
 }
