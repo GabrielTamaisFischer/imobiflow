@@ -271,6 +271,8 @@ function RoutingPanel({ users, routing, onSaved, canManage }: { users: CrmUser[]
 
 function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDetailData; users: CrmUser[]; canManage: boolean; onClose: () => void; onSaved: (lead: LeadDetailData) => void }) {
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [assignedTo, setAssignedTo] = useState(lead.assigned_to ?? "");
   const [activityType, setActivityType] = useState("whatsapp");
   const [activityBody, setActivityBody] = useState("");
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -280,23 +282,45 @@ function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDe
   }
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-label="Detalhe do lead">
     <form className="w-full max-w-lg space-y-3 rounded-lg border border-border bg-card p-5 shadow-xl" onSubmit={async (event) => {
-      event.preventDefault(); setIsSaving(true);
+      event.preventDefault(); setIsSaving(true); setSaveError(null);
       const form = new FormData(event.currentTarget);
-      const response = await updateLead(lead.id, { name: String(form.get("name")), email: String(form.get("email")), phone: String(form.get("phone")), source: String(form.get("source")), budget_cents: parseMoneyToCents(String(form.get("budget"))), assigned_to: String(form.get("assigned_to")) || undefined, notes: String(form.get("notes")), next_follow_up_at: toIsoOrEmpty(String(form.get("next_follow_up_at") || "")) }).finally(() => setIsSaving(false));
-      onSaved({ ...response.lead, interests: lead.interests, activities: lead.activities, events: lead.events });
+      try {
+        await updateLead(lead.id, buildLeadDetailUpdateInput(form, assignedTo));
+        const persisted = await getLead(lead.id);
+        setAssignedTo(persisted.lead.assigned_to ?? "");
+        onSaved({ ...persisted.lead, interests: persisted.interests, activities: persisted.activities, events: persisted.events });
+      } catch (saveFailure) {
+        setSaveError(getSafeApiErrorMessage(saveFailure, "Não foi possível salvar o lead."));
+      } finally {
+        setIsSaving(false);
+      }
     }}>
       <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Detalhe do lead</h2><button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button></div>
       <Field label="Nome" name="name" required defaultValue={lead.name} disabled={!canManage} /><Field label="E-mail" name="email" type="email" defaultValue={lead.email ?? ""} disabled={!canManage} /><Field label="Telefone" name="phone" defaultValue={lead.phone ?? ""} disabled={!canManage} /><Field label="Origem" name="source" defaultValue={lead.source ?? ""} disabled={!canManage} /><Field label="Orçamento" name="budget" defaultValue={lead.budget_cents ? String(lead.budget_cents / 100) : ""} disabled={!canManage} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" defaultValue={toDateTimeLocalValue(lead.next_follow_up_at)} disabled={!canManage} />
-      <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" defaultValue={lead.assigned_to ?? ""} disabled={!canManage} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+      <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} disabled={!canManage} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
       <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} disabled={!canManage} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
       {lead.interests?.length ? <section className="rounded border border-border bg-muted/30 p-3"><p className="text-sm font-semibold">Imóveis de interesse</p><div className="mt-2 space-y-2">{lead.interests.map((interest) => <div key={interest.id} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{interest.property_code ?? "Imóvel"}</span>{interest.property_title ? ` — ${interest.property_title}` : ""} · {interest.source}</div>)}</div></section> : null}
       {canManage ? <div className="rounded border border-border p-3 space-y-2"><p className="text-sm font-semibold">Registrar atividade</p><select value={activityType} onChange={(event) => setActivityType(event.target.value)} className="h-9 w-full rounded border border-input bg-background px-2 text-sm"><option value="whatsapp">WhatsApp (registro manual)</option><option value="call">Ligação</option><option value="email">E-mail</option><option value="contact">Contato</option><option value="note">Nota</option></select><textarea value={activityBody} onChange={(event) => setActivityBody(event.target.value)} placeholder="Observação" className="w-full rounded border border-input px-2 py-2 text-sm" /><button type="button" onClick={() => void saveActivity()} className="h-9 rounded border border-border px-3 text-sm">Registrar atividade</button>{activityError ? <p className="text-xs text-destructive">{activityError}</p> : null}</div> : null}
       {lead.activities?.length ? <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Atividades recentes</p>{lead.activities.map((activity) => <p key={activity.id} className="mt-1 text-xs text-muted-foreground">{activity.type}: {activity.body ?? ""}</p>)}</section> : null}
       <section className="rounded border border-border p-3"><p className="text-sm font-semibold">Timeline</p>{(lead.events ?? []).map((event) => <p key={event.id} className="mt-1 text-xs text-muted-foreground">{humanEvent(event.event_type, event.user_name)}</p>)}</section>
       <div className="text-xs text-muted-foreground">Primeiro contato: {formatDate(lead.first_contact_at)} · Último contato: {formatDate(lead.last_contact_at)} · Próximo follow-up: {formatDate(lead.next_follow_up_at)}</div>
+      {saveError ? <p className="text-sm text-destructive" role="alert">{saveError}</p> : null}
       {canManage ? <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button> : null}
     </form>
   </div>;
+}
+
+function buildLeadDetailUpdateInput(form: FormData, assignedTo: string) {
+  return {
+    name: String(form.get("name")),
+    email: String(form.get("email")),
+    phone: String(form.get("phone")),
+    source: String(form.get("source")),
+    budget_cents: parseMoneyToCents(String(form.get("budget"))),
+    assigned_to: assignedTo || undefined,
+    notes: String(form.get("notes")),
+    next_follow_up_at: toIsoOrEmpty(String(form.get("next_follow_up_at") || "")),
+  };
 }
 
 function LeadForm({

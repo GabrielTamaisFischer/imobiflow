@@ -54,7 +54,7 @@ import {
   unpublishSiteProperty,
 } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
-import { getSafeApiErrorMessage } from "@/product/app-access";
+import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
 
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
@@ -212,6 +212,7 @@ const descriptionTemplates = [
 function PropertiesPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("properties");
+  const canCreateOwner = canManage(session?.access.appUser, "owners.manage");
   const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [isPropertiesLoading, setIsPropertiesLoading] = useState(true);
@@ -364,6 +365,7 @@ function PropertiesPage() {
           owners={owners}
           appUsers={appUsers}
           currentUserId={session?.access.appUser?.id}
+          canCreateOwner={canCreateOwner}
           onCancel={() => setShowForm(false)}
           onCreated={(_property, owner, notice) => {
             if (owner) setOwners((current) => [owner, ...current]);
@@ -541,12 +543,14 @@ function PropertyForm({
   owners,
   appUsers,
   currentUserId,
+  canCreateOwner,
   onCancel,
   onCreated,
 }: {
   owners: PropertyOwner[];
   appUsers: AppUserSummary[];
   currentUserId?: string;
+  canCreateOwner: boolean;
   onCancel: () => void;
   onCreated: (property: Property, owner?: PropertyOwner, notice?: string) => void;
 }) {
@@ -691,7 +695,7 @@ function PropertyForm({
       let ownerId = selectedOwnerId;
       let createdOwner: PropertyOwner | undefined;
 
-      if (!ownerId && text(form, "owner_name")) {
+      if (canCreateOwner && !ownerId && text(form, "owner_name")) {
         const ownerInput = ownerInputFromForm(form, "owner_");
         const ownerResponse = await createOwner(ownerInput);
         ownerId = ownerResponse.owner.id;
@@ -851,7 +855,7 @@ function PropertyForm({
             }}
             className={fieldClass}
           >
-            <option value="">Adicionar proprietário neste cadastro</option>
+            <option value="">{canCreateOwner ? "Adicionar proprietário neste cadastro" : "Selecione um proprietário existente"}</option>
             {visibleOwners.map((owner) => (
               <option key={owner.id} value={owner.id}>
                 {owner.name}
@@ -859,8 +863,12 @@ function PropertyForm({
             ))}
           </select>
         </label>
-        {!selectedOwner ? (
+        {!selectedOwner && canCreateOwner ? (
           <OwnerFields prefix="owner_" nameRequired={false} />
+        ) : !selectedOwner ? (
+          <div className="rounded-md border border-border bg-background p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
+            Seu perfil pode vincular um proprietário existente, mas não cadastrar um novo proprietário.
+          </div>
         ) : (
           <div className="rounded-md border border-border bg-background p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
             Proprietário vinculado: <strong className="text-foreground">{selectedOwner.name}</strong>. O código do imóvel ficará ligado a este cadastro.
