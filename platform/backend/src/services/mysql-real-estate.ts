@@ -124,6 +124,22 @@ const propertyListSelect = {
       name: true,
     },
   },
+  // Fase 2.2D (correção do blocker de homologação): o card de imóvel do
+  // frontend deriva o badge "Meu"/"Compartilhado" e a visibilidade do botão
+  // "Compartilhar imóvel" de `responsible_user` (ver getOwnershipBadge/
+  // canManageResourceSharing em app.imoveis.tsx), mas essa relação nunca
+  // fazia parte do select de listagem — só do select de detalhe
+  // (propertyInclude) — então `GET /real-estate/properties` sempre
+  // devolvia `responsible_user: null`, mesmo com responsibleUserId
+  // preenchido no banco. Mesmo select mínimo (id, name) já usado em
+  // propertyInclude acima; serializePropertySummary já sabia mapear este
+  // campo, só faltava o dado chegar do Prisma.
+  responsibleUser: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
   media: {
     orderBy: [{ isCover: "desc" as const }, { position: "asc" as const }, { createdAt: "asc" as const }],
     take: 1,

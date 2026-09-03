@@ -161,6 +161,58 @@ describe("property pagination service", () => {
     expect(result.items[0]?.property_media).toHaveLength(1);
   });
 
+  // Fase 2.2D — correção do blocker de homologação: GET /real-estate/properties
+  // (listagem) devolvia responsible_user: null mesmo com responsibleUserId
+  // preenchido, porque propertyListSelect não selecionava a relação
+  // responsibleUser (só o select de detalhe, propertyInclude, selecionava).
+  // O frontend (badge "Meu"/"Compartilhado" e o botão "Compartilhar imóvel"
+  // em app.imoveis.tsx) depende de responsible_user vir da LISTAGEM, não só
+  // do detalhe — daí o blocker.
+  it("selects responsibleUser (id, name) in the list query, mirroring the detail select (#1)", async () => {
+    const database = fakeDatabase(1);
+    await listMysqlProperties("company-a", input({}), database);
+    const query = database.property.findMany.mock.calls[0]?.[0];
+    expect(query.select.responsibleUser).toEqual({ select: { id: true, name: true } });
+  });
+
+  it("returns responsible_user: null for a property without a responsible broker (#1)", async () => {
+    const database = fakeDatabase(1);
+    const result = await listMysqlProperties("company-a", input({}), database);
+    // propertyRow() não define responsibleUser (responsibleUserId: null).
+    expect(result.items[0]?.responsible_user).toBeNull();
+  });
+
+  it("returns responsible_user: { id, name } for a property with a responsible broker (#2)", async () => {
+    const database = fakeDatabaseWithResponsible({
+      id: "broker-a1",
+      name: "[SYNTHETIC] Broker A1",
+    });
+    const result = await listMysqlProperties("company-a", input({}), database);
+    expect(result.items[0]?.responsible_user).toEqual({
+      id: "broker-a1",
+      name: "[SYNTHETIC] Broker A1",
+    });
+  });
+
+  it("keeps company scoping and pagination shape unchanged by the responsibleUser fix (#7)", async () => {
+    // Regressão: a correção não deve alterar where/orderBy/paginação - mesmas
+    // asserções já cobertas acima para a query sem responsibleUser.
+    const database = fakeDatabaseWithResponsible({ id: "broker-a1", name: "Broker A1" });
+    await listMysqlProperties("company-a", input({ page: 2, pageSize: 10 }), database);
+    const query = database.property.findMany.mock.calls[0]?.[0];
+    expect(query).toMatchObject({
+      skip: 10,
+      take: 10,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+  });
+
+  it("keeps listMysqlPropertyContent (already uses propertyInclude) unaffected by the listSelect fix (#7)", async () => {
+    const database = fakeDatabase(1);
+    const result = await listMysqlPropertyContent("company-a", input({}), database);
+    expect(result.items[0]).toHaveProperty("id");
+  });
+
   it("keeps the dedicated content collection paginated for builder compatibility", async () => {
     const database = fakeDatabase(130);
     const result = await listMysqlPropertyContent("company-a", input({ page: 2, pageSize: 100 }), database);
@@ -313,6 +365,24 @@ function fakeDatabase(total: number) {
   const property = {
     count: vi.fn(async () => total),
     findMany: vi.fn(async (query: { skip: number; take: number }) => rows.slice(query.skip, query.skip + query.take)),
+  };
+  return {
+    property,
+    $transaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
+  } as unknown as PrismaClient & { property: typeof property };
+}
+
+// Fase 2.2D — mesma fakeDatabase(), mas com a linha 1 carregando um
+// responsibleUser (relação), para provar que listMysqlProperties devolve
+// responsible_user corretamente quando o Prisma o retorna (ver select
+// asserido em "selects responsibleUser..." acima).
+function fakeDatabaseWithResponsible(responsibleUser: { id: string; name: string }) {
+  const rows = [{ ...propertyRow(1), responsibleUserId: responsibleUser.id, responsibleUser }];
+  const property = {
+    count: vi.fn(async () => rows.length),
+    findMany: vi.fn(async (query: { skip: number; take: number }) =>
+      rows.slice(query.skip, query.skip + query.take),
+    ),
   };
   return {
     property,
