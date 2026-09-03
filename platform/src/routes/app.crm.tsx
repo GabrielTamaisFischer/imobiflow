@@ -7,10 +7,14 @@ import { getModuleByKey } from "@/product/app-modules";
 import {
   createLead,
   getLead,
+  grantLeadAccess,
   listCrmUsers,
+  listLeadAccess,
   listLeads,
   loadCrmPipeline,
   moveLeadToStage,
+  replaceLeadAccess,
+  revokeLeadAccess,
   updateLead,
   createLeadActivity,
   getCrmRouting,
@@ -25,7 +29,12 @@ import {
 } from "@/product/crm";
 import { useSessionGuard } from "@/product/use-session-guard";
 import { toDateTimeLocalValue, toIsoOrEmpty } from "@/product/crm-date";
-import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
+import { canManage, canManageResourceSharing, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
+import type { AccessResponse } from "@/product/auth";
+import { getOwnershipBadge } from "@/product/sharing";
+import { ResourceOwnershipBadge, ResourceShareDialog } from "@/components/app/resource-share-dialog";
+
+type CurrentAppUser = NonNullable<AccessResponse["access"]["appUser"]>;
 
 export const Route = createFileRoute("/app/crm")({
   component: CrmPage,
@@ -236,6 +245,7 @@ function CrmPage() {
                     }
                     users={users}
                     canManage={canManageCrm}
+                    currentUser={session?.access.appUser}
                     onOpen={async () => {
                       try {
                         const response = await getLead(lead.id);
@@ -259,7 +269,7 @@ function CrmPage() {
           ))}
         </section>
       )}
-      {selectedLead ? <LeadDetail lead={selectedLead} users={users} canManage={canManageCrm} onClose={() => setSelectedLead(null)} onSaved={(detail) => { setSelectedLead(detail); setLeads((current) => current.map((item) => item.id === detail.id ? detail : item)); }} /> : null}
+      {selectedLead ? <LeadDetail lead={selectedLead} users={users} canManage={canManageCrm} currentUser={session?.access.appUser} onClose={() => setSelectedLead(null)} onSaved={(detail) => { setSelectedLead(detail); setLeads((current) => current.map((item) => item.id === detail.id ? detail : item)); }} /> : null}
     </ModulePage>
   );
 }
@@ -269,13 +279,21 @@ function RoutingPanel({ users, routing, onSaved, canManage }: { users: CrmUser[]
   return <div className="mb-4 rounded-lg border border-border bg-card p-4"><p className="font-semibold">Distribuição de leads</p><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "manual"} onChange={() => setMode("manual")} disabled={!canManage} /> Manual</label><label className="mt-2 flex items-center gap-2 text-sm"><input type="radio" checked={mode === "round_robin"} onChange={() => setMode("round_robin")} disabled={!canManage} /> Automática — Round-robin</label>{mode === "round_robin" ? <div className="mt-3 space-y-2">{users.map((user) => <label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(user.id)} onChange={() => setSelected((current) => current.includes(user.id) ? current.filter((id) => id !== user.id) : [...current, user.id])} disabled={!canManage} />{user.name}</label>)}</div> : null}{canManage ? <button type="button" onClick={async () => { try { await updateCrmRouting({ mode, user_ids: mode === "round_robin" ? selected : [] }); onSaved({ mode, user_ids: mode === "round_robin" ? selected : [] }); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar."); } }} className="mt-3 h-9 rounded border border-border px-3 text-sm">Salvar configuração</button> : <p className="mt-3 text-xs text-muted-foreground">Você pode visualizar, mas não alterar esta configuração.</p>}{error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}</div>;
 }
 
-function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDetailData; users: CrmUser[]; canManage: boolean; onClose: () => void; onSaved: (lead: LeadDetailData) => void }) {
+function LeadDetail({ lead, users, canManage, currentUser, onClose, onSaved }: { lead: LeadDetailData; users: CrmUser[]; canManage: boolean; currentUser: CurrentAppUser | undefined; onClose: () => void; onSaved: (lead: LeadDetailData) => void }) {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [assignedTo, setAssignedTo] = useState(lead.assigned_to ?? "");
   const [activityType, setActivityType] = useState("whatsapp");
   const [activityBody, setActivityBody] = useState("");
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [isShareOpen, setIsShareOpen] = useState(false);
+  const canManageSharing = canManageResourceSharing(currentUser, "crm.manage", lead.assigned_to);
+  const ownershipBadge = getOwnershipBadge({
+    currentUserId: currentUser?.id,
+    ownerId: lead.assigned_to,
+    isAdministrative: isAdministrative(currentUser),
+  });
+  const assignedToName = users.find((user) => user.id === lead.assigned_to)?.name ?? null;
   async function saveActivity() {
     setActivityError(null);
     try { await createLeadActivity(lead.id, { type: activityType, body: activityBody }); const refreshed = await getLead(lead.id); onSaved({ ...refreshed.lead, interests: refreshed.interests, activities: refreshed.activities, events: refreshed.events }); setActivityBody(""); } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar a atividade."); }
@@ -295,7 +313,18 @@ function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDe
         setIsSaving(false);
       }
     }}>
-      <div className="flex items-center justify-between"><h2 className="text-base font-semibold">Detalhe do lead</h2><button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button></div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-base font-semibold">Detalhe do lead</h2>
+          <ResourceOwnershipBadge badge={ownershipBadge} />
+        </div>
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={() => setIsShareOpen(true)} className="text-sm text-primary hover:underline">
+            {canManageSharing ? "Compartilhar lead" : "Pessoas com acesso"}
+          </button>
+          <button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button>
+        </div>
+      </div>
       <Field label="Nome" name="name" required defaultValue={lead.name} disabled={!canManage} /><Field label="E-mail" name="email" type="email" defaultValue={lead.email ?? ""} disabled={!canManage} /><Field label="Telefone" name="phone" defaultValue={lead.phone ?? ""} disabled={!canManage} /><Field label="Origem" name="source" defaultValue={lead.source ?? ""} disabled={!canManage} /><Field label="Orçamento" name="budget" defaultValue={lead.budget_cents ? String(lead.budget_cents / 100) : ""} disabled={!canManage} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" defaultValue={toDateTimeLocalValue(lead.next_follow_up_at)} disabled={!canManage} />
       <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} disabled={!canManage} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
       <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} disabled={!canManage} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
@@ -307,6 +336,21 @@ function LeadDetail({ lead, users, canManage, onClose, onSaved }: { lead: LeadDe
       {saveError ? <p className="text-sm text-destructive" role="alert">{saveError}</p> : null}
       {canManage ? <button type="submit" disabled={isSaving} className="h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground">{isSaving ? "Salvando..." : "Salvar alterações"}</button> : null}
     </form>
+    {isShareOpen ? (
+      <ResourceShareDialog
+        resourceLabel="lead"
+        resourceTitle={lead.name}
+        ownerName={assignedToName}
+        canManage={canManageSharing}
+        currentUserId={currentUser?.id}
+        onClose={() => setIsShareOpen(false)}
+        listEligibleUsers={listCrmUsers}
+        listAccess={() => listLeadAccess(lead.id)}
+        grant={(userId, permissions) => grantLeadAccess(lead.id, userId, permissions)}
+        replace={(userId, permissions) => replaceLeadAccess(lead.id, userId, permissions)}
+        revoke={(accessId) => revokeLeadAccess(lead.id, accessId)}
+      />
+    ) : null}
   </div>;
 }
 
@@ -499,6 +543,7 @@ function LeadCard({
   onUpdated,
   users,
   canManage,
+  currentUser,
   onOpen,
   onStatus,
 }: {
@@ -509,9 +554,15 @@ function LeadCard({
   onUpdated: (lead: Lead) => void;
   users: CrmUser[];
   canManage: boolean;
+  currentUser: CurrentAppUser | undefined;
   onOpen: () => void;
   onStatus: (status: Lead["status"], reason?: string) => void;
 }) {
+  const ownershipBadge = getOwnershipBadge({
+    currentUserId: currentUser?.id,
+    ownerId: lead.assigned_to,
+    isAdministrative: isAdministrative(currentUser),
+  });
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -535,6 +586,7 @@ function LeadCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold">{lead.name}</h3>
+          {ownershipBadge ? <div className="mt-1"><ResourceOwnershipBadge badge={ownershipBadge} /></div> : null}
           <p className="mt-1 text-xs text-muted-foreground">{interestLabels[lead.interest_type]}</p>
         </div>
         <button type="button" onClick={onOpen} className="rounded p-1 text-muted-foreground hover:bg-muted" aria-label="Abrir detalhes do lead"><Search className="h-4 w-4 shrink-0" /></button>

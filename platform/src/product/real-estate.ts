@@ -1,6 +1,7 @@
 import { apiRequest, isUnavailableProductionApi } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
 import { compactPreviewMediaUrl, safeSetPreviewItem } from "./preview-storage";
+import type { EligibleUser, ResourceAccessRow, ResourcePermission } from "./sharing";
 
 const previewOwnersKey = "imobiflow.preview.property_owners";
 const previewPropertiesKey = "imobiflow.preview.properties";
@@ -532,6 +533,62 @@ export async function setPropertyMediaCover(propertyId: string, mediaId: string)
     body: JSON.stringify({ media_id: mediaId }),
     token: getStoredToken() ?? undefined,
   });
+}
+
+// Fase 2.2D — compartilhamento explícito de Imóveis (PropertyAccess, backend
+// já homologado na Fase 2.2B). Sem modo preview: compartilhamento é uma
+// funcionalidade autenticada real, não faz sentido simular localStorage
+// aqui (mesma decisão implícita já tomada para outras rotas administrativas
+// que não têm fallback de preview).
+
+export type PropertyAccessGrant = ResourceAccessRow;
+
+// Espelha GET /crm/users: usuários ativos da mesma empresa elegíveis para
+// receber compartilhamento (role com properties.view OU properties.manage).
+// Requer apenas properties.view — por isso é a lista correta para o Broker
+// usar no seletor de destinatário, diferente de listUsers() (auth.ts), que
+// exige users.manage e normalmente fica vazia para um Broker.
+export async function listPropertyEligibleUsers() {
+  return apiRequest<{ users: EligibleUser[] }>("/real-estate/users", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function listPropertyAccess(propertyId: string) {
+  return apiRequest<{ access: PropertyAccessGrant[] }>(`/real-estate/properties/${propertyId}/access`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function grantPropertyAccess(
+  propertyId: string,
+  userId: string,
+  permissions: ResourcePermission[],
+) {
+  return apiRequest<{ access: PropertyAccessGrant[] }>(`/real-estate/properties/${propertyId}/access`, {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, permissions }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function replacePropertyAccess(
+  propertyId: string,
+  userId: string,
+  permissions: ResourcePermission[],
+) {
+  return apiRequest<{ access: PropertyAccessGrant[] }>(`/real-estate/properties/${propertyId}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ user_id: userId, permissions }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function revokePropertyAccess(propertyId: string, accessId: string) {
+  return apiRequest<{ ok: boolean; access_id: string }>(
+    `/real-estate/properties/${propertyId}/access/${accessId}`,
+    { method: "DELETE", token: getStoredToken() ?? undefined },
+  );
 }
 
 export function buildPropertyListQuery(filters: PropertyListFilters = {}) {

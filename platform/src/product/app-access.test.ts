@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appModules } from "./app-modules";
 import {
   canManage,
+  canManageResourceSharing,
   canView,
   getSafeApiErrorMessage,
   getVisibleModules,
@@ -98,6 +99,51 @@ describe("frontend access projection for Phase 2.1B", () => {
   it("recognizes Admin and Owner as administrative without changing backend authority", () => {
     expect(isAdministrative(admin)).toBe(true);
     expect(isAdministrative(owner)).toBe(true);
+  });
+
+  // Fase 2.2D — canManageResourceSharing é só reflexo de UX da regra C1 já
+  // aplicada no backend (canManagePropertySharing/canManageLeadSharing);
+  // estes testes cobrem os itens 6/7/32/33 da matriz de testes obrigatória.
+  it("lets Owner/Admin/Manager manage sharing via company scope regardless of who owns the resource (#6, #32)", () => {
+    const administrativeOwner = user("owner", ["properties.manage"]);
+    const administrativeAdmin = user("admin", ["crm.manage"]);
+    expect(canManageResourceSharing(administrativeOwner, "properties.manage", "someone-else-id")).toBe(true);
+    expect(canManageResourceSharing(administrativeAdmin, "crm.manage", null)).toBe(true);
+  });
+
+  it("lets the Broker who is the resource's current owner manage its sharing (#6)", () => {
+    expect(canManageResourceSharing(broker, "properties.manage", "broker-id")).toBe(true);
+  });
+
+  it("blocks a Broker who only received the resource via sharing from managing it (#7, #33)", () => {
+    expect(canManageResourceSharing(broker, "properties.manage", "someone-else-id")).toBe(false);
+    expect(canManageResourceSharing(broker, "crm.manage", null)).toBe(false);
+  });
+
+  it("blocks sharing management entirely without the base manage permission", () => {
+    const readOnlyBroker = user("broker", ["properties.view"]);
+    expect(canManageResourceSharing(readOnlyBroker, "properties.manage", "broker-id")).toBe(false);
+  });
+
+  it("passes through the backend's specific message for 422 instead of a generic override", () => {
+    // Diferente de 401/403/404 (mensagens fixas e seguras), 422 deve manter
+    // a mensagem específica que o backend já envia em português (ex.: Zod).
+    expect(
+      getSafeApiErrorMessage(
+        Object.assign(new Error("Permissões duplicadas não são permitidas."), { status: 422 }),
+        "fallback",
+      ),
+    ).toBe("Permissões duplicadas não são permitidas.");
+  });
+
+  it("falls back to a friendly message for an unexpected 5xx without exposing internals", () => {
+    expect(
+      getSafeApiErrorMessage(Object.assign(new Error("ECONNRESET"), { status: 500 }), "Não foi possível atualizar o acesso. Tente novamente."),
+    ).toBe("ECONNRESET");
+    // 5xx sem Error real (ex.: falha de rede genérica) usa o fallback amigável.
+    expect(getSafeApiErrorMessage({ status: 500 }, "Não foi possível atualizar o acesso. Tente novamente.")).toBe(
+      "Não foi possível atualizar o acesso. Tente novamente.",
+    );
   });
 });
 

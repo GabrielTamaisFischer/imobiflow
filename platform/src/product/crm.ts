@@ -1,5 +1,6 @@
 import { apiRequest } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
+import type { ResourceAccessRow, ResourcePermission } from "./sharing";
 
 const previewLeadsKey = "imobiflow.preview.crm.leads";
 
@@ -177,6 +178,42 @@ export async function updateLead(leadId: string, input: Partial<LeadInput>) {
     method: "PATCH",
     token: getStoredToken() ?? undefined,
     body: JSON.stringify(input),
+  });
+}
+
+// Fase 2.2D — compartilhamento explícito de Leads (LeadAccess, backend já
+// homologado na Fase 2.2C). listCrmUsers() (acima) já é a lista correta de
+// destinatários elegíveis (reaproveitada, sem endpoint duplicado — mesma
+// decisão já tomada no backend).
+
+export type LeadAccessGrant = ResourceAccessRow;
+
+export async function listLeadAccess(leadId: string) {
+  return apiRequest<{ access: LeadAccessGrant[] }>(`/crm/leads/${leadId}/access`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function grantLeadAccess(leadId: string, userId: string, permissions: ResourcePermission[]) {
+  return apiRequest<{ access: LeadAccessGrant[] }>(`/crm/leads/${leadId}/access`, {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, permissions }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function replaceLeadAccess(leadId: string, userId: string, permissions: ResourcePermission[]) {
+  return apiRequest<{ access: LeadAccessGrant[] }>(`/crm/leads/${leadId}/access`, {
+    method: "PUT",
+    body: JSON.stringify({ user_id: userId, permissions }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function revokeLeadAccess(leadId: string, accessId: string) {
+  return apiRequest<{ ok: boolean; access_id: string }>(`/crm/leads/${leadId}/access/${accessId}`, {
+    method: "DELETE",
+    token: getStoredToken() ?? undefined,
   });
 }
 

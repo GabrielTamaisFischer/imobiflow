@@ -46,6 +46,23 @@ export function getVisibleModules(user: AppUserAccess, modules: readonly AppModu
   return modules.filter((module) => canViewModule(user, module));
 }
 
+// Fase 2.2D — reflexo em UX da regra C1 já implementada no backend
+// (canManagePropertySharing/canManageLeadSharing em authorization.ts):
+// Owner/Admin/Manager (company scope) OU o responsável atual do recurso
+// podem gerenciar o compartilhamento; um Broker que só recebeu o recurso
+// via compartilhamento não pode. Isto é SOMENTE para decidir o que mostrar
+// na tela — o backend é quem decide de verdade (403 em qualquer tentativa
+// fora dessa regra, independente do que a UI exibir).
+export function canManageResourceSharing(
+  user: AppUserAccess,
+  managePermission: string,
+  resourceOwnerId: string | null | undefined,
+) {
+  if (!canManage(user, managePermission)) return false;
+  if (isAdministrative(user)) return true;
+  return Boolean(user?.id && resourceOwnerId && user.id === resourceOwnerId);
+}
+
 export function getSafeApiErrorMessage(error: unknown, fallback: string) {
   const status = (error as { status?: number } | null)?.status;
   if (status === 401) return "Sua sessão expirou. Entre novamente para continuar.";

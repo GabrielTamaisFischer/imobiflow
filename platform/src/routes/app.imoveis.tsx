@@ -16,6 +16,7 @@ import {
   Share2,
   Sparkles,
   Trash2,
+  Users,
 } from "lucide-react";
 import { type FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type * as React from "react";
@@ -44,7 +45,14 @@ import {
   type PropertySummary,
   type PropertySummaryMedia,
 } from "@/product/real-estate";
-import { listUsers, type AppUserSummary } from "@/product/auth";
+import {
+  grantPropertyAccess,
+  listPropertyAccess,
+  listPropertyEligibleUsers,
+  replacePropertyAccess,
+  revokePropertyAccess,
+} from "@/product/real-estate";
+import { listUsers, type AccessResponse, type AppUserSummary } from "@/product/auth";
 import { getPropertyDetailUrl } from "@/product/public-site-helpers";
 import {
   getPropertyWhatsAppLink,
@@ -54,7 +62,11 @@ import {
   unpublishSiteProperty,
 } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
-import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
+import { canManage, canManageResourceSharing, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
+import { getOwnershipBadge } from "@/product/sharing";
+import { ResourceOwnershipBadge, ResourceShareDialog } from "@/components/app/resource-share-dialog";
+
+type CurrentAppUser = NonNullable<AccessResponse["access"]["appUser"]>;
 
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
@@ -461,6 +473,7 @@ function PropertiesPage() {
               owners={owners}
               siteSlug={siteSlug}
               appUsers={appUsers}
+              currentUser={session?.access.appUser}
               onPropertyUpdated={(updatedProperty) => {
                 setProperties((current) =>
                   current.map((item) => (item.id === updatedProperty.id ? toPropertySummary(updatedProperty) : item)),
@@ -1447,6 +1460,7 @@ function PropertyCard({
   owners,
   siteSlug,
   appUsers,
+  currentUser,
   onPropertyUpdated,
   onPropertyRemoved,
   onMediaUploaded,
@@ -1456,6 +1470,7 @@ function PropertyCard({
   owners: PropertyOwner[];
   siteSlug: string | null;
   appUsers: AppUserSummary[];
+  currentUser: CurrentAppUser | undefined;
   onPropertyUpdated: (property: Property) => void;
   onPropertyRemoved: (propertyId: string) => void;
   onMediaUploaded: (media: NonNullable<Property["property_media"]>[number]) => void;
@@ -1467,9 +1482,17 @@ function PropertyCard({
   const coverMedia = getPropertyCoverMedia(property);
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isShareOpen, setIsShareOpen] = useState(false);
   const [detailProperty, setDetailProperty] = useState<Property | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const ownerId = property.responsible_user?.id ?? null;
+  const canManageSharing = canManageResourceSharing(currentUser, "properties.manage", ownerId);
+  const ownershipBadge = getOwnershipBadge({
+    currentUserId: currentUser?.id,
+    ownerId,
+    isAdministrative: isAdministrative(currentUser),
+  });
 
   async function openProperty(mode: "report" | "edit") {
     setIsActionLoading(true);
@@ -1556,6 +1579,7 @@ function PropertyCard({
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase text-muted-foreground">{property.code || property.property_type}</p>
           <h2 className="mt-1 line-clamp-2 text-sm font-semibold">{property.title}</h2>
+          {ownershipBadge ? <div className="mt-1"><ResourceOwnershipBadge badge={ownershipBadge} /></div> : null}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <span className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
@@ -1600,6 +1624,11 @@ function PropertyCard({
           disabled={isActionLoading}
         />
         <ActionButton icon={Trash2} label="Excluir" onClick={() => void handleArchive()} disabled={isActionLoading} danger />
+        <ActionButton
+          icon={Users}
+          label={canManageSharing ? "Compartilhar imóvel" : "Pessoas com acesso"}
+          onClick={() => setIsShareOpen(true)}
+        />
         {property.published_at && siteSlug ? (
           <ActionButton
             icon={Globe}
@@ -1651,6 +1680,21 @@ function PropertyCard({
             setDetailProperty(updated);
             onPropertyUpdated(updated);
           }}
+        />
+      ) : null}
+      {isShareOpen ? (
+        <ResourceShareDialog
+          resourceLabel="imóvel"
+          resourceTitle={property.title}
+          ownerName={property.responsible_user?.name ?? null}
+          canManage={canManageSharing}
+          currentUserId={currentUser?.id}
+          onClose={() => setIsShareOpen(false)}
+          listEligibleUsers={listPropertyEligibleUsers}
+          listAccess={() => listPropertyAccess(property.id)}
+          grant={(userId, permissions) => grantPropertyAccess(property.id, userId, permissions)}
+          replace={(userId, permissions) => replacePropertyAccess(property.id, userId, permissions)}
+          revoke={(accessId) => revokePropertyAccess(property.id, accessId)}
         />
       ) : null}
     </article>
