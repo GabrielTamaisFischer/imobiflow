@@ -170,10 +170,25 @@ describe("Phase 2.1 resource authorization", () => {
     expect(canManagePropertySharing(brokerA2)).toBe(false);
   });
 
-  it("does not extend the responsible-user exception to Lead sharing", () => {
+  it("allows the Lead's assigned Broker to manage its sharing (Fase 2.2C, C1)", () => {
     const brokerA1 = access();
-    // canManageLeadSharing intentionally has no resource parameter (Lead sharing is out of scope for 2.2B).
+    expect(canManageLeadSharing(brokerA1, { assignedTo: "broker-a1" })).toBe(true);
+  });
+
+  it("blocks a Broker with only shared access from managing Lead sharing (Fase 2.2C, C1/C3)", () => {
+    const brokerA2 = access({ userId: "broker-a2" });
+    expect(canManageLeadSharing(brokerA2, { assignedTo: "broker-a1" })).toBe(false);
+    expect(canManageLeadSharing(brokerA2, null)).toBe(false);
+    expect(canManageLeadSharing(brokerA2)).toBe(false);
+  });
+
+  it("canManageLeadSharing without a lead argument stays company-scope-only (backward compatible)", () => {
+    // Chamadas antigas (pré-2.2C) sem o segundo argumento continuam avaliando
+    // apenas o company scope — o parâmetro `lead` é opcional e aditivo.
+    const brokerA1 = access();
     expect(canManageLeadSharing(brokerA1)).toBe(false);
+    const admin = access({ role: "admin", scopes: { "crm.manage": "company" } });
+    expect(canManageLeadSharing(admin)).toBe(true);
   });
 
   it("gives Broker properties.manage but not data.export", () => {

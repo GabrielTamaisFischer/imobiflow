@@ -138,9 +138,22 @@ export function canManagePropertySharing(
   return Boolean(property && property.responsibleUserId === access.appUser.id);
 }
 
-export function canManageLeadSharing(access: AccessContext) {
-  return access.appUser.permissions.includes("crm.manage") &&
-    resolveScope(access, "crm.manage") === "company";
+// Fase 2.2C — mesma decisão C1 da Fase 2.2B (canManagePropertySharing),
+// adaptada para Lead: Owner/Admin/Manager em company scope OU o Broker que
+// seja o responsável ATUAL do Lead (assignedTo === appUser.id) podem
+// gerenciar o compartilhamento. Um Broker que só recebeu o Lead por
+// compartilhamento (mesmo com EDIT/NEGOTIATE) nunca passa aqui — C3 é
+// aplicado pela ausência de "responsabilidade" (assignedTo), não por uma
+// permissão especial "pode re-compartilhar". `lead` é opcional e
+// retrocompatível: chamadas antigas sem o parâmetro continuam avaliando
+// apenas o company scope, como antes desta fase.
+export function canManageLeadSharing(
+  access: AccessContext,
+  lead?: { assignedTo: string | null } | null,
+) {
+  if (!access.appUser.permissions.includes("crm.manage")) return false;
+  if (resolveScope(access, "crm.manage") === "company") return true;
+  return Boolean(lead && lead.assignedTo === access.appUser.id);
 }
 
 function resourceNotFound(code: string, message: string) {

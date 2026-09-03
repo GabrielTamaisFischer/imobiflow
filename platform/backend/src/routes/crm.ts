@@ -6,7 +6,14 @@ import { requireActiveSubscription, requireAuth, requireCompany, requirePermissi
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
 import { normalizeLeadEmail, normalizeLeadPhone } from "../services/lead-intake.js";
 import { saoPauloDayBounds } from "../services/crm-time.js";
-import { assertLeadAccess, buildLeadScopeFilter, resolveScope } from "../services/authorization.js";
+import {
+  assertLeadAccess,
+  buildLeadScopeFilter,
+  canManageLeadSharing,
+  resolveScope,
+  resourcePermissions,
+} from "../services/authorization.js";
+import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const crmRouter = Router();
@@ -34,6 +41,26 @@ const updateLeadSchema = leadSchema.partial().extend({
 const stageMoveSchema = z.object({ stage_id: z.string().uuid() });
 const activitySchema = z.object({ type: z.enum(["note", "call", "whatsapp", "email", "contact", "other"]), body: z.string().max(4000).optional().or(z.literal("")), occurred_at: z.string().datetime().optional() });
 const routingSchema = z.object({ mode: z.enum(["manual", "round_robin"]), user_ids: z.array(z.string().uuid()).max(100).default([]) });
+// Fase 2.2C — payloads de compartilhamento explícito de Lead (mesmo padrão
+// da Fase 2.2B/PropertyAccess). `user_id` nunca vem acompanhado de
+// company_id/role no body: a empresa e a elegibilidade do destinatário são
+// sempre resolvidas no backend via resolveLeadShareTarget.
+function uniquePermissions(list: string[]) {
+  return new Set(list).size === list.length;
+}
+const leadAccessGrantSchema = z.object({
+  user_id: z.string().uuid(),
+  permissions: z
+    .array(z.enum(resourcePermissions))
+    .min(1)
+    .refine(uniquePermissions, { message: "Permissões duplicadas não são permitidas." }),
+});
+const leadAccessReplaceSchema = z.object({
+  user_id: z.string().uuid(),
+  permissions: z
+    .array(z.enum(resourcePermissions))
+    .refine(uniquePermissions, { message: "Permissões duplicadas não são permitidas." }),
+});
 const leadSelect = {
   id: true, companyId: true, stageId: true, assignedTo: true, name: true, email: true, phone: true,
   source: true, interestType: true, status: true, lostReason: true, budgetCents: true,
@@ -58,6 +85,18 @@ function notFound() {
 }
 function invalid(message: string, code: string) {
   return Object.assign(new Error(message), { statusCode: 422, code });
+}
+function leadSharingDenied() {
+  return Object.assign(new Error("Você não tem autorização para gerenciar o compartilhamento deste lead."), {
+    statusCode: 403,
+    code: "LEAD_SHARING_DENIED",
+  });
+}
+function leadAccessNotFound() {
+  return Object.assign(new Error("Compartilhamento não encontrado."), {
+    statusCode: 404,
+    code: "LEAD_ACCESS_NOT_FOUND",
+  });
 }
 async function stageFor(companyId: string, stageId: string | undefined) {
   if (!stageId) return null;
@@ -100,6 +139,185 @@ function inputData(input: z.infer<typeof updateLeadSchema>) {
 }
 function ensureStatusRules(input: z.infer<typeof updateLeadSchema>) {
   if (input.status === "lost" && !input.lost_reason?.trim()) throw invalid("O motivo da perda é obrigatório.", "LOST_REASON_REQUIRED");
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2.2C — Compartilhamento explícito de Lead (LeadAccess)
+//
+// Mesma arquitetura já homologada em staging na Fase 2.2B (PropertyAccess):
+// um Lead continua tendo um responsável principal (assignedTo), e o
+// compartilhamento via LeadAccess NUNCA troca esse responsável — apenas
+// concede acesso adicional a outro usuário da mesma empresa. A tabela
+// lead_access já existe desde a Fase 2.1 (mesma migration que criou
+// property_access), com a mesma forma (companyId/leadId/userId/permission/
+// grantedBy/createdAt, @@unique([leadId,userId,permission])) — nenhuma
+// migration nova é necessária.
+//
+// Diferente de mysql-real-estate.ts, o módulo de CRM/Leads nunca teve uma
+// camada de serviço separada: toda a lógica de Lead já vive inline neste
+// arquivo de rotas, usando getPrisma() diretamente. Estas funções seguem
+// esse mesmo padrão local (em vez de criar um novo services/mysql-crm.ts),
+// para não introduzir uma arquitetura nova numa área do código que nunca a
+// usou — decisão registrada no relatório final desta tarefa. São exportadas
+// (só isso, permanecem definidas aqui) para permitir testes de nível de
+// serviço equivalentes aos de mysql-real-estate.ts, sem duplicar setup via
+// HTTP em cada teste.
+// ---------------------------------------------------------------------------
+
+const leadAccessInclude = {
+  user: { select: { id: true, name: true } },
+  grantedByUser: { select: { id: true, name: true } },
+} satisfies Prisma.LeadAccessInclude;
+
+function serializeLeadAccess(row: {
+  id: string;
+  leadId: string;
+  userId: string;
+  user: { name: string } | null;
+  permission: string;
+  grantedBy: string;
+  grantedByUser: { name: string } | null;
+  createdAt: Date;
+}) {
+  return {
+    id: row.id,
+    lead_id: row.leadId,
+    user_id: row.userId,
+    user_name: row.user?.name ?? null,
+    permission: row.permission,
+    granted_by: row.grantedBy,
+    granted_by_name: row.grantedByUser?.name ?? null,
+    created_at: row.createdAt.toISOString(),
+  };
+}
+
+export async function listLeadAccess(companyId: string, leadId: string, database = getPrisma()) {
+  const rows = await database.leadAccess.findMany({
+    where: { companyId, leadId },
+    include: leadAccessInclude,
+    orderBy: [{ createdAt: "asc" as const }],
+  });
+  return rows.map(serializeLeadAccess);
+}
+
+// Item C2 do escopo 2.2C: alvo do compartilhamento precisa ser um AppUser
+// ativo da MESMA empresa (companyId sempre de req.access!.company.id, nunca
+// do body), com papel que já enxergue Lead (crm.view ou crm.manage) — evita
+// conceder acesso "inútil" a um perfil sem nenhuma capacidade de CRM (ex.:
+// Financeiro). Auto-compartilhamento é bloqueado.
+export async function resolveLeadShareTarget(companyId: string, targetUserId: string, actorUserId: string) {
+  if (targetUserId === actorUserId) {
+    throw invalid("Não é possível compartilhar um lead com você mesmo.", "INVALID_SHARE_TARGET");
+  }
+  const user = await getPrisma().appUser.findFirst({
+    where: {
+      id: targetUserId,
+      companyId,
+      status: "active",
+      roleRecord: { permissions: { some: { permission: { key: { in: ["crm.view", "crm.manage"] } } } } },
+    },
+    select: { id: true, name: true },
+  });
+  if (!user) {
+    throw invalid("Usuário inválido para compartilhamento nesta empresa.", "INVALID_SHARE_TARGET");
+  }
+  return user;
+}
+
+// GRANT — aditivo e idempotente por permissão, igual à Fase 2.2B: concede
+// cada permissão pedida sem remover nenhuma permissão existente do usuário
+// que não tenha sido mencionada. Reconceder uma permissão já existente é
+// um no-op seguro (upsert sobre a chave composta leadId_userId_permission).
+export async function grantLeadAccess(
+  companyId: string,
+  leadId: string,
+  targetUserId: string,
+  permissions: string[],
+  grantedBy: string,
+) {
+  const client = getPrisma();
+  await client.$transaction(
+    permissions.map((permission) =>
+      client.leadAccess.upsert({
+        where: { leadId_userId_permission: { leadId, userId: targetUserId, permission } },
+        create: { companyId, leadId, userId: targetUserId, permission, grantedBy },
+        update: {},
+      }),
+    ),
+  );
+  return listLeadAccess(companyId, leadId, client);
+}
+
+// ATUALIZAÇÃO (replace) — resultado final = exatamente o conjunto de
+// permissões pedido para aquele (lead, user). Remove (na mesma transação)
+// qualquer permissão fora do conjunto pedido e garante (upsert) as do
+// conjunto pedido. permissions:[] revoga todas as permissões daquele
+// usuário sobre aquele lead.
+export async function replaceLeadAccess(
+  companyId: string,
+  leadId: string,
+  targetUserId: string,
+  permissions: string[],
+  grantedBy: string,
+) {
+  const client = getPrisma();
+  await client.$transaction([
+    client.leadAccess.deleteMany({
+      where: {
+        companyId,
+        leadId,
+        userId: targetUserId,
+        ...(permissions.length ? { permission: { notIn: permissions } } : {}),
+      },
+    }),
+    ...permissions.map((permission) =>
+      client.leadAccess.upsert({
+        where: { leadId_userId_permission: { leadId, userId: targetUserId, permission } },
+        create: { companyId, leadId, userId: targetUserId, permission, grantedBy },
+        update: {},
+      }),
+    ),
+  ]);
+  return listLeadAccess(companyId, leadId, client);
+}
+
+// REVOGAÇÃO — remove exatamente um LeadAccess por id, escopado por
+// company+lead (nunca confia em accessId isolado: IDOR de outra
+// empresa/lead sempre retorna null → rota mapeia para 404 tenant-safe).
+export async function revokeLeadAccess(companyId: string, leadId: string, accessId: string) {
+  return getPrisma().$transaction(async (tx) => {
+    const existing = await tx.leadAccess.findFirst({
+      where: { id: accessId, companyId, leadId },
+      select: { id: true, userId: true, permission: true },
+    });
+    if (!existing) return null;
+    await tx.leadAccess.deleteMany({ where: { id: accessId, companyId, leadId } });
+    return existing;
+  });
+}
+
+async function auditLeadAccessAction(
+  req: RequestWithAccess,
+  action: "lead.access_granted" | "lead.access_updated" | "lead.access_revoked",
+  leadId: string,
+  targetUserId: string | null,
+  permissions: string[],
+  accessId?: string,
+) {
+  await writeAuthAudit(
+    getPrisma(),
+    req.access!.company.id,
+    req.access!.appUser.id,
+    action,
+    "lead_access",
+    accessId ?? leadId,
+    {
+      leadId,
+      targetUserId,
+      permissions,
+      timestamp: new Date().toISOString(),
+    },
+  );
 }
 
 crmRouter.get("/pipeline", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
@@ -306,5 +524,89 @@ crmRouter.patch("/leads/:id/stage", requirePermission("crm.manage"), async (req:
       return updated;
     });
     res.json({ lead: serialize(lead) });
+  } catch (error) { next(error); }
+});
+
+// Fase 2.2C — Compartilhamento explícito de Lead (Diretriz Mestre 9.1/9.2,
+// mesma decisão da Fase 2.2B). GET é aberto a qualquer usuário com visão do
+// lead (transparência: quem pode ver o lead pode ver com quem ele está
+// compartilhado). POST/PUT/DELETE exigem crm.manage E autorização de
+// gerenciamento de compartilhamento (canManageLeadSharing — Owner/Admin/
+// Manager da empresa, OU o Broker que seja o responsável atual do lead;
+// decisão C1). Um Broker com apenas acesso "shared" (inclusive EDIT/
+// NEGOTIATE) NUNCA passa em canManageLeadSharing, mesmo que a consulta
+// scoped abaixo o autorize a LER/EDITAR o lead — C3 bloqueia explicitamente
+// o re-compartilhamento. Não há endpoint duplicado para listar
+// destinatários elegíveis: reutiliza-se GET /crm/users (já filtra por
+// mesma empresa, status ativo e crm.view/crm.manage — igual à C2).
+crmRouter.get("/leads/:id/access", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const leadId = String(req.params.id);
+    await assertLeadAccess(req.access!, leadId, "crm.view");
+    res.json({ access: await listLeadAccess(companyId, leadId) });
+  } catch (error) { next(error); }
+});
+
+crmRouter.post("/leads/:id/access", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const leadId = String(req.params.id);
+    const input = leadAccessGrantSchema.parse(req.body);
+    // buildLeadScopeFilter com EDIT faz o 404 tenant-safe (nunca revela se
+    // o lead existe em outra empresa/fora do escopo do ator) e já traz
+    // assignedTo na mesma consulta, sem round-trip extra.
+    const lead = await getPrisma().lead.findFirst({
+      where: { id: leadId, AND: [buildLeadScopeFilter(req.access!, "crm.manage", "EDIT")] },
+      select: { id: true, assignedTo: true },
+    });
+    if (!lead) throw notFound();
+    if (!canManageLeadSharing(req.access!, { assignedTo: lead.assignedTo })) {
+      throw leadSharingDenied();
+    }
+    await resolveLeadShareTarget(companyId, input.user_id, req.access!.appUser.id);
+    const access = await grantLeadAccess(companyId, leadId, input.user_id, input.permissions, req.access!.appUser.id);
+    await auditLeadAccessAction(req, "lead.access_granted", leadId, input.user_id, input.permissions);
+    res.status(201).json({ access: access.filter((row) => row.user_id === input.user_id) });
+  } catch (error) { next(error); }
+});
+
+crmRouter.put("/leads/:id/access", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const leadId = String(req.params.id);
+    const input = leadAccessReplaceSchema.parse(req.body);
+    const lead = await getPrisma().lead.findFirst({
+      where: { id: leadId, AND: [buildLeadScopeFilter(req.access!, "crm.manage", "EDIT")] },
+      select: { id: true, assignedTo: true },
+    });
+    if (!lead) throw notFound();
+    if (!canManageLeadSharing(req.access!, { assignedTo: lead.assignedTo })) {
+      throw leadSharingDenied();
+    }
+    await resolveLeadShareTarget(companyId, input.user_id, req.access!.appUser.id);
+    const access = await replaceLeadAccess(companyId, leadId, input.user_id, input.permissions, req.access!.appUser.id);
+    await auditLeadAccessAction(req, "lead.access_updated", leadId, input.user_id, input.permissions);
+    res.json({ access: access.filter((row) => row.user_id === input.user_id) });
+  } catch (error) { next(error); }
+});
+
+crmRouter.delete("/leads/:id/access/:accessId", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const leadId = String(req.params.id);
+    const accessId = String(req.params.accessId);
+    const lead = await getPrisma().lead.findFirst({
+      where: { id: leadId, AND: [buildLeadScopeFilter(req.access!, "crm.manage", "EDIT")] },
+      select: { id: true, assignedTo: true },
+    });
+    if (!lead) throw notFound();
+    if (!canManageLeadSharing(req.access!, { assignedTo: lead.assignedTo })) {
+      throw leadSharingDenied();
+    }
+    const revoked = await revokeLeadAccess(companyId, leadId, accessId);
+    if (!revoked) throw leadAccessNotFound();
+    await auditLeadAccessAction(req, "lead.access_revoked", leadId, revoked.userId, [revoked.permission], accessId);
+    res.json({ ok: true, access_id: accessId });
   } catch (error) { next(error); }
 });
