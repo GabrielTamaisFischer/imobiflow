@@ -1295,3 +1295,164 @@ function toIso(value: Date | string | null | undefined) {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : value;
 }
+
+// ---------------------------------------------------------------------------
+// Fase 2.2B — Compartilhamento explícito de Property (PropertyAccess)
+//
+// Diretriz Mestre, Seções 9.1/9.2/9.3: um Property tem um responsável
+// principal (responsibleUserId) que pode compartilhar explicitamente o
+// imóvel com outro usuário da mesma empresa via PropertyAccess (VIEW/EDIT/
+// VISIT/INSPECT/NEGOTIATE), sem trocar o responsável. A tabela já existia
+// desde a Fase 2.1 (migration 202609010001) — este bloco só adiciona as
+// operações de escrita (grant/replace/revoke) e leitura que faltavam.
+// Nenhuma migration nova é necessária.
+// ---------------------------------------------------------------------------
+
+const propertyAccessInclude = {
+  user: { select: { id: true, name: true } },
+  grantedByUser: { select: { id: true, name: true } },
+} satisfies Prisma.PropertyAccessInclude;
+
+function serializePropertyAccess(row: any) {
+  return {
+    id: row.id,
+    property_id: row.propertyId,
+    user_id: row.userId,
+    user_name: row.user?.name ?? null,
+    permission: row.permission,
+    granted_by: row.grantedBy,
+    granted_by_name: row.grantedByUser?.name ?? null,
+    created_at: toIso(row.createdAt),
+  };
+}
+
+export async function listMysqlPropertyAccess(
+  companyId: string,
+  propertyId: string,
+  database: PrismaClient = prisma(),
+) {
+  const rows = await database.propertyAccess.findMany({
+    where: { companyId, propertyId },
+    include: propertyAccessInclude,
+    orderBy: [{ createdAt: "asc" as const }],
+  });
+  return rows.map(serializePropertyAccess);
+}
+
+// Item 8/9 do escopo 2.2B: alvo do compartilhamento precisa ser um AppUser
+// ativo da MESMA empresa (nunca confiar em company_id vindo do cliente — o
+// companyId aqui vem sempre de req.access!.company.id, nunca do body), com
+// papel que já enxergue Property (properties.view ou properties.manage) —
+// evita conceder acesso "inútil" a um usuário sem nenhuma visão de Imóveis
+// (C2). Auto-compartilhamento é bloqueado (não faz sentido conceder a si
+// mesmo o que o usuário já possui por ser o ator da operação).
+export async function resolvePropertyShareTarget(
+  companyId: string,
+  targetUserId: string,
+  actorUserId: string,
+  database: PrismaClient = prisma(),
+) {
+  if (targetUserId === actorUserId) {
+    throw invalidShareTarget("Não é possível compartilhar um imóvel com você mesmo.");
+  }
+  const user = await database.appUser.findFirst({
+    where: {
+      id: targetUserId,
+      companyId,
+      status: "active",
+      roleRecord: {
+        permissions: { some: { permission: { key: { in: ["properties.view", "properties.manage"] } } } },
+      },
+    },
+    select: { id: true, name: true },
+  });
+  if (!user) {
+    throw invalidShareTarget("Usuário inválido para compartilhamento nesta empresa.");
+  }
+  return user;
+}
+
+function invalidShareTarget(message: string) {
+  return Object.assign(new Error(message), { statusCode: 422, code: "INVALID_SHARE_TARGET" });
+}
+
+// GRANT — aditivo e idempotente por permissão (Seção 7 do escopo): concede
+// cada permissão pedida sem remover nenhuma permissão existente do usuário
+// que não tenha sido mencionada. Reconceder uma permissão já existente é
+// um no-op seguro (upsert com update:{} sobre a chave composta
+// propertyId_userId_permission já criada na Fase 2.1). Uma única transação
+// garante que, se uma permissão for inválida (rejeitada antes da chamada
+// pelo Zod na rota), nenhum grant parcial fica persistido.
+export async function grantMysqlPropertyAccess(
+  companyId: string,
+  propertyId: string,
+  targetUserId: string,
+  permissions: string[],
+  grantedBy: string,
+) {
+  const client = prisma();
+  await client.$transaction(
+    permissions.map((permission) =>
+      client.propertyAccess.upsert({
+        where: { propertyId_userId_permission: { propertyId, userId: targetUserId, permission } },
+        create: { companyId, propertyId, userId: targetUserId, permission, grantedBy },
+        update: {},
+      }),
+    ),
+  );
+  return listMysqlPropertyAccess(companyId, propertyId, client);
+}
+
+// ATUALIZAÇÃO (replace) — Seção 9 do escopo: resultado final = exatamente o
+// conjunto de permissões pedido para aquele (property, user), sem
+// duplicatas/órfãos/estado parcial. Remove (na mesma transação) qualquer
+// permissão existente fora do conjunto pedido e garante (upsert) as
+// permissões do conjunto pedido. Chamar com permissions:[] revoga todas as
+// permissões daquele usuário sobre aquele imóvel.
+export async function replaceMysqlPropertyAccess(
+  companyId: string,
+  propertyId: string,
+  targetUserId: string,
+  permissions: string[],
+  grantedBy: string,
+) {
+  const client = prisma();
+  await client.$transaction([
+    client.propertyAccess.deleteMany({
+      where: {
+        companyId,
+        propertyId,
+        userId: targetUserId,
+        ...(permissions.length ? { permission: { notIn: permissions } } : {}),
+      },
+    }),
+    ...permissions.map((permission) =>
+      client.propertyAccess.upsert({
+        where: { propertyId_userId_permission: { propertyId, userId: targetUserId, permission } },
+        create: { companyId, propertyId, userId: targetUserId, permission, grantedBy },
+        update: {},
+      }),
+    ),
+  ]);
+  return listMysqlPropertyAccess(companyId, propertyId, client);
+}
+
+// REVOGAÇÃO (Seção 11 do escopo) — remove exatamente um PropertyAccess por
+// id, escopado por company+property (nunca confia em accessId isolado:
+// IDOR de outra empresa/imóvel sempre retorna count 0 → rota mapeia para
+// 404 tenant-safe). own/company continuam intactos porque não dependem de
+// PropertyAccess; revogar um VIEW explícito não quebra um VIEW derivado por
+// implicação de EDIT porque grantPermissions("VIEW") em
+// buildPropertyScopeFilter olha para QUALQUER permissão remanescente do
+// usuário (inclusive EDIT), não apenas para a linha VIEW.
+export async function revokeMysqlPropertyAccess(companyId: string, propertyId: string, accessId: string) {
+  return prisma().$transaction(async (tx) => {
+    const existing = await tx.propertyAccess.findFirst({
+      where: { id: accessId, companyId, propertyId },
+      select: { id: true, userId: true, permission: true },
+    });
+    if (!existing) return null;
+    await tx.propertyAccess.deleteMany({ where: { id: accessId, companyId, propertyId } });
+    return existing;
+  });
+}

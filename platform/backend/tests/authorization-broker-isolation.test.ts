@@ -158,6 +158,24 @@ describe("Phase 2.1 resource authorization", () => {
     expect(canManageLeadSharing(admin)).toBe(true);
   });
 
+  it("allows the Property's responsible Broker to manage its sharing (C1)", () => {
+    const brokerA1 = access();
+    expect(canManagePropertySharing(brokerA1, { responsibleUserId: "broker-a1" })).toBe(true);
+  });
+
+  it("blocks a Broker with only shared access from managing Property sharing (C1)", () => {
+    const brokerA2 = access({ userId: "broker-a2" });
+    expect(canManagePropertySharing(brokerA2, { responsibleUserId: "broker-a1" })).toBe(false);
+    expect(canManagePropertySharing(brokerA2, null)).toBe(false);
+    expect(canManagePropertySharing(brokerA2)).toBe(false);
+  });
+
+  it("does not extend the responsible-user exception to Lead sharing", () => {
+    const brokerA1 = access();
+    // canManageLeadSharing intentionally has no resource parameter (Lead sharing is out of scope for 2.2B).
+    expect(canManageLeadSharing(brokerA1)).toBe(false);
+  });
+
   it("gives Broker properties.manage but not data.export", () => {
     const broker = roleTemplates.find((role) => role.systemKey === "broker")!;
     expect(broker.permissions).toContain("properties.manage");

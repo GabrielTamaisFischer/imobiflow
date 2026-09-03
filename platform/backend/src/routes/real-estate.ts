@@ -19,12 +19,17 @@ import {
   getMysqlProperty,
   getMysqlPropertyByCode,
   getMysqlPropertyByExternalId,
+  grantMysqlPropertyAccess,
   listMysqlOwners,
   listMysqlProperties,
+  listMysqlPropertyAccess,
   listMysqlPropertyContent,
   listMysqlPropertyMedia,
   MAX_PROPERTY_PAGE_SIZE,
   reorderMysqlPropertyMedia,
+  replaceMysqlPropertyAccess,
+  resolvePropertyShareTarget,
+  revokeMysqlPropertyAccess,
   setMysqlPropertyMediaCover,
   updateMysqlOwner,
   updateMysqlProperty,
@@ -46,8 +51,11 @@ import { isValidBrazilianDocument } from "../services/brazilian-document.js";
 import {
   assertPropertyAccess,
   buildPropertyScopeFilter,
+  canManagePropertySharing,
   resolveScope,
+  resourcePermissions,
 } from "../services/authorization.js";
+import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const realEstateRouter = Router();
@@ -164,6 +172,29 @@ const mediaOrderSchema = z.object({
 });
 
 const mediaCoverSchema = z.object({ media_id: z.string().uuid() });
+
+// Fase 2.2B — payloads de compartilhamento explícito de Property. `user_id`
+// nunca é acompanhado de company_id/role no body (Seção 9 do escopo: nunca
+// confiar em company_id vindo do cliente) — a empresa e o papel do
+// destinatário são sempre resolvidos no backend via resolvePropertyShareTarget.
+function uniquePermissions(list: string[]) {
+  return new Set(list).size === list.length;
+}
+
+const propertyAccessGrantSchema = z.object({
+  user_id: z.string().uuid(),
+  permissions: z
+    .array(z.enum(resourcePermissions))
+    .min(1)
+    .refine(uniquePermissions, { message: "Permissões duplicadas não são permitidas." }),
+});
+
+const propertyAccessReplaceSchema = z.object({
+  user_id: z.string().uuid(),
+  permissions: z
+    .array(z.enum(resourcePermissions))
+    .refine(uniquePermissions, { message: "Permissões duplicadas não são permitidas." }),
+});
 
 export const propertyListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -485,6 +516,157 @@ realEstateRouter.delete("/properties/:id/media/:mediaId", requirePermission("pro
     next(error);
   }
 });
+
+// Fase 2.2B — Compartilhamento explícito de Property (Diretriz Mestre 9.1/9.2).
+// GET é aberto a qualquer usuário com visão do imóvel (transparência: quem
+// pode ver o imóvel pode ver com quem ele está compartilhado). POST/PUT/DELETE
+// exigem properties.manage E autorização de gerenciamento de compartilhamento
+// (canManagePropertySharing — Owner/Admin/Manager da empresa, OU o Broker que
+// seja o responsável atual do imóvel; decisão C1). Um Broker com apenas
+// acesso "shared" (inclusive EDIT) NUNCA passa em canManagePropertySharing,
+// mesmo que a consulta scoped abaixo o autorize a LER/EDITAR o imóvel —
+// C3 bloqueia explicitamente o re-compartilhamento.
+realEstateRouter.get("/properties/:id/access", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const propertyId = String(req.params.id);
+    await assertPropertyAccess(req.access!, propertyId, "properties.view");
+    res.json({ access: await listMysqlPropertyAccess(companyId, propertyId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.post("/properties/:id/access", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const propertyId = String(req.params.id);
+    const input = propertyAccessGrantSchema.parse(req.body);
+    // getMysqlProperty com resourceScope faz o 404 tenant-safe (nunca revela
+    // se o imóvel existe em outra empresa/fora do escopo do ator) e já traz
+    // responsible_user_id na mesma consulta, sem round-trip extra.
+    const property = await getMysqlProperty(
+      companyId,
+      propertyId,
+      undefined,
+      buildPropertyScopeFilter(req.access!, "properties.manage", "EDIT"),
+    );
+    if (!canManagePropertySharing(req.access!, { responsibleUserId: property.responsible_user_id })) {
+      throw sharingDenied();
+    }
+    await resolvePropertyShareTarget(companyId, input.user_id, req.access!.appUser.id);
+    const access = await grantMysqlPropertyAccess(companyId, propertyId, input.user_id, input.permissions, req.access!.appUser.id);
+    await auditPropertyAccessAction(req, "property.access_granted", propertyId, input.user_id, input.permissions);
+    res.status(201).json({ access: access.filter((row) => row.user_id === input.user_id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.put("/properties/:id/access", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const propertyId = String(req.params.id);
+    const input = propertyAccessReplaceSchema.parse(req.body);
+    const property = await getMysqlProperty(
+      companyId,
+      propertyId,
+      undefined,
+      buildPropertyScopeFilter(req.access!, "properties.manage", "EDIT"),
+    );
+    if (!canManagePropertySharing(req.access!, { responsibleUserId: property.responsible_user_id })) {
+      throw sharingDenied();
+    }
+    await resolvePropertyShareTarget(companyId, input.user_id, req.access!.appUser.id);
+    const access = await replaceMysqlPropertyAccess(companyId, propertyId, input.user_id, input.permissions, req.access!.appUser.id);
+    await auditPropertyAccessAction(req, "property.access_updated", propertyId, input.user_id, input.permissions);
+    res.json({ access: access.filter((row) => row.user_id === input.user_id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.delete("/properties/:id/access/:accessId", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const propertyId = String(req.params.id);
+    const accessId = String(req.params.accessId);
+    const property = await getMysqlProperty(
+      companyId,
+      propertyId,
+      undefined,
+      buildPropertyScopeFilter(req.access!, "properties.manage", "EDIT"),
+    );
+    if (!canManagePropertySharing(req.access!, { responsibleUserId: property.responsible_user_id })) {
+      throw sharingDenied();
+    }
+    const revoked = await revokeMysqlPropertyAccess(companyId, propertyId, accessId);
+    if (!revoked) throw propertyAccessNotFound();
+    await auditPropertyAccessAction(req, "property.access_revoked", propertyId, revoked.userId, [revoked.permission], accessId);
+    res.json({ ok: true, access_id: accessId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Lista usuários elegíveis da mesma empresa para compartilhamento de Property
+// (suporte ao frontend futuro, Seção 14 do escopo — este bloco não implementa
+// UI). Mesmo padrão de GET /crm/users: papel precisa enxergar Property
+// (properties.view ou properties.manage) para não permitir grants "inúteis".
+realEstateRouter.get("/users", requirePermission("properties.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const users = await getPrisma().appUser.findMany({
+      where: {
+        companyId: req.access!.company.id,
+        status: "active",
+        roleRecord: { permissions: { some: { permission: { key: { in: ["properties.view", "properties.manage"] } } } } },
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, role: true, status: true },
+    });
+    res.json({ users });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function sharingDenied() {
+  return Object.assign(new Error("Você não tem autorização para gerenciar o compartilhamento deste imóvel."), {
+    statusCode: 403,
+    code: "PROPERTY_SHARING_DENIED",
+  });
+}
+
+function propertyAccessNotFound() {
+  return Object.assign(new Error("Compartilhamento não encontrado."), {
+    statusCode: 404,
+    code: "PROPERTY_ACCESS_NOT_FOUND",
+  });
+}
+
+async function auditPropertyAccessAction(
+  req: RequestWithAccess,
+  action: "property.access_granted" | "property.access_updated" | "property.access_revoked",
+  propertyId: string,
+  targetUserId: string | null,
+  permissions: string[],
+  accessId?: string,
+) {
+  await writeAuthAudit(
+    getPrisma(),
+    req.access!.company.id,
+    req.access!.appUser.id,
+    action,
+    "property_access",
+    accessId ?? propertyId,
+    {
+      propertyId,
+      targetUserId,
+      permissions,
+      timestamp: new Date().toISOString(),
+    },
+  );
+}
 
 function decodeBase64File(content: string) {
   const base64 = content.includes(",") ? content.split(",").at(-1) : content;

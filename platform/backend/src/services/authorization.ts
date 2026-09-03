@@ -129,9 +129,13 @@ export async function assertLeadAccess(
   }
 }
 
-export function canManagePropertySharing(access: AccessContext) {
-  return access.appUser.permissions.includes("properties.manage") &&
-    resolveScope(access, "properties.manage") === "company";
+export function canManagePropertySharing(
+  access: AccessContext,
+  property?: { responsibleUserId: string | null } | null,
+) {
+  if (!access.appUser.permissions.includes("properties.manage")) return false;
+  if (resolveScope(access, "properties.manage") === "company") return true;
+  return Boolean(property && property.responsibleUserId === access.appUser.id);
 }
 
 export function canManageLeadSharing(access: AccessContext) {
