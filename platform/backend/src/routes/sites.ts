@@ -12,19 +12,45 @@ import {
   prisma,
   serializeCompanySite,
   syncMysqlPropertyPublication,
+  WATERMARK_LOGO_ENTITY_TYPE,
 } from "../services/mysql-real-estate.js";
 import {
   emitPropertyPublishedEvent,
   recordWhatsAppLinkOpened,
   resolveWhatsAppOwnerNotification,
 } from "../services/property-events.js";
+import { validateUploadFile } from "../services/storage/file-policy.js";
+import { buildStorageFolder, getStorageProvider, getStorageProviderForName } from "../services/storage/index.js";
+import {
+  createStoredFileRecord,
+  deleteStoredFileRecordsForEntity,
+  findStoredFileForEntity,
+} from "../services/storage/stored-files.js";
+import { WATERMARK_POSITIONS } from "../services/storage/types.js";
+import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const sitesRouter = Router();
 
 sitesRouter.use(requireAuth, requireCompany, requireActiveSubscription);
 
-const siteSchema = z.object({
+// F3C (2026-09-04): configuração de marca d'água por empresa. Vive dentro de
+// settings_json (CompanySite já tinha esse Json e já aceitava chaves extras
+// via catchall — nenhuma migration nova foi necessária). Validado aqui de
+// forma explícita (enum de posição, faixa de opacidade) em vez de confiar no
+// catchall — é a única parte de settings_json que precisa rejeitar valor
+// malformado/malicioso em vez de só aceitar qualquer coisa.
+export const watermarkSettingsSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    position: z.enum(WATERMARK_POSITIONS).optional().default("bottom-right"),
+    // 10-100: abaixo de 10% a marca d'água deixa de ser útil (imperceptível);
+    // acima de 100% não faz sentido (opacidade máxima já é 100).
+    opacity: z.number().int().min(10).max(100).optional().default(60),
+  })
+  .strict();
+
+export const siteSchema = z.object({
   slug: z.string().min(3).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   custom_domain: z.string().max(180).optional().or(z.literal("")),
   brand_name: z.string().min(2).max(160),
@@ -57,6 +83,7 @@ const siteSchema = z.object({
       active_template_key: z.string().optional(),
       favorite_template_keys: z.array(z.string()).optional().default([]),
       featured_property_ids: z.array(z.string()).optional().default([]),
+      watermark: watermarkSettingsSchema.optional().default({ enabled: false, position: "bottom-right", opacity: 60 }),
     })
     .catchall(z.unknown())
     .default({}),
@@ -66,13 +93,156 @@ const siteSchema = z.object({
 sitesRouter.get("/settings", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
-    const site = await prisma().companySite.findFirst({ where: { companyId } });
+    const [site, watermarkLogo] = await Promise.all([
+      prisma().companySite.findFirst({ where: { companyId } }),
+      findStoredFileForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId),
+    ]);
 
-    res.json({ site: site ? serializeCompanySite(site) : null });
+    res.json({ site: site ? serializeCompanySite(site) : null, watermark_logo: serializeWatermarkLogo(watermarkLogo) });
   } catch (error) {
     next(error);
   }
 });
+
+const watermarkLogoUploadSchema = z.object({
+  file_name: z.string().min(1).max(180),
+  mime_type: z.enum(["image/jpeg", "image/png", "image/webp", "image/avif"]),
+  size_bytes: z.number().int().positive().max(4 * 1024 * 1024),
+  content_base64: z.string().min(1),
+});
+
+// F3C: upload do logo usado como marca d'água. Reaproveita 100% a
+// infraestrutura de storage já existente para property_media (mesmo
+// validateUploadFile/getStorageProvider/StoredFile) — só troca o "purpose"
+// para "website_logo" (já existia em StoragePurpose/file-policy.ts/
+// buildStorageFolder, nunca tinha um endpoint real usando-o) e o
+// entityType/entityId do StoredFile para WATERMARK_LOGO_ENTITY_TYPE +
+// companyId (nunca um id vindo do cliente — ver mysql-real-estate.ts).
+// Sempre substitui o logo anterior (remove o StoredFile + o asset remoto
+// antigo antes de gravar o novo) para nunca acumular lixo nem deixar dúvida
+// sobre "qual é o logo atual".
+sitesRouter.post(
+  "/settings/watermark-logo",
+  requirePermission("site.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const userId = req.access!.appUser.id;
+      const input = watermarkLogoUploadSchema.parse(req.body);
+      const body = decodeBase64File(input.content_base64);
+      const policy = validateUploadFile({
+        purpose: "website_logo",
+        fileName: input.file_name,
+        mimeType: input.mime_type,
+        declaredSizeBytes: input.size_bytes,
+        body,
+      });
+
+      await removeExistingWatermarkLogo(companyId);
+
+      const storage = getStorageProvider();
+      const uploaded = await storage.uploadFile({
+        companyId,
+        entityType: WATERMARK_LOGO_ENTITY_TYPE,
+        entityId: companyId,
+        purpose: "website_logo",
+        fileName: input.file_name,
+        mimeType: policy.normalizedMimeType,
+        sizeBytes: policy.measuredSizeBytes,
+        body,
+        folder: buildStorageFolder({ companyId, purpose: "website_logo" }),
+      });
+
+      const storedFile = await createStoredFileRecord({
+        companyId,
+        entityType: WATERMARK_LOGO_ENTITY_TYPE,
+        entityId: companyId,
+        file: uploaded,
+        uploadedBy: userId,
+        purpose: "company_logo",
+      });
+
+      await prisma().websiteAuditLog.create({
+        data: {
+          companyId,
+          actorUserId: uuidOrNull(userId),
+          // "asset_uploaded"/"asset_deleted" (enum WebsiteAuditAction já
+          // existente, mesmo usado por property_media) evita precisar de uma
+          // migration só para 2 valores novos de enum — entityType já
+          // distingue este evento como sendo do logo de watermark.
+          action: "asset_uploaded",
+          entityType: WATERMARK_LOGO_ENTITY_TYPE,
+          entityId: companyId,
+          metadataJson: { provider: uploaded.provider, mimeType: policy.normalizedMimeType, purpose: "company_logo" },
+        },
+      });
+
+      res.status(201).json({ watermark_logo: serializeWatermarkLogo(storedFile) });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+sitesRouter.delete(
+  "/settings/watermark-logo",
+  requirePermission("site.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const userId = req.access!.appUser.id;
+      const removed = await removeExistingWatermarkLogo(companyId);
+
+      await prisma().websiteAuditLog.create({
+        data: {
+          companyId,
+          actorUserId: uuidOrNull(userId),
+          action: "asset_deleted",
+          entityType: WATERMARK_LOGO_ENTITY_TYPE,
+          entityId: companyId,
+          metadataJson: { hadLogo: Boolean(removed), purpose: "company_logo" },
+        },
+      });
+
+      res.json({ ok: true, watermark_logo: null });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// companyId vem sempre de req.access! (contexto autenticado) — nunca do
+// cliente — então esta função nunca pode tocar o logo de outra empresa por
+// construção, não só por checagem.
+async function removeExistingWatermarkLogo(companyId: string) {
+  const existing = await findStoredFileForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId);
+  if (!existing) return null;
+
+  try {
+    await getStorageProviderForName(existing.provider as StorageProviderName).deleteFile({
+      publicId: existing.publicId,
+      resourceType: existing.resourceType as StorageResourceType,
+    });
+  } catch {
+    // Mesmo se a remoção remota falhar (provider indisponível/asset já
+    // removido manualmente), o registro local é removido — nunca deixamos o
+    // logo "travado" impossível de trocar por causa de uma falha externa.
+  }
+  await deleteStoredFileRecordsForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId);
+  return existing;
+}
+
+function serializeWatermarkLogo(
+  storedFile: { secureUrl: string; originalFilename: string; provider: string; createdAt: Date } | null,
+) {
+  if (!storedFile) return null;
+  return {
+    url: storedFile.secureUrl,
+    original_filename: storedFile.originalFilename,
+    provider: storedFile.provider,
+    uploaded_at: storedFile.createdAt.toISOString(),
+  };
+}
 
 sitesRouter.put("/settings", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
   try {
@@ -402,6 +572,11 @@ function serializeSiteProperty(property: {
     status: property.status,
     published_at: property.publishedAt?.toISOString() ?? null,
   };
+}
+
+function decodeBase64File(content: string) {
+  const base64 = content.includes(",") ? content.split(",").at(-1) : content;
+  return Buffer.from(base64 ?? "", "base64");
 }
 
 function emptyToNull(value: string | null | undefined) {

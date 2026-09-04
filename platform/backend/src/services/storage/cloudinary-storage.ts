@@ -90,7 +90,7 @@ export class CloudinaryStorageProvider implements StorageProvider {
     return cloudinary.url(publicId, {
       secure: true,
       resource_type: options.resourceType ?? "image",
-      transformation: imageTransformation(options.variant),
+      transformation: imageTransformation(options.variant, options.watermark),
     });
   }
 
@@ -201,7 +201,7 @@ function uploadBuffer(body: Buffer | Uint8Array, options: UploadApiOptions) {
   });
 }
 
-function imageTransformation(variant?: PublicUrlOptions["variant"]) {
+function imageTransformation(variant?: PublicUrlOptions["variant"], watermark?: PublicUrlOptions["watermark"]) {
   if (!variant) return undefined;
   const variants: Record<NonNullable<PublicUrlOptions["variant"]>, UploadApiOptions["transformation"]> = {
     thumbnail: [{ width: 240, height: 180, crop: "fill", gravity: "auto", fetch_format: "auto", quality: "auto" }],
@@ -209,7 +209,46 @@ function imageTransformation(variant?: PublicUrlOptions["variant"]) {
     gallery: [{ width: 1200, height: 800, crop: "limit", fetch_format: "auto", quality: "auto" }],
     full: [{ width: 1920, height: 1280, crop: "limit", fetch_format: "auto", quality: "auto" }],
   };
-  return variants[variant];
+  const base = variants[variant];
+  if (!watermark || !Array.isArray(base)) return base;
+
+  // F3C: overlay aplicado como um SEGUNDO passo encadeado da transformação
+  // (chain, separado por "/" na URL final) — nunca sobre o public_id
+  // original, nunca gravado em disco/Cloudinary como um novo asset. Opera
+  // sobre o resultado do passo anterior (a variante já redimensionada/
+  // otimizada), por isso a logo escala de forma proporcional ao tamanho
+  // final da imagem em vez de a um tamanho fixo em pixels.
+  return [...base, watermarkOverlayStep(watermark)];
+}
+
+function watermarkOverlayStep(watermark: NonNullable<PublicUrlOptions["watermark"]>): Record<string, unknown> {
+  const gravityByPosition: Record<string, string> = {
+    "bottom-right": "south_east",
+    "bottom-left": "south_west",
+    "top-right": "north_east",
+    "top-left": "north_west",
+    center: "center",
+  };
+  const gravity = gravityByPosition[watermark.position] ?? "south_east";
+  const step: Record<string, unknown> = {
+    // Cloudinary usa ":" como separador de pasta no parametro de overlay
+    // (l_...), em vez de "/". O public_id em si nunca vem do cliente (ver
+    // WatermarkOverlay em types.ts).
+    overlay: watermark.publicId.replace(/\//g, ":"),
+    gravity,
+    opacity: Math.min(100, Math.max(1, Math.round(watermark.opacity))),
+    // Logo dimensionada como fracao relativa da imagem base (18% da
+    // largura), preservando proporcao — nunca um tamanho fixo que ficaria
+    // desproporcional entre a variante "gallery" (1200x800) e outras.
+    width: 0.18,
+    crop: "scale",
+    flags: "relative",
+  };
+  if (gravity !== "center") {
+    step.x = 24;
+    step.y = 24;
+  }
+  return step;
 }
 
 function safeBaseName(fileName: string) {

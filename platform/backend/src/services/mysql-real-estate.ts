@@ -4,6 +4,8 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ingestLead } from "./lead-intake.js";
 import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
 import { getStorageProviderForName } from "./storage/index.js";
+import { findStoredFileForEntity } from "./storage/stored-files.js";
+import { WATERMARK_POSITIONS, type WatermarkOverlay, type WatermarkPosition } from "./storage/types.js";
 
 type PropertyInput = Record<string, any>;
 
@@ -760,18 +762,21 @@ export async function isSiteSlugTakenByAnotherCompany(companyId: string, slug: s
 }
 
 export async function loadMysqlPublicProperties(site: { companyId: string; settingsJson: unknown }, limit: number) {
-  const properties = await prisma().property.findMany({
-    where: {
-      companyId: site.companyId,
-      status: { in: ["available", "reserved"] },
-      publishedAt: { not: null },
-    },
-    select: publicPropertySelect,
-    orderBy: [{ siteFeatured: "desc" }, { publishedAt: "desc" }, { id: "desc" }],
-    take: limit,
-  });
+  const [properties, watermark] = await Promise.all([
+    prisma().property.findMany({
+      where: {
+        companyId: site.companyId,
+        status: { in: ["available", "reserved"] },
+        publishedAt: { not: null },
+      },
+      select: publicPropertySelect,
+      orderBy: [{ siteFeatured: "desc" }, { publishedAt: "desc" }, { id: "desc" }],
+      take: limit,
+    }),
+    resolveWatermarkOverlayForSite(site.companyId, site.settingsJson),
+  ]);
 
-  return properties.map((property) => serializePublicProperty(property, site));
+  return properties.map((property) => serializePublicProperty(property, site, watermark));
 }
 
 export async function loadMysqlPublicPropertyByReference(
@@ -779,17 +784,20 @@ export async function loadMysqlPublicPropertyByReference(
   reference: string,
 ) {
   if (isUuid(reference)) {
-    const property = await prisma().property.findFirst({
-      where: {
-        id: reference,
-        companyId: site.companyId,
-        status: { in: ["available", "reserved"] },
-        publishedAt: { not: null },
-      },
-      select: publicPropertySelect,
-    });
+    const [property, watermark] = await Promise.all([
+      prisma().property.findFirst({
+        where: {
+          id: reference,
+          companyId: site.companyId,
+          status: { in: ["available", "reserved"] },
+          publishedAt: { not: null },
+        },
+        select: publicPropertySelect,
+      }),
+      resolveWatermarkOverlayForSite(site.companyId, site.settingsJson),
+    ]);
     if (!property) throw publicPropertyNotFound();
-    return serializePublicProperty(property, site);
+    return serializePublicProperty(property, site, watermark);
   }
 
   // B2 (Fase B): o sufixo de 8 caracteres hex do id já identifica o imóvel de
@@ -804,20 +812,23 @@ export async function loadMysqlPublicPropertyByReference(
   // mesmo imóvel mesmo que o texto do slug tenha ficado desatualizado — o
   // texto é só uma âncora de legibilidade, o id é a chave real.
   const shortId = reference.match(/-([a-f0-9]{8})$/i)?.[1];
-  const property = await prisma().property.findFirst({
-    where: {
-      companyId: site.companyId,
-      status: { in: ["available", "reserved"] },
-      publishedAt: { not: null },
-      OR: [
-        { code: reference },
-        ...(shortId ? [{ id: { startsWith: shortId } }] : []),
-      ],
-    },
-    select: publicPropertySelect,
-  });
+  const [property, watermark] = await Promise.all([
+    prisma().property.findFirst({
+      where: {
+        companyId: site.companyId,
+        status: { in: ["available", "reserved"] },
+        publishedAt: { not: null },
+        OR: [
+          { code: reference },
+          ...(shortId ? [{ id: { startsWith: shortId } }] : []),
+        ],
+      },
+      select: publicPropertySelect,
+    }),
+    resolveWatermarkOverlayForSite(site.companyId, site.settingsJson),
+  ]);
   if (!property) throw publicPropertyNotFound();
-  return serializePublicProperty(property, site);
+  return serializePublicProperty(property, site, watermark);
 }
 
 export async function createMysqlPublicLead(params: {
@@ -1097,24 +1108,84 @@ export function matchesPropertySlug(property: { id: string; code?: string | null
 // storagePath (ou gravada por um provider que não seja "cloudinary", ou sem
 // as credenciais do Cloudinary configuradas) cai no fallback seguro: a `url`
 // original, exatamente como já funcionava antes desta fase.
-function resolvePublicPhotoUrl(media: {
-  mediaType?: string | null;
-  url: string;
-  storageBucket?: string | null;
-  storagePath?: string | null;
-}) {
+// F3C (2026-09-04): entityType usado para o StoredFile do logo de marca
+// d'água da empresa. entityId é SEMPRE o companyId — nunca um id de site,
+// nunca qualquer identificador vindo do cliente. Por construção, resolver
+// "qual é o logo desta empresa" nunca precisa aceitar um id do cliente: é
+// 100% derivado do companyId já autenticado/resolvido no backend (ou, na
+// leitura pública, do companyId do próprio CompanySite publicado, que
+// também nunca vem do visitante). Isso elimina a superfície de IDOR em vez
+// de só validá-la. Ver purposes.ts ("company_logo") e routes/sites.ts
+// (upload/remoção do logo).
+export const WATERMARK_LOGO_ENTITY_TYPE = "company_watermark_logo";
+
+function clampWatermarkOpacity(value: unknown): number {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : 60;
+  return Math.min(100, Math.max(10, Math.round(numeric)));
+}
+
+function isWatermarkPosition(value: unknown): value is WatermarkPosition {
+  return typeof value === "string" && (WATERMARK_POSITIONS as readonly string[]).includes(value);
+}
+
+// F3C: lê a config de watermark de CompanySite.settingsJson.watermark (sem
+// migration nova — settingsJson já existia e já aceita chaves extras
+// validadas em routes/sites.ts) e resolve o StoredFile do logo ATUAL da
+// empresa. Retorna null sempre que a watermark não deve ser aplicada:
+// desabilitada, sem logo cadastrado, ou logo gravado por um provider que
+// não seja cloudinary (overlay só existe na variante Cloudinary) — nesses
+// casos o chamador cai no comportamento seguro já homologado da F3B (foto
+// otimizada sem watermark), nunca quebra a publicação.
+export async function resolveWatermarkOverlayForSite(
+  companyId: string,
+  settingsJson: unknown,
+): Promise<WatermarkOverlay | null> {
+  const settings = isRecord(settingsJson) ? settingsJson : {};
+  const watermark = isRecord(settings.watermark) ? settings.watermark : {};
+  if (watermark.enabled !== true) return null;
+
+  try {
+    const logo = await findStoredFileForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId);
+    if (!logo || logo.provider !== "cloudinary") return null;
+
+    return {
+      publicId: logo.publicId,
+      position: isWatermarkPosition(watermark.position) ? watermark.position : "bottom-right",
+      opacity: clampWatermarkOpacity(watermark.opacity),
+    };
+  } catch {
+    // Nunca deixar uma falha ao resolver o logo derrubar a publicação
+    // pública — cai no fallback seguro (galeria otimizada sem watermark).
+    return null;
+  }
+}
+
+function resolvePublicPhotoUrl(
+  media: {
+    mediaType?: string | null;
+    url: string;
+    storageBucket?: string | null;
+    storagePath?: string | null;
+  },
+  watermark?: WatermarkOverlay | null,
+) {
   if (media.mediaType !== "photo") return media.url;
   if (media.storageBucket !== "cloudinary" || !media.storagePath) return media.url;
   try {
     return getStorageProviderForName("cloudinary").getPublicUrl(media.storagePath, {
       variant: "gallery",
+      watermark: watermark ?? undefined,
     });
   } catch {
     return media.url;
   }
 }
 
-function serializePublicProperty(property: any, site: { settingsJson: unknown }) {
+function serializePublicProperty(
+  property: any,
+  site: { settingsJson: unknown },
+  watermark?: WatermarkOverlay | null,
+) {
   const settings = isRecord(site.settingsJson) ? site.settingsJson : {};
   const showFullAddress = settings.show_full_address === true;
   const showPrices = settings.show_prices !== false;
@@ -1158,7 +1229,7 @@ function serializePublicProperty(property: any, site: { settingsJson: unknown })
     responsible_user_name: property.responsibleUser?.name ?? null,
     property_media: (property.media ?? []).map((media: any) => ({
       media_type: media.mediaType,
-      url: resolvePublicPhotoUrl(media),
+      url: resolvePublicPhotoUrl(media, watermark),
       caption: media.caption,
       position: media.position,
       is_cover: media.isCover,

@@ -44,9 +44,33 @@ export type DeleteFileInput = {
   resourceType?: StorageResourceType;
 };
 
+// F3C (2026-09-04): marca d'água configurável por empresa, aplicada só na
+// entrega pública (nunca no original). `publicId` aqui SEMPRE vem de um
+// StoredFile resolvido no backend a partir do companyId autenticado — nunca
+// de um valor enviado pelo cliente (ver resolveWatermarkOverlayForSite em
+// mysql-real-estate.ts) — por isso não há necessidade de "validar" o
+// public_id aqui: ele já nasceu confiável.
+export const WATERMARK_POSITIONS = [
+  "bottom-right",
+  "bottom-left",
+  "top-right",
+  "top-left",
+  "center",
+] as const;
+export type WatermarkPosition = (typeof WATERMARK_POSITIONS)[number];
+
+export type WatermarkOverlay = {
+  publicId: string;
+  position: WatermarkPosition;
+  /** 1-100. */
+  opacity: number;
+};
+
 export type PublicUrlOptions = {
   resourceType?: StorageResourceType;
   variant?: "thumbnail" | "card" | "gallery" | "full";
+  /** Só tem efeito no provider Cloudinary (overlay via transformação). */
+  watermark?: WatermarkOverlay | null;
 };
 
 export interface StorageProvider {

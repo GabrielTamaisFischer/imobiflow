@@ -9,6 +9,28 @@ import { defaultSiteTemplateKey, type SiteTemplateKey } from "./site-templates";
 const previewSiteKey = "imobiflow.preview.company_site";
 const previewSiteLeadsKey = "imobiflow.preview.site_leads";
 const previewPropertiesKey = "imobiflow.preview.properties";
+const previewWatermarkLogoKey = "imobiflow.preview.watermark_logo";
+
+// F3C (2026-09-04): 5 posições do MVP (ver Diretriz Mestre 10.4 / escopo da
+// tarefa). Mantido em sincronia manual com WATERMARK_POSITIONS do backend
+// (platform/backend/src/services/storage/types.ts) — pacotes separados, sem
+// import cruzado entre front/back neste monorepo.
+export const WATERMARK_POSITIONS = ["bottom-right", "bottom-left", "top-right", "top-left", "center"] as const;
+export type WatermarkPosition = (typeof WATERMARK_POSITIONS)[number];
+
+export type WatermarkSettings = {
+  enabled: boolean;
+  position: WatermarkPosition;
+  /** 10-100. */
+  opacity: number;
+};
+
+export type WatermarkLogo = {
+  url: string;
+  original_filename: string;
+  provider: string;
+  uploaded_at: string;
+} | null;
 
 export type CompanySite = {
   id: string;
@@ -33,6 +55,7 @@ export type CompanySite = {
     featured_property_ids?: string[];
     favorite_template_keys?: SiteTemplateKey[];
     hero_image_url?: string;
+    watermark?: WatermarkSettings;
   };
   seo_json: Record<string, unknown>;
   published_at: string | null;
@@ -79,9 +102,49 @@ export type CompanySiteInput = {
 };
 
 export async function getSiteSettings() {
-  if (isPreviewSites()) return { site: readPreviewSite() };
+  if (isPreviewSites()) return { site: readPreviewSite(), watermark_logo: readPreviewWatermarkLogo() };
 
-  return apiRequest<{ site: CompanySite | null }>("/site/settings", {
+  return apiRequest<{ site: CompanySite | null; watermark_logo: WatermarkLogo }>("/site/settings", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+// F3C: upload/remoção do logo usado como marca d'água. Endpoint dedicado
+// (não é o mesmo campo de texto livre "Logo do site") porque a watermark
+// precisa de um asset real no Cloudinary da própria empresa (public_id
+// confiável para overlay no backend) — nunca uma URL externa arbitrária.
+export async function uploadWatermarkLogo(input: {
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  content_base64: string;
+}) {
+  if (isPreviewSites()) {
+    const logo: WatermarkLogo = {
+      url: input.content_base64,
+      original_filename: input.file_name,
+      provider: "preview",
+      uploaded_at: new Date().toISOString(),
+    };
+    writePreviewWatermarkLogo(logo);
+    return { watermark_logo: logo };
+  }
+
+  return apiRequest<{ watermark_logo: WatermarkLogo }>("/site/settings/watermark-logo", {
+    method: "POST",
+    body: JSON.stringify(input),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function removeWatermarkLogo() {
+  if (isPreviewSites()) {
+    writePreviewWatermarkLogo(null);
+    return { ok: true, watermark_logo: null as WatermarkLogo };
+  }
+
+  return apiRequest<{ ok: true; watermark_logo: null }>("/site/settings/watermark-logo", {
+    method: "DELETE",
     token: getStoredToken() ?? undefined,
   });
 }
@@ -299,6 +362,29 @@ function writePreviewSite(site: CompanySite) {
   safeSetPreviewItem(previewSiteKey, JSON.stringify(site));
 }
 
+function readPreviewWatermarkLogo(): WatermarkLogo {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return JSON.parse(window.localStorage.getItem(previewWatermarkLogoKey) ?? "null") as WatermarkLogo;
+  } catch {
+    return null;
+  }
+}
+
+function writePreviewWatermarkLogo(logo: WatermarkLogo) {
+  if (!logo) {
+    try {
+      window.localStorage.removeItem(previewWatermarkLogoKey);
+    } catch {
+      // localStorage indisponível (modo privado etc.) — nada a fazer, o
+      // estado em memória do formulário já reflete a remoção.
+    }
+    return;
+  }
+  safeSetPreviewItem(previewWatermarkLogoKey, JSON.stringify(logo));
+}
+
 function upsertPreviewSite(input: CompanySiteInput) {
   const now = new Date().toISOString();
   const current = readPreviewSite();
@@ -325,6 +411,8 @@ function upsertPreviewSite(input: CompanySiteInput) {
       template_key: input.settings_json?.template_key ?? current?.settings_json?.template_key ?? defaultSiteTemplateKey,
       featured_property_ids: input.settings_json?.featured_property_ids ?? current?.settings_json?.featured_property_ids ?? [],
       favorite_template_keys: input.settings_json?.favorite_template_keys ?? current?.settings_json?.favorite_template_keys ?? [],
+      watermark: input.settings_json?.watermark ??
+        current?.settings_json?.watermark ?? { enabled: false, position: "bottom-right", opacity: 60 },
     },
     seo_json: input.seo_json ?? current?.seo_json ?? {},
     published_at: current?.published_at ?? null,

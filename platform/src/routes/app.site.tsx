@@ -25,10 +25,15 @@ import {
   getSiteSettings,
   listSiteLeads,
   publishSite,
+  removeWatermarkLogo,
   saveSiteSettings,
   unpublishSite,
+  uploadWatermarkLogo,
+  WATERMARK_POSITIONS,
   type CompanySite,
   type SiteLead,
+  type WatermarkLogo,
+  type WatermarkPosition,
 } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
 import { BUILDER_VISUAL_PREVIEW_SANDBOX } from "@/product/website-preview-security";
@@ -68,6 +73,8 @@ function SitePage() {
   const [leads, setLeads] = useState<SiteLead[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [watermarkLogo, setWatermarkLogo] = useState<WatermarkLogo>(null);
+  const [isUploadingWatermarkLogo, setIsUploadingWatermarkLogo] = useState(false);
   const [form, setForm] = useState({
     slug: "",
     brand_name: "",
@@ -83,6 +90,9 @@ function SitePage() {
     show_prices: true,
     allow_lead_capture: true,
     auto_publish_properties: true,
+    watermark_enabled: false,
+    watermark_position: "bottom-right" as WatermarkPosition,
+    watermark_opacity: 60,
   });
 
   async function refresh() {
@@ -96,6 +106,7 @@ function SitePage() {
       setSite(siteResponse.site);
       setProperties(propertyResponse.properties);
       setLeads(leadsResponse.leads);
+      setWatermarkLogo(siteResponse.watermark_logo ?? null);
       try {
         const builderResponse = await listWebsiteBuilderWebsites();
         setBuilderSites(builderResponse.websites);
@@ -119,6 +130,9 @@ function SitePage() {
           show_prices: siteResponse.site.settings_json?.show_prices !== false,
           allow_lead_capture: siteResponse.site.settings_json?.allow_lead_capture !== false,
           auto_publish_properties: siteResponse.site.settings_json?.auto_publish_properties !== false,
+          watermark_enabled: Boolean(siteResponse.site.settings_json?.watermark?.enabled),
+          watermark_position: siteResponse.site.settings_json?.watermark?.position ?? "bottom-right",
+          watermark_opacity: siteResponse.site.settings_json?.watermark?.opacity ?? 60,
         });
         setFavoriteTemplateKeys(siteResponse.site.settings_json?.favorite_template_keys ?? []);
       } else if (session?.access.company?.name) {
@@ -197,6 +211,7 @@ function SitePage() {
         auto_publish_properties: nextForm.auto_publish_properties,
         template_key: nextForm.template_key,
         favorite_template_keys: nextFavoriteTemplateKeys,
+        watermark: buildWatermarkSettingsPayload(nextForm),
       },
     };
   }
@@ -220,6 +235,50 @@ function SitePage() {
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await saveCurrentSite();
+  }
+
+  const WATERMARK_LOGO_MAX_BYTES = 4 * 1024 * 1024;
+
+  // F3C: upload real do logo usado como marca d'água. Não reaproveita o
+  // campo de texto "Logo do site" (aquele aceita qualquer URL/caminho
+  // relativo) — a watermark precisa de um arquivo de verdade enviado ao
+  // Cloudinary da própria empresa, para o backend poder aplicar o overlay
+  // com segurança (nunca aceita URL/id vindo do formulário).
+  async function handleWatermarkLogoUpload(file: File) {
+    setError(null);
+    if (file.size > WATERMARK_LOGO_MAX_BYTES) {
+      setError("Logo muito grande para a marca d'água (limite de 4MB). Use uma imagem menor.");
+      return;
+    }
+
+    setIsUploadingWatermarkLogo(true);
+    try {
+      const content = await readFileAsDataUrl(file);
+      const response = await uploadWatermarkLogo({
+        file_name: file.name,
+        mime_type: file.type,
+        size_bytes: file.size,
+        content_base64: content,
+      });
+      setWatermarkLogo(response.watermark_logo);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Não foi possível enviar o logo da marca d'água.");
+    } finally {
+      setIsUploadingWatermarkLogo(false);
+    }
+  }
+
+  async function handleRemoveWatermarkLogo() {
+    setError(null);
+    setIsUploadingWatermarkLogo(true);
+    try {
+      await removeWatermarkLogo();
+      setWatermarkLogo(null);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Não foi possível remover o logo da marca d'água.");
+    } finally {
+      setIsUploadingWatermarkLogo(false);
+    }
   }
 
   async function toggleSitePublication() {
@@ -669,6 +728,108 @@ function SitePage() {
           <p className="md:col-span-2 text-xs text-muted-foreground">
             Imóveis só aparecem no site depois de publicados explicitamente (botão “Salvar e publicar” no cadastro, ou “Publicar no site” na edição do imóvel).
           </p>
+          <div className="rounded-lg border border-border bg-background p-4 md:col-span-2">
+            <p className="text-sm font-semibold">Marca d'água nas fotos públicas</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Aplica o logo da imobiliária sobre as fotos exibidas no site público. O arquivo original enviado no
+              cadastro do imóvel nunca é alterado — a marca d'água aparece só na versão publicada.
+            </p>
+
+            <label className="mt-3 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.watermark_enabled}
+                onChange={(event) => setForm({ ...form, watermark_enabled: event.target.checked })}
+              />
+              Ativar marca d'água
+            </label>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-sm">
+                <span className="mb-1 block font-medium">Posição</span>
+                <select
+                  className="h-10 w-full rounded-md border border-input bg-background px-3"
+                  value={form.watermark_position}
+                  onChange={(event) => setForm({ ...form, watermark_position: event.target.value as WatermarkPosition })}
+                  disabled={!form.watermark_enabled}
+                >
+                  {WATERMARK_POSITIONS.map((position) => (
+                    <option key={position} value={position}>
+                      {watermarkPositionLabel(position)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block font-medium">Opacidade ({form.watermark_opacity}%)</span>
+                <input
+                  className="h-10 w-full"
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={5}
+                  value={form.watermark_opacity}
+                  onChange={(event) => setForm({ ...form, watermark_opacity: Number(event.target.value) })}
+                  disabled={!form.watermark_enabled}
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              {watermarkLogo ? (
+                <img src={watermarkLogo.url} alt="Logo usado na marca d'água" className="h-12 w-auto max-w-[160px] rounded border border-border bg-white object-contain p-1" />
+              ) : (
+                <span className="rounded border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                  Nenhuma logo cadastrada para a marca d'água ainda.
+                </span>
+              )}
+              <label>
+                <span className="sr-only">Enviar logo da marca d'água</span>
+                <input
+                  className="hidden"
+                  id="watermark-logo-input"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/avif"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void handleWatermarkLogoUpload(file);
+                  }}
+                />
+                <Button type="button" variant="outline" size="sm" disabled={isUploadingWatermarkLogo} asChild>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => document.getElementById("watermark-logo-input")?.click()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") document.getElementById("watermark-logo-input")?.click();
+                    }}
+                  >
+                    {isUploadingWatermarkLogo ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}
+                    {watermarkLogo ? "Trocar logo" : "Enviar logo"}
+                  </span>
+                </Button>
+              </label>
+              {watermarkLogo ? (
+                <Button type="button" variant="ghost" size="sm" onClick={() => void handleRemoveWatermarkLogo()} disabled={isUploadingWatermarkLogo}>
+                  <Trash2 className="size-4" />
+                  Remover logo
+                </Button>
+              ) : null}
+            </div>
+
+            {shouldWarnMissingWatermarkLogo(form.watermark_enabled, watermarkLogo) ? (
+              <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                A marca d'água está ativada, mas ainda não há logo cadastrada — enquanto isso, as fotos públicas continuam
+                sendo exibidas normalmente (sem marca d'água) até que uma logo seja enviada.
+              </p>
+            ) : null}
+
+            <p className="mt-3 text-xs text-muted-foreground">
+              A configuração de posição/opacidade só é salva ao clicar em “Salvar site”. O envio/remoção da logo é imediato.
+            </p>
+          </div>
+
           <div className="md:col-span-2">
             <Button type="submit" disabled={isBusy}>
               {isBusy ? <Loader2 className="size-4 animate-spin" /> : <Globe2 className="size-4" />}
@@ -1245,4 +1406,51 @@ function slugify(value: string) {
 function uniqueBuilderSlug(value: string) {
   const base = slugify(value) || "site";
   return `${base}-${Date.now().toString(36)}`;
+}
+
+// F3C: leitura simples do arquivo do logo como data URL (base64), sem
+// nenhuma recompressão — o logo é pequeno (limite de 4MB) e precisa manter
+// qualidade máxima, já que vira overlay sobre as fotos publicadas.
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Não foi possível ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function watermarkPositionLabel(position: WatermarkPosition) {
+  const labels: Record<WatermarkPosition, string> = {
+    "bottom-right": "Canto inferior direito",
+    "bottom-left": "Canto inferior esquerdo",
+    "top-right": "Canto superior direito",
+    "top-left": "Canto superior esquerdo",
+    center: "Centro",
+  };
+  return labels[position];
+}
+
+// F3C: extraído como função pura (usada por buildSiteInput e testável sem
+// renderizar o componente — este projeto não usa DOM/jsdom nos testes de
+// unidade, só vitest com environment "node") — mesmo shape que o backend
+// espera em settings_json.watermark (routes/sites.ts, watermarkSettingsSchema).
+export function buildWatermarkSettingsPayload(form: {
+  watermark_enabled: boolean;
+  watermark_position: WatermarkPosition;
+  watermark_opacity: number;
+}) {
+  return {
+    enabled: form.watermark_enabled,
+    position: form.watermark_position,
+    opacity: form.watermark_opacity,
+  };
+}
+
+// F3C: quando a watermark está ligada mas ainda não há logo cadastrada, a UI
+// avisa em vez de deixar a pessoa achar que já está funcionando — mesmo
+// comportamento que o backend adota na publicação pública (serve a foto
+// otimizada sem overlay, nunca quebra o site).
+export function shouldWarnMissingWatermarkLogo(watermarkEnabled: boolean, logo: WatermarkLogo) {
+  return watermarkEnabled && !logo;
 }
