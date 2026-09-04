@@ -2221,8 +2221,13 @@ function PropertyMediaManager({
   async function removeMedia(mediaId: string) {
     setError(null);
     try {
-      await deletePropertyMedia(property.id, mediaId);
-      onMediaChanged(media.filter((item) => item.id !== mediaId).map((item, index) => ({ ...item, position: index })));
+      // Fase 3D: usa a lista devolvida pelo backend (já com a nova capa
+      // auto-promovida, se a mídia excluída era a capa) em vez de só
+      // filtrar em memória — o filtro local antigo não sabia recalcular
+      // is_cover, deixando o imóvel aparentando "sem capa" na tela até um
+      // reload manual mesmo quando o backend já tinha promovido outra foto.
+      const result = await deletePropertyMedia(property.id, mediaId);
+      onMediaChanged(result.media ?? media.filter((item) => item.id !== mediaId).map((item, index) => ({ ...item, position: index })));
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Não foi possível excluir a mídia.");
     }

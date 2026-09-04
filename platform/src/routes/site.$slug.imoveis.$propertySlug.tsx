@@ -45,12 +45,13 @@ import {
   operationLabel,
   propertyTypeLabel,
 } from "@/product/public-site-helpers";
+import { resolveSafeEmbed } from "@/lib/embed-providers";
 
 export const Route = createFileRoute("/site/$slug/imoveis/$propertySlug")({
   component: PublicPropertyPage,
 });
 
-type PropertyMedia = {
+export type PropertyMedia = {
   id?: string;
   media_type?: string | null;
   url?: string | null;
@@ -468,30 +469,63 @@ function MediaSection({ videos, tours }: { videos: PropertyMedia[]; tours: Prope
   );
 }
 
-function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: LucideIcon; label: string }) {
-  if (!media.url) return null;
+// Fase 3D: função central e pura que decide como uma mídia deve ser
+// renderizada — extraída para fora do componente especificamente para ser
+// testável sem precisar renderizar React (convenção do projeto: testes de
+// função pura, sem @testing-library/jsdom). Único ponto de decisão
+// "panorama próprio vs. arquivo de vídeo próprio vs. iframe de provider
+// externo vs. fallback seguro" — nada disso é decidido em nenhum outro
+// lugar do arquivo.
+export type MediaFrameKind =
+  | { kind: "panorama-photo" }
+  | { kind: "video-file" }
+  | { kind: "iframe"; embedUrl: string; provider: string }
+  | { kind: "fallback" };
+
+export function classifyMediaFrame(media: PropertyMedia): MediaFrameKind {
+  const url = media.url ?? "";
   // Um "tour" cujo arquivo é de fato uma IMAGEM (upload real via
   // LocalStorageProvider/Cloudinary/R2) é uma foto panorâmica
   // (equirretangular) enviada pelo próprio usuário — precisa do
   // visualizador interativo real, não um iframe/link estático. Checado
-  // ANTES de isEmbeddableUrl de propósito: isEmbeddableUrl casa por
-  // substring solta ("360", "panorama") pensada para links de provedores
-  // externos (Matterport/Kuula), e um arquivo hospedado por nós pode ter
-  // um nome de arquivo com essas mesmas palavras (ex.: "foto-panorama.jpg")
-  // sem ser um link externo — nesse caso a foto própria sempre vence.
-  const isOwnPanoramaPhoto = isTourMedia(media) && isLikelyImageUrl(media.url);
+  // ANTES do allowlist de embed de propósito: um arquivo hospedado por nós
+  // pode ter um nome de arquivo com palavras como "panorama"/"360"
+  // (ex.: "foto-panorama.jpg") sem ser um link externo — nesse caso a
+  // foto própria sempre vence.
+  if (isTourMedia(media) && isLikelyImageUrl(url)) return { kind: "panorama-photo" };
+
+  // Fase 3D — SEGURANÇA DE EMBEDS: uma URL só vira `<iframe src>` quando
+  // `resolveSafeEmbed` (allowlist explícita de protocolo+hostname+formato,
+  // ver src/lib/embed-providers.ts) a reconhece como um provider
+  // realmente suportado. Qualquer outra URL (fora do allowlist, malformada,
+  // http inseguro, javascript:/data:/file:, subdomínio falso, ou contendo
+  // "matterport"/"kuula"/"360"/"panorama" só na querystring/path sem ser
+  // um dos hosts reais) cai no fallback seguro — nunca em iframe.
+  const safeEmbed = resolveSafeEmbed(url);
+
   // Achado real em QA de video (2026-08-30): um arquivo de video PRÓPRIO
   // (upload real via LocalStorageProvider/Cloudinary/R2, ou um link direto
-  // para um .mp4/.webm) caía no ramo genérico de iframe abaixo — pensado
-  // para players de terceiros (YouTube/Vimeo, que têm sua própria UI
-  // dentro do iframe). Um arquivo de vídeo cru dentro de um <iframe> não
-  // mostra nenhum controle visível (confirmado via screenshot real: caixa
-  // preta vazia, sem play, sem barra de progresso) — o elemento HTML
-  // correto para isso é <video controls>, nunca um iframe. YouTube/Vimeo
-  // continuam pelo caminho de iframe (têm sua própria UI); só o arquivo de
-  // vídeo cru precisa do player nativo.
-  const isDirectVideoFile = isVideoMedia(media) && !/(youtube\.com|youtu\.be|vimeo\.com)/i.test(media.url);
-  const canEmbed = !isOwnPanoramaPhoto && !isDirectVideoFile && isEmbeddableUrl(media.url);
+  // para um .mp4/.webm) caía no ramo genérico de iframe — pensado para
+  // players de terceiros (YouTube/Vimeo, que têm sua própria UI dentro do
+  // iframe). Um arquivo de vídeo cru dentro de um <iframe> não mostra
+  // nenhum controle visível (confirmado via screenshot real: caixa preta
+  // vazia, sem play, sem barra de progresso) — o elemento HTML correto
+  // para isso é <video controls>, nunca um iframe. Fase 3D: a decisão
+  // "isto é um arquivo de vídeo cru vs. um link de provedor externo" usa a
+  // mesma allowlist central de hostname (`resolveSafeEmbed`) em vez de
+  // substring solta — evita que uma URL maliciosa como
+  // "https://evil.com/?youtube.com=1" seja tratada como vídeo cru (o que a
+  // levaria ao <video src> em vez do fallback seguro).
+  if (isVideoMedia(media) && !safeEmbed) return { kind: "video-file" };
+
+  if (safeEmbed) return { kind: "iframe", embedUrl: safeEmbed.embedUrl, provider: safeEmbed.provider };
+
+  return { kind: "fallback" };
+}
+
+function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: LucideIcon; label: string }) {
+  if (!media.url) return null;
+  const frame = classifyMediaFrame(media);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/24">
@@ -504,13 +538,30 @@ function MediaFrame({ media, icon: Icon, label }: { media: PropertyMedia; icon: 
           Abrir
         </a>
       </div>
-      {isOwnPanoramaPhoto ? (
+      {frame.kind === "panorama-photo" ? (
         <PanoramaViewer url={media.url} caption={media.caption} />
-      ) : isDirectVideoFile ? (
+      ) : frame.kind === "video-file" ? (
         // eslint-disable-next-line jsx-a11y/media-has-caption -- legenda em portugues indisponivel nesta fase
         <video src={media.url} controls preload="metadata" className="h-72 w-full bg-black" />
-      ) : canEmbed ? (
-        <iframe src={toEmbedUrl(media.url)} title={media.caption || label} className="h-72 w-full" allow="autoplay; fullscreen; picture-in-picture; xr-spatial-tracking" allowFullScreen />
+      ) : frame.kind === "iframe" ? (
+        // Fase 3D: `sandbox` NÃO é aplicado aqui de propósito — o projeto
+        // já tem um padrão de sandbox restritivo (BUILDER_VISUAL_PREVIEW_SANDBOX
+        // etc.), mas ele foi desenhado para o preview do site builder
+        // (conteúdo `srcdoc` próprio, contexto de segurança diferente); um
+        // sandbox mal calibrado para players de terceiros (YouTube/Vimeo)
+        // arrisca quebrar a reprodução homologada (regressão explicitamente
+        // proibida nesta tarefa) sem homologação em staging disponível
+        // para validar visualmente. `referrerPolicy` é adicionado por ser
+        // estritamente aditivo em segurança (reduz vazamento do Referer)
+        // e não tem risco conhecido de quebrar YouTube/Vimeo.
+        <iframe
+          src={frame.embedUrl}
+          title={media.caption || label}
+          className="h-72 w-full"
+          referrerPolicy="strict-origin-when-cross-origin"
+          allow="autoplay; fullscreen; picture-in-picture; xr-spatial-tracking"
+          allowFullScreen
+        />
       ) : (
         <a href={media.url} target="_blank" rel="noreferrer" className="grid h-72 place-items-center bg-[radial-gradient(circle_at_50%_30%,rgba(200,162,75,0.22),transparent_42%),#090909] text-center">
           <span className="inline-flex flex-col items-center gap-3">
@@ -796,7 +847,7 @@ function Badge({ children }: { children: ReactNode }) {
   return <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-sm text-white/72 backdrop-blur-xl">{children}</span>;
 }
 
-function sortMedia(media: PropertyMedia[]) {
+export function sortMedia(media: PropertyMedia[]) {
   return [...media].filter((item) => Boolean(item.url)).sort((a, b) => Number(b.is_cover) - Number(a.is_cover) || Number(a.position ?? 0) - Number(b.position ?? 0));
 }
 
@@ -807,43 +858,38 @@ function getPhotoMedia(property: ExtendedProperty | null, media: PropertyMedia[]
   return (property ? getPropertyImages(property).map((url, index) => ({ id: `image-${index}`, url, media_type: "photo", position: index })) : []).filter((item) => item.url);
 }
 
-function isPhotoMedia(media: PropertyMedia) {
+export function isPhotoMedia(media: PropertyMedia) {
   const type = String(media.media_type ?? "").toLowerCase();
   const url = String(media.url ?? "").toLowerCase();
   return type === "photo" || type === "image" || /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/.test(url);
 }
 
-function isVideoMedia(media: PropertyMedia) {
+// Fase 3D: removida a correspondência de substring solta para provedor de
+// vídeo (`url.includes("youtube.com")` etc.) — a classificação "isto é um
+// vídeo externo de provider reconhecido" agora usa a mesma allowlist
+// central (`resolveSafeEmbed`) usada para decidir se algo vira iframe,
+// eliminando uma segunda fonte de verdade que podia divergir da allowlist
+// real (ex.: uma URL "https://evil.com/youtube.com" batia no substring
+// antigo mas nunca seria um embed seguro de fato).
+export function isVideoMedia(media: PropertyMedia) {
   const type = String(media.media_type ?? "").toLowerCase();
-  const url = String(media.url ?? "").toLowerCase();
-  return type === "video" || /\.(mp4|webm|mov)(\?|#|$)/.test(url) || url.includes("youtube.com") || url.includes("youtu.be") || url.includes("vimeo.com");
+  const url = String(media.url ?? "");
+  if (type === "video") return true;
+  if (/\.(mp4|webm|mov)(\?|#|$)/i.test(url)) return true;
+  const embed = resolveSafeEmbed(url);
+  return embed?.provider === "youtube" || embed?.provider === "vimeo";
 }
 
-function isTourMedia(media: PropertyMedia) {
+// Fase 3D: removida a correspondência de substring solta em cima da URL
+// ("matterport"/"kuula"/"360"/"panorama" em qualquer parte da URL). Um
+// "tour" agora só é reconhecido pelo `media_type` gravado no upload real
+// (`PropertyMedia`, controlado pelo backend/enum — nunca por texto livre
+// do usuário). "360"/"panorama" como valor de `media_type` são mantidos
+// por compatibilidade com dados legados; o schema atual de upload só usa
+// "tour", mas o backend nunca aceitou esses dois como conteúdo de URL.
+export function isTourMedia(media: PropertyMedia) {
   const type = String(media.media_type ?? "").toLowerCase();
-  const url = String(media.url ?? "").toLowerCase();
-  return type === "tour" || type === "360" || type === "panorama" || url.includes("matterport") || url.includes("kuula") || url.includes("360") || url.includes("panorama");
-}
-
-function isEmbeddableUrl(url: string) {
-  const lower = url.toLowerCase();
-  return lower.includes("youtube.com") || lower.includes("youtu.be") || lower.includes("vimeo.com") || lower.includes("matterport") || lower.includes("kuula") || lower.includes("360") || lower.includes("panorama") || /\.(mp4|webm)(\?|#|$)/.test(lower);
-}
-
-function toEmbedUrl(url: string) {
-  if (url.includes("youtu.be/")) {
-    const id = url.split("youtu.be/")[1]?.split(/[?#]/)[0];
-    return id ? `https://www.youtube.com/embed/${id}` : url;
-  }
-  if (url.includes("youtube.com/watch")) {
-    const id = new URL(url).searchParams.get("v");
-    return id ? `https://www.youtube.com/embed/${id}` : url;
-  }
-  if (url.includes("vimeo.com/") && !url.includes("player.vimeo.com")) {
-    const id = url.split("vimeo.com/")[1]?.split(/[?#/]/)[0];
-    return id ? `https://player.vimeo.com/video/${id}` : url;
-  }
-  return url;
+  return type === "tour" || type === "360" || type === "panorama";
 }
 
 function buildMapQuery(property: ExtendedProperty, showFullAddress: boolean) {

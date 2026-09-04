@@ -504,14 +504,17 @@ realEstateRouter.delete("/properties/:id/media/:mediaId", requirePermission("pro
     const mediaId = String(req.params.mediaId);
     await assertPropertyAccess(req.access!, propertyId, "properties.manage", "EDIT");
     const storedFile = await deleteRemoteFileForEntity(companyId, "property_media", mediaId);
-    await deleteMysqlPropertyMedia(companyId, propertyId, mediaId);
+    const media = await deleteMysqlPropertyMedia(companyId, propertyId, mediaId);
     await deleteStoredFileRecordsForEntity(companyId, "property_media", mediaId);
     await auditPropertyMediaStorageAction(req, "asset_deleted", mediaId, propertyId, "Midia removida do imovel", {
       provider: storedFile?.provider ?? null,
       publicId: storedFile?.publicId ?? null,
       resourceType: storedFile?.resourceType ?? null,
     });
-    res.json({ ok: true, media_id: mediaId });
+    // Fase 3D: a lista atualizada (já com a nova capa auto-promovida, se
+    // a mídia excluída era a capa) volta na resposta para o frontend
+    // sincronizar o estado local sem precisar de um reload manual.
+    res.json({ ok: true, media_id: mediaId, media });
   } catch (error) {
     next(error);
   }

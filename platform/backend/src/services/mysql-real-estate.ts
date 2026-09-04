@@ -641,10 +641,69 @@ export async function reorderMysqlPropertyMedia(
   return listMysqlPropertyMedia(companyId, propertyId);
 }
 
+// Fase 3D — AUTO-PROMOÇÃO DE CAPA: antes desta correção, excluir a mídia
+// marcada como capa podia deixar o imóvel sem nenhuma capa mesmo havendo
+// outras fotos disponíveis. Regra escolhida (determinística, documentada
+// na tarefa F3D):
+//   1. Só promove uma nova capa quando a mídia excluída ERA a capa E era
+//      do tipo "photo" (panorama/vídeo/tour nunca viram capa de foto,
+//      mesmo que por algum motivo estivessem marcados como isCover).
+//   2. Candidata: a FOTO restante (mediaType "photo") com a menor
+//      `position`; empate quebrado por `createdAt` ascendente — a MESMA
+//      ordenação canônica já usada em `listMysqlPropertyMedia` e no
+//      `propertyInclude.media` (orderBy position asc, createdAt asc), só
+//      que agora limitada a mediaType "photo" (a listagem geral inclui
+//      todos os tipos; a promoção de capa não pode considerar vídeo/tour).
+//   3. Escopo SEMPRE companyId+propertyId (nunca uma busca sem tenant
+//      scoping) — a candidata de outro imóvel/empresa nunca é considerada.
+//   4. Se não houver outra foto, o imóvel fica sem capa (comportamento
+//      explícito, não é um bug).
+// Consistência: DELETE da mídia + promoção da nova capa rodam dentro de UM
+// ÚNICO `$transaction` interativo do Prisma (mesmo padrão já usado em
+// `revokeMysqlPropertyAccess`), evitando o estado intermediário
+// "excluiu a capa, mas ainda não promoveu a próxima" ficar visível para
+// outra requisição concorrente.
+// ORDEM remoto-vs-DB preservada sem alteração silenciosa: a F3A registrou
+// que o delete no storage remoto (Cloudinary/R2) acontece ANTES do delete
+// no banco (ver rota DELETE /properties/:id/media/:mediaId em
+// backend/src/routes/real-estate.ts — `deleteRemoteFileForEntity` roda
+// antes de chamar esta função). Essa ordem NÃO foi alterada aqui; a
+// atomicidade adicionada nesta fase é só entre "excluir a linha do banco"
+// e "promover a próxima capa", que são as duas operações de banco desta
+// função. Risco residual documentado: se o processo cair exatamente entre
+// o delete remoto e a chamada a esta função, o arquivo remoto já terá sido
+// removido mas a linha do banco (e uma eventual capa antiga apontando para
+// ele) ainda existiria — esse risco já existia antes da F3D e não é criado
+// nem agravado por esta mudança.
 export async function deleteMysqlPropertyMedia(companyId: string, propertyId: string, mediaId: string) {
   await ensurePropertyBelongsToCompany(propertyId, companyId);
-  await prisma().propertyMedia.deleteMany({ where: { id: mediaId, companyId, propertyId } });
+  await prisma().$transaction(async (tx) => {
+    const target = await tx.propertyMedia.findFirst({
+      where: { id: mediaId, companyId, propertyId },
+      select: { id: true, isCover: true, mediaType: true },
+    });
+    if (!target) return;
+
+    await tx.propertyMedia.deleteMany({ where: { id: mediaId, companyId, propertyId } });
+
+    if (!target.isCover || target.mediaType !== "photo") return;
+
+    const nextCover = await tx.propertyMedia.findFirst({
+      where: { companyId, propertyId, mediaType: "photo" },
+      orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+    });
+    if (nextCover) {
+      await tx.propertyMedia.update({ where: { id: nextCover.id }, data: { isCover: true } });
+    }
+  });
   await syncMysqlPropertyPublication(companyId, propertyId);
+  // Devolve a lista atualizada (já refletindo a capa auto-promovida, se
+  // houve) para a rota poder repassar ao frontend — sem isso o estado
+  // local do formulário (que antes só filtrava o item excluído em
+  // memória, sem saber da nova capa) ficaria dessincronizado até um reload
+  // manual da página.
+  return listMysqlPropertyMedia(companyId, propertyId);
 }
 
 export async function syncMysqlPropertyPublication(

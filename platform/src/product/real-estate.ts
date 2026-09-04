@@ -480,17 +480,27 @@ export async function uploadPropertyMedia(
 export async function deletePropertyMedia(propertyId: string, mediaId: string) {
   if (isPreviewRealEstate()) {
     const properties = readPreviewProperties();
+    const property = properties.find((item) => item.id === propertyId);
+    const deleted = property?.property_media?.find((item) => item.id === mediaId);
+    const remaining = (property?.property_media ?? []).filter((item) => item.id !== mediaId);
+    // Fase 3D (modo preview/demo): reproduz a mesma regra do backend real
+    // — se a mídia excluída era a capa, promove a FOTO restante de menor
+    // position (empate por created_at) como nova capa; panorama/vídeo
+    // nunca viram capa; sem outra foto, fica sem capa.
+    let promotedMedia = remaining;
+    if (deleted?.is_cover && deleted.media_type === "photo" && !remaining.some((item) => item.is_cover)) {
+      const nextCover = [...remaining]
+        .filter((item) => item.media_type === "photo")
+        .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at))[0];
+      promotedMedia = remaining.map((item) => (nextCover && item.id === nextCover.id ? { ...item, is_cover: true } : item));
+    }
     writePreviewProperties(
-      properties.map((property) =>
-        property.id === propertyId
-          ? { ...property, property_media: property.property_media?.filter((media) => media.id !== mediaId) ?? [] }
-          : property,
-      ),
+      properties.map((item) => (item.id === propertyId ? { ...item, property_media: promotedMedia } : item)),
     );
-    return { ok: true, media_id: mediaId };
+    return { ok: true, media_id: mediaId, media: promotedMedia };
   }
 
-  return apiRequest<{ ok: boolean; media_id: string }>(`/real-estate/properties/${propertyId}/media/${mediaId}`, {
+  return apiRequest<{ ok: boolean; media_id: string; media: PropertyMedia[] }>(`/real-estate/properties/${propertyId}/media/${mediaId}`, {
     method: "DELETE",
     token: getStoredToken() ?? undefined,
   });
