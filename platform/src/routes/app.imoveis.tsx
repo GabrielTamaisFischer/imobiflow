@@ -2328,7 +2328,7 @@ function PropertyMediaUpload({
       const response = await uploadPropertyMedia(property.id, {
         file_name: file.name,
         mime_type: file.type,
-        size_bytes: file.size,
+        size_bytes: dataUrlByteLength(content),
         content_base64: content,
         media_type: file.type.startsWith("video/") ? "video" : "photo",
         is_cover: isFirstMedia,
@@ -2393,7 +2393,7 @@ async function uploadSelectedPropertyMedia(
     const response = await uploadPropertyMedia(propertyId, {
       file_name: job.file.name,
       mime_type: job.file.type,
-      size_bytes: job.file.size,
+      size_bytes: dataUrlByteLength(content),
       content_base64: content,
       media_type: job.media_type,
       position: job.position,
@@ -2918,12 +2918,33 @@ function formatMoneyInput(value: number | null) {
   return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
 }
 
-function readFileAsDataUrl(file: File) {
+// F3B (2026-09-03): antes, TODA foto era recomprimida no cliente (canvas,
+// máx. 1400px, JPEG 76%) mesmo quando o arquivo original já cabia com folga
+// no limite aceito pelo backend — o original de verdade nunca chegava a ser
+// enviado, nem para o Cloudinary nem para o corretor que reabrisse o imóvel
+// depois. O backend já valida e aceita fotos de até 8MB por arquivo
+// (property_image em file-policy.ts) e o corpo JSON aceita até 15MB
+// (app.ts) — 8MB em base64 (~10.9MB) cabe com folga. Então, a partir de
+// agora, um arquivo que já está dentro desse limite é enviado como está,
+// sem recodificar (preserva resolução, formato e qualidade reais). Só
+// recomprime — e só o suficiente pra caber — quando o arquivo excede o
+// limite aceito pelo backend, evitando um 413 sem motivo (a otimização de
+// entrega para o site público já é feita pelo Cloudinary via transformação,
+// ver resolvePublicPhotoUrl no backend — não há necessidade de destruir o
+// original aqui para isso).
+export const PROPERTY_IMAGE_MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+
+export function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = String(reader.result);
       if (!file.type.startsWith("image/")) {
+        resolve(result);
+        return;
+      }
+
+      if (file.size <= PROPERTY_IMAGE_MAX_UPLOAD_BYTES) {
         resolve(result);
         return;
       }
@@ -2935,7 +2956,21 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
-function optimizeImageDataUrl(dataUrl: string, maxSide = 1400, quality = 0.76) {
+// F3B (2026-09-03): `size_bytes` é o `declaredSizeBytes` que o backend usa
+// em file-policy.ts (validateUploadFile) para decidir o 413 — precisa
+// refletir o conteúdo realmente enviado (`content_base64`), não o arquivo
+// original em disco. Antes, o valor enviado era sempre `file.size` (o
+// arquivo original, não recomprimido), então qualquer original acima do
+// limite do backend (8MB) já falhava com 413 mesmo depois da recompressão
+// no cliente reduzir o corpo de fato enviado para poucos KB/MB — a
+// recompressão existia mas não evitava o erro que deveria evitar.
+export function dataUrlByteLength(dataUrl: string) {
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+export function optimizeImageDataUrl(dataUrl: string, maxSide = 2200, quality = 0.88) {
   return new Promise<string>((resolve) => {
     const image = new Image();
     image.onload = () => {

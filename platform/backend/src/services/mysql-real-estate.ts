@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ingestLead } from "./lead-intake.js";
 import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
+import { getStorageProviderForName } from "./storage/index.js";
 
 type PropertyInput = Record<string, any>;
 
@@ -67,6 +68,13 @@ const publicPropertySelect = {
       caption: true,
       position: true,
       isCover: true,
+      // F3B (2026-09-03): necessários apenas para derivar, em memória, a URL
+      // de entrega já otimizada (f_auto/q_auto via Cloudinary) na serialização
+      // pública (ver resolvePublicPhotoUrl). Nenhum dado novo é exposto: o
+      // public_id/provider já compõem a própria `url` original, que sempre
+      // foi pública; nunca vazam nome de arquivo interno nem metadata privada.
+      storageBucket: true,
+      storagePath: true,
     },
   },
 } satisfies Prisma.PropertySelect;
@@ -1076,6 +1084,36 @@ export function matchesPropertySlug(property: { id: string; code?: string | null
   );
 }
 
+// F3B (2026-09-03): publicação otimizada sem migration nova. `storageBucket`/
+// `storagePath` já eram persistidos em toda foto desde sempre (real-estate.ts,
+// POST /properties/:id/media) — guardam, respectivamente, o provider
+// ("cloudinary"/"cloudflare_r2"/"local") e o public_id do asset. Como o
+// CloudinaryStorageProvider.getPublicUrl já sabe gerar uma URL transformada
+// (f_auto/q_auto, redimensionada sem distorcer proporção — crop:"limit") a
+// partir só do public_id, o site público pode consumir a variante "gallery"
+// sem precisar guardar uma segunda URL no banco nem duplicar o arquivo no
+// Cloudinary. Só se aplica a fotos (mediaType "photo"); vídeo/tour/planta
+// continuam servidos como estão. Qualquer mídia antiga sem storageBucket/
+// storagePath (ou gravada por um provider que não seja "cloudinary", ou sem
+// as credenciais do Cloudinary configuradas) cai no fallback seguro: a `url`
+// original, exatamente como já funcionava antes desta fase.
+function resolvePublicPhotoUrl(media: {
+  mediaType?: string | null;
+  url: string;
+  storageBucket?: string | null;
+  storagePath?: string | null;
+}) {
+  if (media.mediaType !== "photo") return media.url;
+  if (media.storageBucket !== "cloudinary" || !media.storagePath) return media.url;
+  try {
+    return getStorageProviderForName("cloudinary").getPublicUrl(media.storagePath, {
+      variant: "gallery",
+    });
+  } catch {
+    return media.url;
+  }
+}
+
 function serializePublicProperty(property: any, site: { settingsJson: unknown }) {
   const settings = isRecord(site.settingsJson) ? site.settingsJson : {};
   const showFullAddress = settings.show_full_address === true;
@@ -1120,7 +1158,7 @@ function serializePublicProperty(property: any, site: { settingsJson: unknown })
     responsible_user_name: property.responsibleUser?.name ?? null,
     property_media: (property.media ?? []).map((media: any) => ({
       media_type: media.mediaType,
-      url: media.url,
+      url: resolvePublicPhotoUrl(media),
       caption: media.caption,
       position: media.position,
       is_cover: media.isCover,
