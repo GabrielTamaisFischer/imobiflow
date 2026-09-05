@@ -5,12 +5,23 @@ import {
   getOwnerPortal,
   type OwnerPortalResponse,
   type PortalCharge,
+  type PortalProperty,
   type PortalTransfer,
 } from "@/product/public-portals";
 
 export const Route = createFileRoute("/portal/proprietario/$token")({
   component: OwnerPortalPage,
 });
+
+// Fase 4C — rótulos do resumo de leads/negociações por imóvel. Todo texto
+// vem de dados reais e determinísticos do backend (leads_summary); nada
+// aqui inventa estado a partir de ausência de dado.
+const leadsSummaryStatusLabels: Record<string, string> = {
+  sem_interesse: "Sem interesse registrado ainda",
+  em_andamento: "Em andamento",
+  fechado: "Negócio fechado",
+  perdido: "Sem interesse no momento",
+};
 
 const statusLabels: Record<string, string> = {
   pending: "Pendente",
@@ -111,6 +122,7 @@ function OwnerPortalPage() {
                         <p className="mt-3 text-sm font-semibold">
                           {property.rent_price_cents ? formatMoney(property.rent_price_cents) : "Valor não informado"}
                         </p>
+                        <PropertyLeadsSummary property={property} />
                       </article>
                     ))}
                   </div>
@@ -147,6 +159,102 @@ function OwnerPortalPage() {
     </main>
   );
 }
+
+// Fase 4C — decisão pura de o que exibir no bloco "Interesses e
+// negociações" de um imóvel, extraída do componente para ser testável sem
+// um harness de renderização React (este repositório não usa
+// @testing-library/react; o padrão de testes de UI aqui é testar as
+// funções puras de decisão, como já faz classifyMediaFrame para mídia).
+//
+// Contrato de privacidade: esta função só lê os 7 campos já
+// resumidos/anonimizados de `leads_summary` (nunca IDs de lead/site_lead,
+// nunca dados pessoais do interessado) — o mesmo contrato que o backend
+// garante em owner-portal-leads-summary.test.ts.
+export type LeadsSummaryDisplay =
+  | { kind: "empty"; message: string }
+  | {
+      kind: "summary";
+      badges: string[];
+      detailParts: string[];
+    };
+
+// exportado apenas para ser testado por unidade (ver comentário acima); não
+// é um componente React, então não quebra fast refresh na prática.
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildLeadsSummaryDisplay(
+  summary: PortalProperty["leads_summary"],
+): LeadsSummaryDisplay {
+  const hasNothingToShow =
+    !summary || (summary.status === "sem_interesse" && summary.visitas_agendadas === 0);
+  if (hasNothingToShow) {
+    return { kind: "empty", message: "Nenhum interesse registrado ainda para este imóvel." };
+  }
+
+  const badges: string[] = [
+    `${summary.total_interessados} ${summary.total_interessados === 1 ? "interessado" : "interessados"}`,
+  ];
+  if (summary.visitas_agendadas > 0) {
+    badges.push(
+      `${summary.visitas_agendadas} ${summary.visitas_agendadas === 1 ? "visita agendada" : "visitas agendadas"}`,
+    );
+  }
+  badges.push(leadsSummaryStatusLabels[summary.status] ?? summary.status);
+  if (summary.estagio) badges.push(summary.estagio);
+
+  const detailParts: string[] = [];
+  if (summary.ultimo_interesse_em) {
+    detailParts.push(`Último interesse: ${formatDateTime(summary.ultimo_interesse_em)}`);
+  }
+  if (summary.origem) {
+    detailParts.push(`Origem: ${originLabels[summary.origem] ?? summary.origem}`);
+  }
+  if (summary.corretor_responsavel) {
+    detailParts.push(`Corretor: ${summary.corretor_responsavel}`);
+  }
+
+  return { kind: "summary", badges, detailParts };
+}
+
+function PropertyLeadsSummary({ property }: { property: PortalProperty }) {
+  const display = buildLeadsSummaryDisplay(property.leads_summary);
+
+  if (display.kind === "empty") {
+    return (
+      <p className="mt-3 border-t border-border pt-3 text-xs text-muted-foreground">
+        {display.message}
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-3 space-y-1.5 border-t border-border pt-3">
+      <p className="text-xs font-semibold text-foreground">Interesses e negociações</p>
+      <div className="flex flex-wrap gap-1.5">
+        {display.badges.map((badge) => (
+          <SummaryBadge key={badge}>{badge}</SummaryBadge>
+        ))}
+      </div>
+      {display.detailParts.length > 0 && (
+        <p className="text-xs text-muted-foreground">{display.detailParts.join(" · ")}</p>
+      )}
+    </div>
+  );
+}
+
+function SummaryBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+const originLabels: Record<string, string> = {
+  site: "site da imobiliária",
+  whatsapp: "WhatsApp",
+  manual: "cadastro manual",
+  import: "importação",
+};
 
 function OwnerCharge({ charge }: { charge: PortalCharge }) {
   return (
@@ -248,4 +356,10 @@ function formatMoney(value: number) {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(new Date(value));
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(
+    new Date(value),
+  );
 }

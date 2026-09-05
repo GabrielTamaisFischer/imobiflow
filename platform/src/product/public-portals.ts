@@ -6,6 +6,16 @@ type CompanySummary = {
   status: string;
 };
 
+export type PortalPropertyLeadsSummary = {
+  total_interessados: number;
+  visitas_agendadas: number;
+  ultimo_interesse_em: string | null;
+  origem: string | null;
+  estagio: string | null;
+  status: "sem_interesse" | "em_andamento" | "fechado" | "perdido";
+  corretor_responsavel: string | null;
+};
+
 export type PortalProperty = {
   id: string;
   code: string | null;
@@ -17,6 +27,10 @@ export type PortalProperty = {
   state: string | null;
   rent_price_cents?: number | null;
   sale_price_cents?: number | null;
+  // Fase 4C — sempre presente na resposta real da API; opcional aqui só
+  // para não quebrar nenhum consumidor/teste antigo que construa um
+  // PortalProperty parcial sem esse campo.
+  leads_summary?: PortalPropertyLeadsSummary;
 };
 
 export type PortalCharge = {
@@ -159,6 +173,15 @@ function buildPreviewOwnerPortal(): OwnerPortalResponse {
         state: "SP",
         rent_price_cents: 350000,
         sale_price_cents: null,
+        leads_summary: {
+          total_interessados: 3,
+          visitas_agendadas: 1,
+          ultimo_interesse_em: new Date().toISOString(),
+          origem: "site",
+          estagio: "Visita",
+          status: "em_andamento",
+          corretor_responsavel: "Marina Souza",
+        },
       },
     ],
     transfers: [

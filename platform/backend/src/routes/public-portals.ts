@@ -3,6 +3,7 @@ import type { Request } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import {
   loadMysqlOwnerPortalCore,
+  loadMysqlOwnerPortalLeadsSummary,
   touchMysqlOwnerPortalAccess,
 } from "../services/mysql-real-estate.js";
 
@@ -108,7 +109,15 @@ publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
     // token ausente/mal formado, inexistente, portalEnabled=false ou
     // proprietário não ativo — nunca revela qual dessas condições ocorreu.
     const { owner, company, properties } = await loadMysqlOwnerPortalCore(token);
-    const financials = await loadOwnerFinancials(owner.companyId, owner.id);
+    const [financials, leadsSummaryByProperty] = await Promise.all([
+      loadOwnerFinancials(owner.companyId, owner.id),
+      // Fase 4C: nunca aceita property_id do cliente — sempre derivado da
+      // lista de imóveis já resolvida tenant-safe acima.
+      loadMysqlOwnerPortalLeadsSummary(
+        owner.companyId,
+        properties.map((property) => property.id),
+      ),
+    ]);
 
     await Promise.all([
       touchMysqlOwnerPortalAccess(owner.id),
@@ -145,6 +154,18 @@ publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
         state: property.state,
         rent_price_cents: property.rentPriceCents,
         sale_price_cents: property.salePriceCents,
+        // Fase 4C: resumo de leads/negociações, sempre presente (nunca
+        // undefined) para manter o payload determinístico mesmo sem
+        // nenhum interesse registrado ainda.
+        leads_summary: leadsSummaryByProperty.get(property.id) ?? {
+          total_interessados: 0,
+          visitas_agendadas: 0,
+          ultimo_interesse_em: null,
+          origem: null,
+          estagio: null,
+          status: "sem_interesse" as const,
+          corretor_responsavel: null,
+        },
       })),
       transfers: financials.transfers,
       charges: financials.charges,

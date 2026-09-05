@@ -355,6 +355,147 @@ export async function touchMysqlOwnerPortalAccess(ownerId: string) {
   });
 }
 
+// Fase 4C — Leads e negociações no Portal do Proprietário.
+//
+// Resumo, por imóvel, do interesse comercial recebido (leads do CRM
+// vinculados via SiteLead) e de visitas agendadas. Nunca recebe
+// companyId/ownerId/propertyId do cliente: propertyIds vem sempre da lista
+// de imóveis já resolvida por loadMysqlOwnerPortalCore (tenant-safe por
+// construção). Nunca devolve nome/e-mail/telefone/documento do lead, nem
+// IDs de lead/site_lead, nem dados de comissão/auditoria — apenas
+// contagens, um rótulo de estágio (nome do CrmStage, já não-sensível e
+// usado publicamente no funil interno) e o nome do corretor responsável.
+//
+// Observação de modelagem (documentada por ser uma aproximação
+// deliberada, não um bug): a deduplicação de Lead em lead-intake.ts é por
+// e-mail/telefone dentro da empresa, não por imóvel — então um mesmo Lead
+// pode estar tecnicamente vinculado (via SiteLead) a mais de um imóvel do
+// mesmo proprietário ou até de outro proprietário da mesma empresa. O
+// "estágio"/"status" aqui reportado é sempre o estágio atual do Lead no
+// funil da empresa (não um estado por imóvel, que não existe no modelo
+// atual) — determinístico e correto, mas compartilhado entre os imóveis
+// que esse mesmo lead tocou.
+export type OwnerPortalPropertyLeadsSummary = {
+  total_interessados: number;
+  visitas_agendadas: number;
+  ultimo_interesse_em: string | null;
+  origem: string | null;
+  estagio: string | null;
+  status: "sem_interesse" | "em_andamento" | "fechado" | "perdido";
+  corretor_responsavel: string | null;
+};
+
+export async function loadMysqlOwnerPortalLeadsSummary(
+  companyId: string,
+  propertyIds: string[],
+): Promise<Map<string, OwnerPortalPropertyLeadsSummary>> {
+  const summaries = new Map<string, OwnerPortalPropertyLeadsSummary>();
+  if (propertyIds.length === 0) return summaries;
+
+  const [siteLeads, appointments] = await Promise.all([
+    prisma().siteLead.findMany({
+      where: { companyId, propertyId: { in: propertyIds } },
+      select: { propertyId: true, leadId: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma().appointment.findMany({
+      where: {
+        companyId,
+        propertyId: { in: propertyIds },
+        appointmentType: "visit",
+        status: "scheduled",
+        startsAt: { gte: new Date() },
+      },
+      select: { propertyId: true },
+    }),
+  ]);
+
+  const leadIds = [
+    ...new Set(siteLeads.map((entry) => entry.leadId).filter((id): id is string => Boolean(id))),
+  ];
+  const leads = leadIds.length
+    ? await prisma().lead.findMany({
+        where: { id: { in: leadIds }, companyId },
+        select: {
+          id: true,
+          status: true,
+          source: true,
+          updatedAt: true,
+          stage: { select: { name: true, position: true } },
+          assignee: { select: { name: true } },
+        },
+      })
+    : [];
+  const leadById = new Map(leads.map((lead) => [lead.id, lead]));
+
+  const visitsByProperty = new Map<string, number>();
+  for (const appointment of appointments) {
+    if (!appointment.propertyId) continue;
+    visitsByProperty.set(
+      appointment.propertyId,
+      (visitsByProperty.get(appointment.propertyId) ?? 0) + 1,
+    );
+  }
+
+  const siteLeadsByProperty = new Map<string, typeof siteLeads>();
+  for (const entry of siteLeads) {
+    if (!entry.propertyId) continue;
+    const list = siteLeadsByProperty.get(entry.propertyId) ?? [];
+    list.push(entry);
+    siteLeadsByProperty.set(entry.propertyId, list);
+  }
+
+  for (const propertyId of propertyIds) {
+    const entries = siteLeadsByProperty.get(propertyId) ?? [];
+    const distinctLeadIds = [
+      ...new Set(entries.map((entry) => entry.leadId).filter((id): id is string => Boolean(id))),
+    ];
+    const propertyLeads = distinctLeadIds
+      .map((id) => leadById.get(id))
+      .filter((lead): lead is NonNullable<typeof lead> => Boolean(lead));
+
+    const openLeads = propertyLeads
+      .filter((lead) => lead.status === "open")
+      .sort(
+        (a, b) =>
+          (b.stage?.position ?? 0) - (a.stage?.position ?? 0) ||
+          b.updatedAt.getTime() - a.updatedAt.getTime(),
+      );
+    const wonLeads = propertyLeads
+      .filter((lead) => lead.status === "won")
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const otherLeads = propertyLeads
+      .filter((lead) => lead.status === "lost" || lead.status === "archived")
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+    const relevantLead = openLeads[0] ?? wonLeads[0] ?? otherLeads[0] ?? null;
+    const status: OwnerPortalPropertyLeadsSummary["status"] = openLeads.length
+      ? "em_andamento"
+      : wonLeads.length
+        ? "fechado"
+        : otherLeads.length
+          ? "perdido"
+          : "sem_interesse";
+
+    const mostRecentEntry = entries[0]; // já ordenado desc por createdAt na query
+    const mostRecentLead = mostRecentEntry?.leadId
+      ? leadById.get(mostRecentEntry.leadId)
+      : undefined;
+
+    summaries.set(propertyId, {
+      total_interessados: distinctLeadIds.length,
+      visitas_agendadas: visitsByProperty.get(propertyId) ?? 0,
+      ultimo_interesse_em: mostRecentEntry ? mostRecentEntry.createdAt.toISOString() : null,
+      origem: mostRecentLead?.source ?? null,
+      estagio: status === "em_andamento" ? (relevantLead?.stage?.name ?? null) : null,
+      status,
+      corretor_responsavel: relevantLead?.assignee?.name ?? null,
+    });
+  }
+
+  return summaries;
+}
+
 // Fase 4B.1 — endurecimento do Portal do Proprietário.
 //
 // Regenera o token do portal do proprietário. A troca é uma única
