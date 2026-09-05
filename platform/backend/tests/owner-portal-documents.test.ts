@@ -16,16 +16,41 @@ const realFetch = globalThis.fetch.bind(globalThis);
 // Prisma/MySQL sempre mockado (nunca banco real); `fetch` também mockado no
 // endpoint de download (nunca bate no Cloudinary de verdade em teste).
 
-const { database } = vi.hoisted(() => ({
+const { database, authenticatedUrlState } = vi.hoisted(() => ({
   database: {
     propertyOwner: { findFirst: vi.fn(), update: vi.fn() },
     company: { findFirst: vi.fn() },
     property: { findMany: vi.fn() },
     storedFile: { findFirst: vi.fn(), findMany: vi.fn() },
   },
+  // Fast-follow de privacidade (F4E): a rota de download agora resolve uma
+  // URL assinada de curta duração via
+  // getStorageProviderForName("cloudinary").getAuthenticatedDownloadUrl(...)
+  // em vez de usar `file.secureUrl` bruto para purpose=owner_document. Este
+  // arquivo nunca deve bater no Cloudinary de verdade (nem configurar a SDK
+  // com credenciais reais/fake), então o provider é mockado aqui do mesmo
+  // jeito que já é feito em owner-document-management.test.ts — só a
+  // função assinada é uma fake pura, previsível e sem rede.
+  authenticatedUrlState: { calls: [] as Array<Record<string, unknown>> },
 }));
 
 vi.mock("../src/lib/website-builder-prisma.js", () => ({ getPrisma: () => database }));
+
+vi.mock("../src/services/storage/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../src/services/storage/index.js")>(
+    "../src/services/storage/index.js",
+  );
+  return {
+    ...actual,
+    getStorageProviderForName: (provider: string) => ({
+      name: provider,
+      getAuthenticatedDownloadUrl(input: Record<string, unknown>) {
+        authenticatedUrlState.calls.push(input);
+        return `https://res.cloudinary.example/authenticated-download/${input.publicId}`;
+      },
+    }),
+  };
+});
 
 vi.mock("../src/lib/supabase.js", () => ({
   supabaseAdmin: {
@@ -107,6 +132,7 @@ const servers: Server[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authenticatedUrlState.calls = [];
 });
 
 afterEach(async () => {
@@ -343,6 +369,55 @@ describe("GET /public/portals/owners/:token/documents/:documentId (download)", (
     expect(response.headers.get("content-disposition")).toContain("inline");
     expect(response.headers.get("content-disposition")).toContain("Contrato de loca");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("[F4E fast-follow #4] owner_document usa acesso authenticated: URL é gerada via getAuthenticatedDownloadUrl, nunca via fetch direto de secureUrl", async () => {
+    database.propertyOwner.findFirst.mockResolvedValue(ownerFixture());
+    database.storedFile.findFirst.mockResolvedValue(storedFileFixture());
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new TextEncoder().encode("%PDF-1.4 conteudo").buffer,
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await requestPublicPortal(`/owners/${OWNER_A_TOKEN}/documents/doc-1`);
+    expect(response.status).toBe(200);
+
+    expect(authenticatedUrlState.calls).toHaveLength(1);
+    expect(authenticatedUrlState.calls[0]).toMatchObject({
+      publicId: "imobiflow/company-a/owners/owner-a/documents/mock",
+      resourceType: "raw",
+      format: "pdf",
+    });
+    // A URL efetivamente buscada é a assinada retornada pelo provider, nunca
+    // o `secureUrl` bruto persistido no StoredFile (que para um asset
+    // "authenticated" nem sequer serviria o arquivo).
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://res.cloudinary.example/authenticated-download/imobiflow/company-a/owners/owner-a/documents/mock",
+    );
+    expect(fetchSpy).not.toHaveBeenCalledWith(storedFileFixture().secureUrl);
+  });
+
+  it("[F4E fast-follow #6] falha ao gerar/buscar acesso authenticated cai em erro sanitizado (sem detalhe de provider/credencial)", async () => {
+    database.propertyOwner.findFirst.mockResolvedValue(ownerFixture());
+    database.storedFile.findFirst.mockResolvedValue(storedFileFixture());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+
+    const response = await requestPublicPortal(`/owners/${OWNER_A_TOKEN}/documents/doc-1`);
+    expect(response.status).toBe(502);
+    expect((response.body as Record<string, unknown>).code).toBe("OWNER_DOCUMENT_FETCH_FAILED");
+    const serialized = JSON.stringify(response.body);
+    expect(serialized).not.toMatch(/cloudinary|secret|api_key|res\.cloudinary/i);
+  });
+
+  it("[F4E fast-follow] compat legacy: asset armazenado como provider != cloudinary com purpose owner_document falha de forma sanitizada (nunca assume authenticated às cegas)", async () => {
+    database.propertyOwner.findFirst.mockResolvedValue(ownerFixture());
+    database.storedFile.findFirst.mockResolvedValue(storedFileFixture({ provider: "local" }));
+
+    const response = await requestPublicPortal(`/owners/${OWNER_A_TOKEN}/documents/doc-1`);
+    expect(response.status).toBe(502);
+    expect((response.body as Record<string, unknown>).code).toBe("OWNER_DOCUMENT_FETCH_FAILED");
+    expect(authenticatedUrlState.calls).toHaveLength(0);
   });
 
   it("12. download cross-owner bloqueado (documentId existe, mas não para o owner do token) — 404 tenant-safe", async () => {

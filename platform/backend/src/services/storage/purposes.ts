@@ -81,6 +81,48 @@ export function inferStoredFilePurpose(entityType: string): StoredFilePurpose {
   }
 }
 
+/**
+ * Fast-follow de privacidade (F4E, 2026-09-05): decide, a partir do
+ * `purpose` JÁ PERSISTIDO no StoredFile (nunca de filename/folder/entityType
+ * — isso seria frágil), se o asset deve ser armazenado/servido pelo
+ * provider como "authenticated" (delivery protegido: a URL bruta do
+ * provider não abre o arquivo sozinha, só uma URL assinada gerada pelo
+ * backend no momento da requisição) ou "public" (delivery padrão atual,
+ * inalterado).
+ *
+ * ESCOPO DELIBERADAMENTE LIMITADO A `owner_document` NESTA CORREÇÃO — não
+ * porque os demais propósitos de documento (`contract_document`,
+ * `signed_contract`, `tenant_document`, `buyer_document`,
+ * `financial_document`, `signature_evidence`) sejam menos sensíveis (não
+ * são: todos guardam documento de cliente/contrato/financeiro), mas porque
+ * o blocker resolvido aqui foi levantado especificamente pela homologação
+ * da F4D (documentos do proprietário). Estender `authenticated` aos demais
+ * propósitos sem que isso seja pedido explicitamente seria expandir o
+ * escopo desta correção silenciosamente — registrado como pendência
+ * separada em vez de decidido aqui (ver Bugs Ativos/Pendências).
+ */
+export const STORED_FILE_DELIVERY_ACCESS: Record<StoredFilePurpose, "public" | "authenticated"> = {
+  property_media: "public",
+  contract_document: "public",
+  signed_contract: "public",
+  inspection_evidence: "public",
+  inspection_report: "public",
+  inspection_comparison: "public",
+  owner_document: "authenticated",
+  tenant_document: "public",
+  buyer_document: "public",
+  financial_document: "public",
+  signature_evidence: "public",
+  company_logo: "public",
+};
+
+export function deliveryAccessForPurpose(
+  purpose: string | null | undefined,
+): "public" | "authenticated" {
+  if (!purpose || !isStoredFilePurpose(purpose)) return "public";
+  return STORED_FILE_DELIVERY_ACCESS[purpose];
+}
+
 export function assertStoredFilePurposeAccess(
   purpose: string | null | undefined,
   permissions: string[],

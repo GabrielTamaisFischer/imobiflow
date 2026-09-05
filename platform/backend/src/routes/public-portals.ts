@@ -8,6 +8,9 @@ import {
   loadMysqlOwnerPortalLeadsSummary,
   touchMysqlOwnerPortalAccess,
 } from "../services/mysql-real-estate.js";
+import { getStorageProviderForName } from "../services/storage/index.js";
+import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
+import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
 
 export const publicPortalsRouter = Router();
 
@@ -207,16 +210,50 @@ publicPortalsRouter.get("/owners/:token/documents/:documentId", async (req, res,
     // para a URL do provider (o que vazaria o domínio/host real do storage
     // e devolveria os headers do provider, fora do nosso controle).
     //
-    // Limitação conhecida e documentada (não mascarada como privacidade
-    // real): no plano gratuito do Cloudinary em uso hoje, `secureUrl` já é
-    // uma URL publicamente acessível por qualquer um que a obtenha por
-    // outro meio (não há delivery assinado habilitado) — "obscura", não
-    // "privada" de fato. Este endpoint é o que impede que o portal ou
-    // qualquer outra tela da aplicação exponha essa URL diretamente; ele não
-    // revoga acesso a quem já tiver a URL bruta por outra via.
+    // Fast-follow de privacidade (F4E, 2026-09-05): documento do
+    // proprietário (`purpose: "owner_document"`) agora é armazenado no
+    // Cloudinary como `type: "authenticated"` — a `secureUrl` persistida
+    // NÃO abre mais o arquivo sozinha (Cloudinary recusa acesso não
+    // assinado a um asset authenticated). Por isso, para este purpose,
+    // NUNCA usamos `file.secureUrl` (que também poderia ser de um asset
+    // legado, gravado antes desta correção — ver nota de compatibilidade
+    // abaixo): sempre reconstruímos a URL de download a partir de dados
+    // estruturados e confiáveis (publicId/resourceType/format resolvidos no
+    // backend a partir do StoredFile, nunca do cliente) via
+    // `provider.getAuthenticatedDownloadUrl`, curta (60s) e gerada só no
+    // momento desta requisição — nunca persistida, nunca logada, nunca
+    // enviada ao frontend.
+    const deliveryAccess = deliveryAccessForPurpose(file.purpose);
+    let fileUrl: string;
+    if (deliveryAccess === "authenticated") {
+      if (file.provider !== "cloudinary") {
+        // Nenhum outro provider suporta authenticated hoje — configuração
+        // inesperada, não um caso de uso real; falha sanitizada, sem
+        // detalhe do provider ao cliente.
+        throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
+          statusCode: 502,
+          code: "OWNER_DOCUMENT_FETCH_FAILED",
+        });
+      }
+      const provider = getStorageProviderForName(file.provider as StorageProviderName);
+      if (!provider.getAuthenticatedDownloadUrl) {
+        throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
+          statusCode: 502,
+          code: "OWNER_DOCUMENT_FETCH_FAILED",
+        });
+      }
+      fileUrl = provider.getAuthenticatedDownloadUrl({
+        publicId: file.publicId,
+        resourceType: file.resourceType as StorageResourceType,
+        format: file.format,
+      });
+    } else {
+      fileUrl = file.secureUrl;
+    }
+
     let upstream: Response;
     try {
-      upstream = await fetch(file.secureUrl);
+      upstream = await fetch(fileUrl);
     } catch {
       throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
         statusCode: 502,
@@ -224,6 +261,16 @@ publicPortalsRouter.get("/owners/:token/documents/:documentId", async (req, res,
       });
     }
     if (!upstream.ok) {
+      // Cobre também o caso de um documento LEGADO: um StoredFile antigo com
+      // purpose=owner_document mas gravado no Cloudinary como "upload"
+      // (público) antes desta correção. A URL "authenticated" gerada acima
+      // não vai encontrar esse asset (foi salvo com outro `type`), e o
+      // Cloudinary responde com erro de autenticação/"not found" — cai
+      // aqui, sanitizado, em vez de vazar detalhe do provider. Estratégia
+      // de compatibilidade adotada: bloquear o download do documento legado
+      // (nunca servir um arquivo sensível por engano) e exigir reupload —
+      // não há rotina de migração automática de assets existentes nesta
+      // correção (ver log da F4E/fast-follow no Obsidian).
       throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
         statusCode: 502,
         code: "OWNER_DOCUMENT_FETCH_FAILED",

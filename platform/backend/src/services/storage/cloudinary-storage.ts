@@ -40,6 +40,13 @@ export class CloudinaryStorageProvider implements StorageProvider {
         use_filename: false,
         unique_filename: false,
         upload_preset: this.config.CLOUDINARY_UPLOAD_PRESET || undefined,
+        // Fast-follow de privacidade (F4E): "authenticated" faz o Cloudinary
+        // recusar a `secure_url` retornada aqui (e qualquer outra URL não
+        // assinada) para servir o arquivo — só uma URL assinada gerada sob
+        // demanda (getAuthenticatedDownloadUrl, abaixo) funciona. Omitido
+        // (undefined) preserva o delivery "upload" (público) já usado por
+        // toda mídia de imóvel/site da Fase 3 — nenhuma mudança para elas.
+        type: input.deliveryAccess === "authenticated" ? "authenticated" : undefined,
         context: cleanContext({
           company_id: input.companyId,
           entity_type: input.entityType,
@@ -81,6 +88,11 @@ export class CloudinaryStorageProvider implements StorageProvider {
     this.configure();
     await cloudinary.uploader.destroy(input.publicId, {
       resource_type: input.resourceType ?? "image",
+      // Precisa ser o mesmo `type` usado no upload (Cloudinary identifica um
+      // asset por public_id+resource_type+type juntos) — errar isso não dá
+      // erro, só falha silenciosamente a encontrar o asset (result:
+      // "not found"), deixando-o esquecido no provider.
+      type: input.deliveryAccess === "authenticated" ? "authenticated" : undefined,
       invalidate: true,
     });
   }
@@ -91,6 +103,34 @@ export class CloudinaryStorageProvider implements StorageProvider {
       secure: true,
       resource_type: options.resourceType ?? "image",
       transformation: imageTransformation(options.variant, options.watermark),
+    });
+  }
+
+  /**
+   * Fast-follow de privacidade (F4E): URL de download curta e assinada para
+   * um asset `type: "authenticated"` — gerada aqui, no momento da
+   * requisição, NUNCA persistida (nem em StoredFile, nem em audit log, nem
+   * enviada ao frontend). Usa o método oficial da SDK
+   * (`cloudinary.utils.private_download_url`, documentado pela Cloudinary
+   * exatamente para download de asset privado/autenticado) em vez de montar
+   * assinatura manualmente. `expires_at` curto (60s): tempo suficiente para
+   * o backend buscar os bytes e servir a resposta, não para o cliente reusar
+   * a URL depois. Só aceita entrada estruturada (publicId/resourceType/
+   * format) resolvida no backend a partir do StoredFile — nunca uma
+   * `secureUrl` já persistida, que poderia ser de um asset legado público
+   * (ver nota de compatibilidade no proxy de download).
+   */
+  getAuthenticatedDownloadUrl(input: {
+    publicId: string;
+    resourceType: StoredFile["resourceType"];
+    format?: string | null;
+  }): string {
+    this.configure();
+    return cloudinary.utils.private_download_url(input.publicId, input.format ?? "", {
+      resource_type: input.resourceType,
+      type: "authenticated",
+      attachment: false,
+      expires_at: Math.floor(Date.now() / 1000) + 60,
     });
   }
 

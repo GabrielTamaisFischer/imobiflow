@@ -11,6 +11,16 @@ export type StoragePurpose =
   | "website_logo"
   | "document";
 
+// Fast-follow de privacidade (F4E): decisão explícita de delivery no
+// provider, passada pelo chamador — nunca inferida implicitamente dentro do
+// provider a partir de string de purpose/filename/folder (frágil). Omitido
+// (undefined) preserva 100% do comportamento anterior ("public", delivery
+// padrão do Cloudinary) para todo upload existente. Hoje só o upload de
+// documento do proprietário (F4D) passa "authenticated" explicitamente — ver
+// services/storage/purposes.ts (deliveryAccessForPurpose) para a política
+// que decide isso por StoredFilePurpose já persistido.
+export type StorageDeliveryAccess = "public" | "authenticated";
+
 export type UploadFileInput = {
   companyId: string;
   entityType: string;
@@ -24,6 +34,8 @@ export type UploadFileInput = {
   isTestData?: boolean;
   testBatchId?: string | null;
   metadata?: Record<string, string | number | boolean | null | undefined>;
+  /** Ver StorageDeliveryAccess acima. Default: "public" (comportamento atual). */
+  deliveryAccess?: StorageDeliveryAccess;
 };
 
 export type StoredFile = {
@@ -42,6 +54,14 @@ export type StoredFile = {
 export type DeleteFileInput = {
   publicId: string;
   resourceType?: StorageResourceType;
+  /**
+   * Precisa ser o MESMO delivery access usado no upload original — o
+   * Cloudinary identifica um asset por (public_id, resource_type, type)
+   * juntos; passar o valor errado faz o destroy não encontrar o arquivo
+   * (falha silenciosa, sem erro), deixando-o esquecido no provider. Ver
+   * StorageDeliveryAccess acima. Default: "public" (comportamento atual).
+   */
+  deliveryAccess?: StorageDeliveryAccess;
 };
 
 // F3C (2026-09-04): marca d'água configurável por empresa, aplicada só na
@@ -78,4 +98,18 @@ export interface StorageProvider {
   uploadFile(input: UploadFileInput): Promise<StoredFile>;
   deleteFile(input: DeleteFileInput): Promise<void>;
   getPublicUrl(publicId: string, options?: PublicUrlOptions): string;
+  /**
+   * Gera, no momento da chamada (nunca persistida), uma URL de download
+   * curta e assinada para um asset protegido (`deliveryAccess:
+   * "authenticated"`). Opcional porque só o provider Cloudinary sabe gerar
+   * isso hoje — chamar isso para outro provider/asset público é erro de
+   * uso do chamador, não algo a silenciar. Nunca aceita a `secureUrl`
+   * persistida como entrada: sempre reconstrói a URL a partir de
+   * publicId/resourceType/format confiáveis (nunca vindos do cliente).
+   */
+  getAuthenticatedDownloadUrl?(input: {
+    publicId: string;
+    resourceType: StorageResourceType;
+    format?: string | null;
+  }): string;
 }

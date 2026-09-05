@@ -18,7 +18,15 @@ const { database, permissionState, storageState } = vi.hoisted(() => ({
     authAuditLog: { create: vi.fn() },
   },
   permissionState: { permissions: ["owners.view", "owners.manage"] as string[] },
-  storageState: { deletedPublicIds: [] as string[] },
+  storageState: {
+    deletedPublicIds: [] as string[],
+    // Fast-follow de privacidade (F4E): registra o `input` completo recebido
+    // por uploadFile/deleteFile para permitir asserções sobre
+    // `deliveryAccess` (itens 1 e 7 dos testes obrigatórios) sem precisar
+    // mockar o Cloudinary de verdade neste arquivo.
+    uploadCalls: [] as Array<Record<string, unknown>>,
+    deleteCalls: [] as Array<Record<string, unknown>>,
+  },
 }));
 
 vi.mock("../src/lib/website-builder-prisma.js", () => ({ getPrisma: () => database }));
@@ -52,7 +60,9 @@ vi.mock("../src/services/storage/index.js", async () => {
         mimeType: string;
         body: Buffer;
         folder: string;
+        deliveryAccess?: string;
       }) {
+        storageState.uploadCalls.push({ ...input, body: undefined });
         return {
           provider: "cloudinary",
           publicId: `${input.folder}/mock-${input.fileName}`,
@@ -69,8 +79,9 @@ vi.mock("../src/services/storage/index.js", async () => {
     }),
     getStorageProviderForName: () => ({
       name: "cloudinary",
-      async deleteFile(input: { publicId: string }) {
+      async deleteFile(input: { publicId: string; deliveryAccess?: string }) {
         storageState.deletedPublicIds.push(input.publicId);
+        storageState.deleteCalls.push({ ...input });
       },
     }),
   };
@@ -86,6 +97,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   permissionState.permissions = ["owners.view", "owners.manage"];
   storageState.deletedPublicIds = [];
+  storageState.uploadCalls = [];
+  storageState.deleteCalls = [];
 });
 
 afterEach(async () => {
@@ -185,6 +198,27 @@ describe("POST /real-estate/owners/:id/documents", () => {
         data: expect.objectContaining({ action: "owner.document_uploaded" }),
       }),
     );
+  });
+
+  it("[F4E fast-follow #1] upload de owner_document chama storage com deliveryAccess=authenticated", async () => {
+    database.propertyOwner.findFirst.mockResolvedValue({ id: "owner-a" });
+    database.storedFile.create.mockImplementation(
+      async ({ data }: { data: Record<string, unknown> }) => ({
+        ...storedFileFixture(),
+        ...data,
+        createdAt: new Date(),
+      }),
+    );
+
+    await request("POST", "/owners/owner-a/documents", {
+      file_name: "contrato.pdf",
+      mime_type: "application/pdf",
+      size_bytes: Buffer.from("%PDF-1.4 conteudo de teste").byteLength,
+      content_base64: PDF_BASE64,
+    });
+
+    expect(storageState.uploadCalls).toHaveLength(1);
+    expect(storageState.uploadCalls[0]).toMatchObject({ deliveryAccess: "authenticated" });
   });
 
   it("vincula a um imóvel apenas quando o imóvel pertence ao mesmo proprietário/empresa", async () => {
@@ -380,5 +414,18 @@ describe("DELETE /real-estate/owners/:id/documents/:documentId", () => {
     const response = await request("DELETE", "/owners/owner-a/documents/doc-1");
     expect(response.status).toBe(403);
     expect(database.storedFile.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("[F4E fast-follow #7] delete de owner_document chama storage com deliveryAccess=authenticated", async () => {
+    database.propertyOwner.findFirst.mockResolvedValue({ id: "owner-a" });
+    database.storedFile.findFirst.mockResolvedValue(
+      storedFileFixture({ purpose: "owner_document" }),
+    );
+    database.storedFile.deleteMany.mockResolvedValue({ count: 1 });
+
+    const response = await request("DELETE", "/owners/owner-a/documents/doc-1");
+    expect(response.status).toBe(200);
+    expect(storageState.deleteCalls).toHaveLength(1);
+    expect(storageState.deleteCalls[0]).toMatchObject({ deliveryAccess: "authenticated" });
   });
 });

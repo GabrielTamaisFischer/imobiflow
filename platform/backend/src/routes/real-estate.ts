@@ -54,6 +54,7 @@ import {
   findStoredFileForEntity,
 } from "../services/storage/stored-files.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
+import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { isValidBrazilianDocument } from "../services/brazilian-document.js";
 import {
   assertPropertyAccess,
@@ -462,6 +463,12 @@ realEstateRouter.post(
         sizeBytes: policy.measuredSizeBytes,
         body,
         folder: buildStorageFolder({ companyId, purpose: "document", ownerId }),
+        // Fast-follow de privacidade (F4E): documento do proprietário é
+        // exatamente o mesmo `deliveryAccessForPurpose("owner_document")`
+        // usado no delete/download abaixo — decisão explícita no chamador,
+        // nunca inferida dentro do provider (ver services/storage/types.ts
+        // e purposes.ts).
+        deliveryAccess: deliveryAccessForPurpose("owner_document"),
       });
 
       const record = await createStoredFileRecord({
@@ -535,6 +542,10 @@ realEstateRouter.delete(
       await getStorageProviderForName(record.provider as StorageProviderName).deleteFile({
         publicId: record.publicId,
         resourceType: record.resourceType as StorageResourceType,
+        // Precisa casar com o delivery access usado no upload original —
+        // recalculado a partir de record.purpose (já validado acima como
+        // "owner_document"), nunca assumido/hardcoded aqui.
+        deliveryAccess: deliveryAccessForPurpose(record.purpose),
       });
       await deleteStoredFileByIdForEntity(companyId, documentId, "property_owner", ownerId);
 
