@@ -1,5 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Building2, Copy, Eye, Loader2, Mail, MessageCircle, Pencil, Phone, Plus, Trash2, UserRound } from "lucide-react";
+import {
+  Building2,
+  Copy,
+  Eye,
+  Loader2,
+  Mail,
+  MessageCircle,
+  Pencil,
+  Phone,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+  UserRound,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
@@ -11,6 +26,8 @@ import {
   archiveOwner,
   listOwners,
   listAllProperties,
+  regenerateOwnerPortalToken,
+  setOwnerPortalEnabled,
   updateOwner,
   type OwnerInput,
   type Property,
@@ -296,6 +313,8 @@ function OwnerCard({
   const [isViewing, setIsViewing] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [isTogglingPortal, setIsTogglingPortal] = useState(false);
+  const [isRegeneratingPortal, setIsRegeneratingPortal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const portalLink =
     typeof window !== "undefined" && owner.portal_enabled && owner.portal_token
@@ -346,6 +365,48 @@ function OwnerCard({
     registerPortalShare("system", "clipboard");
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  // Fase 4B.1 — habilitar/desabilitar não exige arquivar o proprietário
+  // inteiro. Antes de regenerar, avisamos explicitamente que o link
+  // anterior deixa de funcionar (item C do escopo).
+  async function togglePortal(enabled: boolean) {
+    setActionError(null);
+    setIsTogglingPortal(true);
+    try {
+      const { owner: updated } = await setOwnerPortalEnabled(owner.id, enabled);
+      onOwnerUpdated(updated);
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível atualizar o portal do proprietário.",
+      );
+    } finally {
+      setIsTogglingPortal(false);
+    }
+  }
+
+  async function regeneratePortalToken() {
+    if (
+      !window.confirm(
+        "Gerar um novo link do portal? O link anterior deixará de funcionar imediatamente para este proprietário.",
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setIsRegeneratingPortal(true);
+    try {
+      const { owner: updated } = await regenerateOwnerPortalToken(owner.id);
+      onOwnerUpdated(updated);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Não foi possível gerar um novo link do portal.",
+      );
+    } finally {
+      setIsRegeneratingPortal(false);
+    }
   }
 
   async function removeOwner() {
@@ -428,7 +489,18 @@ function OwnerCard({
       </div>
       {actionError ? <p className="mt-2 text-xs text-destructive">{actionError}</p> : null}
       <div className="mt-4 rounded-md border border-border bg-background p-3">
-        <p className="text-xs font-semibold text-foreground">Portal do proprietário</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold text-foreground">Portal do proprietário</p>
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+              owner.portal_enabled
+                ? "bg-emerald-500/10 text-emerald-600"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {owner.portal_enabled ? "Ativo" : "Desativado"}
+          </span>
+        </div>
         {portalLink ? (
           <div className="mt-2 flex flex-col gap-2">
             <p className="truncate text-xs text-muted-foreground">{portalLink}</p>
@@ -467,9 +539,42 @@ function OwnerCard({
           </div>
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">
-            Portal desativado para este proprietário.
+            {owner.portal_enabled
+              ? "Portal habilitado, mas ainda sem link gerado."
+              : "Portal desativado para este proprietário. O link anterior (se existir) continua guardado, mas deixa de funcionar enquanto estiver desativado."}
           </p>
         )}
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => void togglePortal(!owner.portal_enabled)}
+            disabled={isTogglingPortal}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent disabled:opacity-60"
+          >
+            {isTogglingPortal ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : owner.portal_enabled ? (
+              <ShieldOff className="h-3.5 w-3.5" />
+            ) : (
+              <ShieldCheck className="h-3.5 w-3.5" />
+            )}
+            {owner.portal_enabled ? "Desativar portal" : "Ativar portal"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void regeneratePortalToken()}
+            disabled={isRegeneratingPortal}
+            title="O link anterior deixará de funcionar."
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent disabled:opacity-60"
+          >
+            {isRegeneratingPortal ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Gerar novo link
+          </button>
+        </div>
       </div>
       {isViewing ? <OwnerDetailsModal owner={owner} linkedProperties={linkedProperties} onClose={() => setIsViewing(false)} /> : null}
       {isEditing ? (

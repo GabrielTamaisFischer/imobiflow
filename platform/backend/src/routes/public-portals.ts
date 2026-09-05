@@ -1,7 +1,10 @@
 import { Router } from "express";
 import type { Request } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
-import { prisma } from "../services/mysql-real-estate.js";
+import {
+  loadMysqlOwnerPortalCore,
+  touchMysqlOwnerPortalAccess,
+} from "../services/mysql-real-estate.js";
 
 export const publicPortalsRouter = Router();
 
@@ -101,53 +104,14 @@ async function loadOwnerFinancials(companyId: string, ownerId: string) {
 publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
   try {
     const token = String(req.params.token ?? "");
-    if (!isUuid(token)) throw notFound("Portal do proprietário não encontrado.");
-
-    const owner = await prisma().propertyOwner.findFirst({
-      where: { portalToken: token, portalEnabled: true },
-      select: {
-        id: true,
-        companyId: true,
-        ownerType: true,
-        name: true,
-        document: true,
-        email: true,
-        phone: true,
-        whatsapp: true,
-        status: true,
-      },
-    });
-
-    if (!owner || owner.status !== "active") throw notFound("Portal do proprietário não encontrado.");
-
-    const [company, properties, financials] = await Promise.all([
-      prisma().company.findFirst({ where: { id: owner.companyId }, select: { id: true, name: true, status: true } }),
-      prisma().property.findMany({
-        where: { companyId: owner.companyId, ownerId: owner.id, status: { not: "archived" } },
-        select: {
-          id: true,
-          code: true,
-          title: true,
-          operation: true,
-          status: true,
-          neighborhood: true,
-          city: true,
-          state: true,
-          rentPriceCents: true,
-          salePriceCents: true,
-        },
-        orderBy: { createdAt: "desc" },
-      }),
-      loadOwnerFinancials(owner.companyId, owner.id),
-    ]);
-
-    if (!company) throw notFound("Portal do proprietário não encontrado.");
+    // loadMysqlOwnerPortalCore lança PORTAL_NOT_FOUND (404 tenant-safe) para
+    // token ausente/mal formado, inexistente, portalEnabled=false ou
+    // proprietário não ativo — nunca revela qual dessas condições ocorreu.
+    const { owner, company, properties } = await loadMysqlOwnerPortalCore(token);
+    const financials = await loadOwnerFinancials(owner.companyId, owner.id);
 
     await Promise.all([
-      prisma().propertyOwner.update({
-        where: { id: owner.id },
-        data: { portalLastAccessAt: new Date() },
-      }),
+      touchMysqlOwnerPortalAccess(owner.id),
       logPortalAccess({
         company_id: owner.companyId,
         portal_type: "owner",

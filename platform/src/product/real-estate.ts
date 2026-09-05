@@ -312,6 +312,51 @@ export async function archiveOwner(ownerId: string) {
   });
 }
 
+// Fase 4B.1 — endurecimento do Portal do Proprietário. No modo de
+// demonstração (preview, sem backend), simula a troca do token localmente
+// para que a UI continue funcional sem exigir uma API real.
+export async function setOwnerPortalEnabled(ownerId: string, enabled: boolean) {
+  if (isPreviewRealEstate()) {
+    const owners = readPreviewOwners();
+    const owner = owners.find((item) => item.id === ownerId);
+    if (!owner) throw new Error("Proprietário não encontrado.");
+    const updated = {
+      ...owner,
+      portal_enabled: enabled,
+      portal_token: enabled && !owner.portal_token ? crypto.randomUUID() : owner.portal_token,
+      updated_at: new Date().toISOString(),
+    };
+    writePreviewOwners(owners.map((item) => (item.id === ownerId ? updated : item)));
+    return { owner: updated };
+  }
+
+  return apiRequest<{ owner: PropertyOwner }>(`/real-estate/owners/${ownerId}/portal`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function regenerateOwnerPortalToken(ownerId: string) {
+  if (isPreviewRealEstate()) {
+    const owners = readPreviewOwners();
+    const owner = owners.find((item) => item.id === ownerId);
+    if (!owner) throw new Error("Proprietário não encontrado.");
+    const updated = {
+      ...owner,
+      portal_token: crypto.randomUUID(),
+      updated_at: new Date().toISOString(),
+    };
+    writePreviewOwners(owners.map((item) => (item.id === ownerId ? updated : item)));
+    return { owner: updated };
+  }
+
+  return apiRequest<{ owner: PropertyOwner }>(`/real-estate/owners/${ownerId}/portal/regenerate`, {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+  });
+}
+
 export async function listProperties(filters: PropertyListFilters = {}): Promise<PropertyPage> {
   if (isPreviewRealEstate()) {
     const matching = filterPreviewProperties(readPreviewProperties(), filters);

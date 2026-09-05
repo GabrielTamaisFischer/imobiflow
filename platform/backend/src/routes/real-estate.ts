@@ -26,10 +26,12 @@ import {
   listMysqlPropertyContent,
   listMysqlPropertyMedia,
   MAX_PROPERTY_PAGE_SIZE,
+  regenerateMysqlOwnerPortalToken,
   reorderMysqlPropertyMedia,
   replaceMysqlPropertyAccess,
   resolvePropertyShareTarget,
   revokeMysqlPropertyAccess,
+  setMysqlOwnerPortalEnabled,
   setMysqlPropertyMediaCover,
   updateMysqlOwner,
   updateMysqlProperty,
@@ -338,6 +340,66 @@ realEstateRouter.delete("/owners/:id", requirePermission("owners.manage"), async
     next(error);
   }
 });
+
+// Fase 4B.1 — endurecimento do Portal do Proprietário. `owner.portal_token`
+// nunca é aceito do corpo da requisição em nenhuma rota (nem aqui, nem em
+// ownerSchema/ownerUpdateSchema acima) — o token só pode ser gerado pelo
+// backend, nunca enviado pelo cliente.
+const ownerPortalToggleSchema = z.object({ enabled: z.boolean() });
+
+realEstateRouter.patch(
+  "/owners/:id/portal",
+  requirePermission("owners.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const { enabled } = ownerPortalToggleSchema.parse(req.body);
+      const owner = await setMysqlOwnerPortalEnabled(
+        req.access!.company.id,
+        String(req.params.id),
+        enabled,
+      );
+      await writeAuthAudit(
+        getPrisma(),
+        req.access!.company.id,
+        req.access!.appUser.id,
+        enabled ? "owner.portal_enabled" : "owner.portal_disabled",
+        "property_owner",
+        owner.id,
+        { enabled, timestamp: new Date().toISOString() },
+      );
+      res.json({ owner });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+realEstateRouter.post(
+  "/owners/:id/portal/regenerate",
+  requirePermission("owners.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const owner = await regenerateMysqlOwnerPortalToken(
+        req.access!.company.id,
+        String(req.params.id),
+      );
+      // Nunca registrar o token completo em auditoria/log — apenas o fato de
+      // que a rotação ocorreu e quando.
+      await writeAuthAudit(
+        getPrisma(),
+        req.access!.company.id,
+        req.access!.appUser.id,
+        "owner.portal_token_regenerated",
+        "property_owner",
+        owner.id,
+        { timestamp: new Date().toISOString() },
+      );
+      res.json({ owner });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 realEstateRouter.get("/properties", requirePermission("properties.view"), createListPropertiesHandler());
 

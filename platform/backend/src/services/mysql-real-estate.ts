@@ -185,18 +185,23 @@ export async function ensurePropertyBelongsToCompany(propertyId: string, company
   return property.id;
 }
 
+function ownerNotFoundError() {
+  // Fase 4B.1: mesmo código/mensagem usados por ensureOwnerBelongsToCompany,
+  // reaproveitado aqui para as ações de portal (regenerate/enable/disable) —
+  // 404 tenant-safe: nunca revela se o id existe em OUTRA empresa.
+  return Object.assign(new Error("Proprietário inválido para esta empresa."), {
+    statusCode: 404,
+    code: "OWNER_NOT_FOUND",
+  });
+}
+
 async function ensureOwnerBelongsToCompany(ownerId: string, companyId: string) {
   const owner = await prisma().propertyOwner.findFirst({
     where: { id: ownerId, companyId },
     select: { id: true },
   });
 
-  if (!owner) {
-    throw Object.assign(new Error("Proprietário inválido para esta empresa."), {
-      statusCode: 404,
-      code: "OWNER_NOT_FOUND",
-    });
-  }
+  if (!owner) throw ownerNotFoundError();
 
   return owner.id;
 }
@@ -273,6 +278,131 @@ export async function archiveMysqlOwner(companyId: string, ownerId: string) {
   const owner = await prisma().propertyOwner.update({
     where: { id: ownerId },
     data: { status: "archived" },
+  });
+
+  return serializeOwner(owner);
+}
+
+const OWNER_PORTAL_TOKEN_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function ownerPortalNotFoundError() {
+  return Object.assign(new Error("Portal do proprietário não encontrado."), {
+    statusCode: 404,
+    code: "PORTAL_NOT_FOUND",
+  });
+}
+
+// Fase 4B.1 — extraído de routes/public-portals.ts para ganhar cobertura de
+// teste automatizada (a lógica de resolução tenant-safe do portal antes só
+// existia dentro do handler HTTP, sem nenhum teste). Resolve tudo a partir
+// do token opaco — nunca aceita companyId/ownerId vindos do cliente. Cobre
+// somente a parte Prisma/MySQL (dados do proprietário + imóveis); o
+// financeiro (ainda Supabase legado, com degradação graciosa) e a
+// atualização de portalLastAccessAt continuam no handler HTTP.
+export async function loadMysqlOwnerPortalCore(token: string) {
+  if (!OWNER_PORTAL_TOKEN_RE.test(token)) throw ownerPortalNotFoundError();
+
+  const owner = await prisma().propertyOwner.findFirst({
+    where: { portalToken: token, portalEnabled: true },
+    select: {
+      id: true,
+      companyId: true,
+      ownerType: true,
+      name: true,
+      document: true,
+      email: true,
+      phone: true,
+      whatsapp: true,
+      status: true,
+    },
+  });
+
+  if (!owner || owner.status !== "active") throw ownerPortalNotFoundError();
+
+  const [company, properties] = await Promise.all([
+    prisma().company.findFirst({
+      where: { id: owner.companyId },
+      select: { id: true, name: true, status: true },
+    }),
+    prisma().property.findMany({
+      where: { companyId: owner.companyId, ownerId: owner.id, status: { not: "archived" } },
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        operation: true,
+        status: true,
+        neighborhood: true,
+        city: true,
+        state: true,
+        rentPriceCents: true,
+        salePriceCents: true,
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  if (!company) throw ownerPortalNotFoundError();
+
+  return { owner, company, properties };
+}
+
+export async function touchMysqlOwnerPortalAccess(ownerId: string) {
+  await prisma().propertyOwner.update({
+    where: { id: ownerId },
+    data: { portalLastAccessAt: new Date() },
+  });
+}
+
+// Fase 4B.1 — endurecimento do Portal do Proprietário.
+//
+// Regenera o token do portal do proprietário. A troca é uma única
+// UPDATE (Prisma `.update()`), portanto atômica por linha: nunca existe uma
+// janela em que o token antigo e o novo estejam simultaneamente válidos — a
+// linha passa de um valor para o outro em uma única operação de escrita.
+// portalEnabled não é alterado aqui (Item C do escopo: regenerar não deve
+// reabilitar silenciosamente um portal que um operador desabilitou de
+// propósito).
+export async function regenerateMysqlOwnerPortalToken(companyId: string, ownerId: string) {
+  await ensureOwnerBelongsToCompany(ownerId, companyId);
+  const owner = await prisma().propertyOwner.update({
+    where: { id: ownerId },
+    data: { portalToken: randomUUID() },
+  });
+
+  return serializeOwner(owner);
+}
+
+// Habilita/desabilita o acesso público ao portal sem exigir arquivar o
+// proprietário inteiro (Item C do escopo).
+//
+// Comportamento documentado, sem ambiguidade de segurança:
+// - Desabilitar: portalEnabled=false; o token permanece armazenado (não é
+//   apagado), mas GET /public/portals/owners/:token passa a negar acesso
+//   imediatamente (o endpoint público filtra por portalEnabled=true).
+// - Habilitar: portalEnabled=true; reaproveita o token já existente (não
+//   gera um novo automaticamente — evita invalidar um link já compartilhado
+//   sem que o operador tenha pedido isso). Só gera um token novo aqui se o
+//   proprietário nunca teve um (portalToken NULL, caso legado/importado).
+//   Para trocar o link deliberadamente, usar regenerateMysqlOwnerPortalToken.
+export async function setMysqlOwnerPortalEnabled(
+  companyId: string,
+  ownerId: string,
+  enabled: boolean,
+) {
+  const current = await prisma().propertyOwner.findFirst({
+    where: { id: ownerId, companyId },
+    select: { id: true, portalToken: true },
+  });
+  if (!current) throw ownerNotFoundError();
+
+  const owner = await prisma().propertyOwner.update({
+    where: { id: ownerId },
+    data: {
+      portalEnabled: enabled,
+      ...(enabled && !current.portalToken ? { portalToken: randomUUID() } : {}),
+    },
   });
 
   return serializeOwner(owner);
