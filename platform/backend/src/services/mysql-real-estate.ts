@@ -4,7 +4,11 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ingestLead } from "./lead-intake.js";
 import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
 import { getStorageProviderForName } from "./storage/index.js";
-import { findStoredFileForEntity } from "./storage/stored-files.js";
+import {
+  findStoredFileByIdForEntity,
+  findStoredFileForEntity,
+  findStoredFilesForEntity,
+} from "./storage/stored-files.js";
 import { WATERMARK_POSITIONS, type WatermarkOverlay, type WatermarkPosition } from "./storage/types.js";
 
 type PropertyInput = Record<string, any>;
@@ -494,6 +498,131 @@ export async function loadMysqlOwnerPortalLeadsSummary(
   }
 
   return summaries;
+}
+
+// Fase 4D — Documentos do Proprietário (gestão interna + Portal).
+//
+// StoredFile é polimórfico (entityType+entityId como strings, sem FK direta)
+// e este é o primeiro uso do padrão "vários arquivos por entidade" (ver
+// findStoredFilesForEntity em storage/stored-files.ts): entityType sempre
+// "property_owner", entityId sempre o id do PropertyOwner — o mesmo par já
+// usado nos audits de portal (owner.portal_enabled/regenerated). purpose
+// sempre "owner_document" (já mapeado para a permissão owners.view em
+// purposes.ts). Sem migration: nenhuma tabela nova, só uma pasta a mais de
+// linhas StoredFile com o mesmo entityId.
+//
+// Vínculo opcional a um imóvel (Item do escopo: "vincular ao imóvel se a
+// arquitetura suportar"): como StoredFile não tem coluna propertyId, usamos
+// metadataJson.property_id — mas NUNCA confiamos nele às cegas ao exibir:
+// toOwnerDocumentDto só devolve o property_id quando ele está de fato entre
+// os imóveis já resolvidos do próprio proprietário (evita que um dado
+// inconsistente/manipulado vaze o id de imóvel de outro proprietário).
+export type OwnerDocumentSummary = {
+  id: string;
+  name: string;
+  category: "pdf" | "image" | "file";
+  mime_type: string;
+  created_at: string;
+  property_id: string | null;
+};
+
+function ownerDocumentCategory(mimeType: string): OwnerDocumentSummary["category"] {
+  if (mimeType === "application/pdf") return "pdf";
+  if (mimeType.startsWith("image/")) return "image";
+  return "file";
+}
+
+function toOwnerDocumentDto(
+  record: { id: string; originalFilename: string; mimeType: string; createdAt: Date; metadataJson: unknown },
+  ownedPropertyIds: Set<string>,
+): OwnerDocumentSummary {
+  const metadata =
+    record.metadataJson && typeof record.metadataJson === "object" ? (record.metadataJson as Record<string, unknown>) : null;
+  const rawPropertyId = metadata && typeof metadata.property_id === "string" ? metadata.property_id : null;
+  return {
+    id: record.id,
+    // originalFilename já é o nome que o próprio usuário/portal enviou —
+    // nunca publicId/storage path (que nunca chegam nesta função).
+    name: record.originalFilename,
+    category: ownerDocumentCategory(record.mimeType),
+    mime_type: record.mimeType,
+    created_at: record.createdAt.toISOString(),
+    property_id: rawPropertyId && ownedPropertyIds.has(rawPropertyId) ? rawPropertyId : null,
+  };
+}
+
+/** Confirma que o proprietário existe e é desta empresa (404 tenant-safe se não). */
+export async function ensureMysqlOwnerExists(companyId: string, ownerId: string) {
+  await ensureOwnerBelongsToCompany(ownerId, companyId);
+}
+
+/** Uso interno (gestão em /app/proprietarios, requer owners.view/owners.manage). */
+export async function listMysqlOwnerDocuments(companyId: string, ownerId: string): Promise<OwnerDocumentSummary[]> {
+  await ensureOwnerBelongsToCompany(ownerId, companyId);
+  const [records, properties] = await Promise.all([
+    findStoredFilesForEntity(companyId, "property_owner", ownerId, "owner_document"),
+    prisma().property.findMany({ where: { companyId, ownerId }, select: { id: true } }),
+  ]);
+  const ownedPropertyIds = new Set(properties.map((property) => property.id));
+  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds));
+}
+
+/**
+ * Valida (sem confiar no cliente) que, se um property_id foi informado ao
+ * anexar um documento, o imóvel de fato existe, é da mesma empresa e
+ * pertence a este mesmo proprietário — nunca aceita vincular a um imóvel de
+ * outro proprietário/empresa.
+ */
+export async function ensureMysqlOwnerDocumentPropertyLink(
+  companyId: string,
+  ownerId: string,
+  propertyId: string | null | undefined,
+) {
+  if (!propertyId) return null;
+  const property = await prisma().property.findFirst({
+    where: { id: propertyId, companyId, ownerId },
+    select: { id: true },
+  });
+  if (!property) {
+    throw Object.assign(new Error("Imóvel inválido para este proprietário."), {
+      statusCode: 422,
+      code: "INVALID_OWNER_DOCUMENT_PROPERTY",
+    });
+  }
+  return property.id;
+}
+
+/**
+ * Uso público (Portal do Proprietário — GET /public/portals/owners/:token).
+ * `propertyIds` sempre vem da lista de imóveis já resolvida tenant-safe por
+ * loadMysqlOwnerPortalCore, nunca do cliente — mesmo padrão de
+ * loadMysqlOwnerPortalLeadsSummary.
+ */
+export async function loadMysqlOwnerPortalDocuments(
+  companyId: string,
+  ownerId: string,
+  propertyIds: string[],
+): Promise<OwnerDocumentSummary[]> {
+  const records = await findStoredFilesForEntity(companyId, "property_owner", ownerId, "owner_document");
+  const ownedPropertyIds = new Set(propertyIds);
+  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds));
+}
+
+/**
+ * Resolve um documento específico para download/visualização a partir do
+ * Portal do Proprietário — companyId/ownerId SEMPRE vêm do token já
+ * resolvido tenant-safe (loadMysqlOwnerPortalCore), nunca do cliente.
+ * documentId é a única entrada não confiável aqui, e é validado nas 3
+ * dimensões que importam: mesma empresa, mesmo proprietário (entityId),
+ * purpose ainda "owner_document" — qualquer descasamento (outro
+ * proprietário, outra empresa, outro purpose, id inexistente/arbitrário)
+ * devolve null, e a rota traduz isso em um 404 idêntico ao de "token
+ * inválido" (nunca revela qual condição falhou).
+ */
+export async function loadMysqlOwnerPortalDocumentFile(companyId: string, ownerId: string, documentId: string) {
+  const record = await findStoredFileByIdForEntity(companyId, documentId, "property_owner", ownerId);
+  if (!record || record.purpose !== "owner_document") return null;
+  return record;
 }
 
 // Fase 4B.1 — endurecimento do Portal do Proprietário.

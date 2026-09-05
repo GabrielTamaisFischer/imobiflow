@@ -16,10 +16,13 @@ import {
   createMysqlPropertyMedia,
   deleteMysqlPropertyMedia,
   DEFAULT_PROPERTY_PAGE_SIZE,
+  ensureMysqlOwnerDocumentPropertyLink,
+  ensureMysqlOwnerExists,
   getMysqlProperty,
   getMysqlPropertyByCode,
   getMysqlPropertyByExternalId,
   grantMysqlPropertyAccess,
+  listMysqlOwnerDocuments,
   listMysqlOwners,
   listMysqlProperties,
   listMysqlPropertyAccess,
@@ -45,7 +48,9 @@ import {
 } from "../services/storage/index.js";
 import {
   createStoredFileRecord,
+  deleteStoredFileByIdForEntity,
   deleteStoredFileRecordsForEntity,
+  findStoredFileByIdForEntity,
   findStoredFileForEntity,
 } from "../services/storage/stored-files.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
@@ -395,6 +400,155 @@ realEstateRouter.post(
         { timestamp: new Date().toISOString() },
       );
       res.json({ owner });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// Fase 4D — gestão interna de documentos do proprietário (permissão
+// owners.manage para enviar/remover, owners.view para listar — mesma regra
+// já usada em todo o CRUD de owners acima; um corretor sem essa permissão
+// não consegue gerenciar documentos, exatamente como pedido no escopo).
+const ownerDocumentUploadSchema = z.object({
+  file_name: z.string().min(1).max(180),
+  mime_type: z.enum(["application/pdf", "image/jpeg", "image/png", "image/webp", "image/avif"]),
+  size_bytes: z.number().int().positive().max(10 * 1024 * 1024),
+  content_base64: z.string().min(1),
+  property_id: z.string().uuid().optional(),
+});
+
+realEstateRouter.get(
+  "/owners/:id/documents",
+  requirePermission("owners.view"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const documents = await listMysqlOwnerDocuments(req.access!.company.id, String(req.params.id));
+      res.json({ documents });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+realEstateRouter.post(
+  "/owners/:id/documents",
+  requirePermission("owners.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const ownerId = String(req.params.id);
+      await ensureMysqlOwnerExists(companyId, ownerId);
+      const input = ownerDocumentUploadSchema.parse(req.body);
+      const propertyId = await ensureMysqlOwnerDocumentPropertyLink(companyId, ownerId, input.property_id ?? null);
+
+      const body = decodeBase64File(input.content_base64);
+      const policy = validateUploadFile({
+        purpose: "document",
+        fileName: input.file_name,
+        mimeType: input.mime_type,
+        declaredSizeBytes: input.size_bytes,
+        body,
+      });
+
+      const storage = getStorageProvider();
+      const uploaded = await storage.uploadFile({
+        companyId,
+        entityType: "property_owner",
+        entityId: ownerId,
+        purpose: "document",
+        fileName: input.file_name,
+        mimeType: policy.normalizedMimeType,
+        sizeBytes: policy.measuredSizeBytes,
+        body,
+        folder: buildStorageFolder({ companyId, purpose: "document", ownerId }),
+      });
+
+      const record = await createStoredFileRecord({
+        companyId,
+        entityType: "property_owner",
+        entityId: ownerId,
+        file: uploaded,
+        uploadedBy: req.access!.appUser.id,
+        purpose: "owner_document",
+        metadata: propertyId ? { property_id: propertyId } : null,
+      });
+
+      await writeAuthAudit(
+        getPrisma(),
+        companyId,
+        req.access!.appUser.id,
+        "owner.document_uploaded",
+        "property_owner",
+        ownerId,
+        {
+          storedFileId: record.id,
+          fileName: input.file_name,
+          mimeType: policy.normalizedMimeType,
+          sizeBytes: policy.measuredSizeBytes,
+          propertyId: propertyId ?? null,
+          timestamp: new Date().toISOString(),
+        },
+      );
+
+      res.status(201).json({
+        document: {
+          id: record.id,
+          name: record.originalFilename,
+          category: record.mimeType === "application/pdf" ? "pdf" : record.mimeType.startsWith("image/") ? "image" : "file",
+          mime_type: record.mimeType,
+          created_at: record.createdAt.toISOString(),
+          property_id: propertyId,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+realEstateRouter.delete(
+  "/owners/:id/documents/:documentId",
+  requirePermission("owners.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const ownerId = String(req.params.id);
+      const documentId = String(req.params.documentId);
+      await ensureMysqlOwnerExists(companyId, ownerId);
+
+      const record = await findStoredFileByIdForEntity(companyId, documentId, "property_owner", ownerId);
+      // Purpose isolation (obrigatório na F4D): a query acima já filtra por
+      // company/entityType/entityId, mas nunca por purpose — sem esta
+      // checagem, um StoredFile de outro purpose (ex.: mídia de imóvel
+      // salva com o mesmo entityType/entityId por acidente futuro) ligado
+      // ao mesmo property_owner poderia ser apagado por esta rota só por
+      // ter o id informado. 404 idêntico ao de "não encontrado" — nunca
+      // revela se o id existe com outro purpose.
+      if (!record || record.purpose !== "owner_document") {
+        throw Object.assign(new Error("Documento não encontrado."), {
+          statusCode: 404,
+          code: "OWNER_DOCUMENT_NOT_FOUND",
+        });
+      }
+
+      await getStorageProviderForName(record.provider as StorageProviderName).deleteFile({
+        publicId: record.publicId,
+        resourceType: record.resourceType as StorageResourceType,
+      });
+      await deleteStoredFileByIdForEntity(companyId, documentId, "property_owner", ownerId);
+
+      await writeAuthAudit(
+        getPrisma(),
+        companyId,
+        req.access!.appUser.id,
+        "owner.document_removed",
+        "property_owner",
+        ownerId,
+        { storedFileId: documentId, timestamp: new Date().toISOString() },
+      );
+
+      res.json({ ok: true, document_id: documentId });
     } catch (error) {
       next(error);
     }

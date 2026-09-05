@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { PortalPropertyLeadsSummary } from "@/product/public-portals";
-import { buildLeadsSummaryDisplay } from "./portal.proprietario.$token";
+import type {
+  PortalOwnerDocument,
+  PortalProperty,
+  PortalPropertyLeadsSummary,
+} from "@/product/public-portals";
+import { buildLeadsSummaryDisplay, describeOwnerDocument } from "./portal.proprietario.$token";
 
 // Fase 4C — TESTES OBRIGATÓRIOS (FRONTEND).
 //
@@ -142,5 +146,128 @@ describe("buildLeadsSummaryDisplay (Fase 4C)", () => {
     const propertyB = buildLeadsSummaryDisplay(summary({ status: "sem_interesse" }));
     expect(propertyA.kind).toBe("summary");
     expect(propertyB.kind).toBe("empty");
+  });
+});
+
+// Fase 4D — TESTES OBRIGATÓRIOS (FRONTEND) — itens 16-22 do escopo.
+//
+// Mesmo padrão de buildLeadsSummaryDisplay acima: extraímos a decisão pura
+// de "o que exibir" para um documento (describeOwnerDocument) e testamos
+// aqui sem harness de renderização. Cobertura dos 7 itens do escopo:
+//   16. seção Documentos       -> o próprio componente sempre renderiza o
+//       Panel "Documentos" (ver OwnerPortalPage); a decisão testável e
+//       isolável aqui é o que cada linha exibe (describeOwnerDocument).
+//   17. estado vazio           -> a decisão "sem documentos" é um único
+//       `data.documents.length === 0` direto no JSX (ver OwnerPortalPage),
+//       trivial demais para justificar extração como função pura — ao
+//       contrário de leads_summary, aqui não há estado intermediário a
+//       decidir (documento existe → aparece; lista vazia → EmptyText).
+//   18. múltiplos documentos   -> "múltiplos documentos são independentes"
+//       abaixo.
+//   19. ação visualizar/baixar -> "actionLabel" nos testes abaixo.
+//   20. erro seguro            -> reaproveita o mesmo ErrorState/banner de
+//       erro já coberto pelo carregamento geral do portal (idêntico ao
+//       tratamento de erro de F4B/F4C nesta mesma página); nenhum estado de
+//       erro é específico de documentos.
+//   21. mobile                 -> a linha de documento usa os mesmos
+//       utilitários responsivos (flex-wrap, truncate) já usados em
+//       OwnerCharge/OwnerTransfer nesta página; sem lógica condicional por
+//       breakpoint que precise de teste de unidade.
+//   22. não mostra dados técnicos -> "nunca vaza campo técnico" abaixo.
+function portalProperty(overrides: Partial<PortalProperty> = {}): PortalProperty {
+  return {
+    id: "property-1",
+    code: "AP-204",
+    title: "Apartamento Jardim Europa",
+    neighborhood: "Jardim Europa",
+    city: "São Paulo",
+    state: "SP",
+    ...overrides,
+  };
+}
+
+function ownerDocument(overrides: Partial<PortalOwnerDocument> = {}): PortalOwnerDocument {
+  return {
+    id: "doc-1",
+    name: "Contrato de locação.pdf",
+    category: "pdf",
+    mime_type: "application/pdf",
+    created_at: "2026-09-01T10:00:00.000Z",
+    property_id: null,
+    ...overrides,
+  };
+}
+
+describe("describeOwnerDocument (Fase 4D)", () => {
+  it("19a. documento PDF usa ação 'Visualizar' (pode abrir em nova aba)", () => {
+    const display = describeOwnerDocument(ownerDocument({ category: "pdf" }), []);
+    expect(display.actionLabel).toBe("Visualizar");
+  });
+
+  it("19b. documento de imagem também usa ação 'Visualizar'", () => {
+    const display = describeOwnerDocument(
+      ownerDocument({ category: "image", mime_type: "image/jpeg" }),
+      [],
+    );
+    expect(display.actionLabel).toBe("Visualizar");
+  });
+
+  it("19c. documento de categoria 'file' (formato não visualizável inline) usa ação 'Baixar'", () => {
+    const display = describeOwnerDocument(
+      ownerDocument({ category: "file", mime_type: "application/octet-stream" }),
+      [],
+    );
+    expect(display.actionLabel).toBe("Baixar");
+  });
+
+  it("detalhe combina categoria + data, sem imóvel quando property_id é null", () => {
+    const display = describeOwnerDocument(ownerDocument({ property_id: null }), [portalProperty()]);
+    expect(display.detail).toMatch(/^PDF · /);
+    expect(display.detail).not.toContain("Apartamento");
+  });
+
+  it("detalhe inclui o título do imóvel apenas quando o property_id bate com um imóvel já resolvido do próprio proprietário", () => {
+    const display = describeOwnerDocument(ownerDocument({ property_id: "property-1" }), [
+      portalProperty({ id: "property-1", title: "Apartamento Jardim Europa" }),
+    ]);
+    expect(display.detail).toContain("Apartamento Jardim Europa");
+  });
+
+  it("property_id que não corresponde a nenhum imóvel resolvido é ignorado no detalhe (nunca inventa/vaza um imóvel)", () => {
+    const display = describeOwnerDocument(
+      ownerDocument({ property_id: "property-of-another-owner" }),
+      [portalProperty({ id: "property-1" })],
+    );
+    expect(display.detail).not.toContain("property-of-another-owner");
+  });
+
+  it("nome em branco cai em rótulo seguro em vez de exibir string vazia", () => {
+    const display = describeOwnerDocument(ownerDocument({ name: "   " }), []);
+    expect(display.label).toBe("Documento sem nome");
+  });
+
+  it("22. nunca vaza campo técnico (id, mime_type, category cru) no texto exibido", () => {
+    const display = describeOwnerDocument(
+      ownerDocument({ id: "doc-should-not-leak", mime_type: "application/pdf" }),
+      [],
+    );
+    const serialized = JSON.stringify(display);
+    expect(serialized).not.toMatch(/doc-should-not-leak|application\/pdf|publicId|secureUrl/i);
+  });
+
+  it("18. múltiplos documentos são independentes (chamadas sucessivas não vazam estado entre si)", () => {
+    const first = describeOwnerDocument(ownerDocument({ id: "doc-1", category: "pdf" }), []);
+    const second = describeOwnerDocument(
+      ownerDocument({
+        id: "doc-2",
+        category: "file",
+        mime_type: "application/zip",
+        name: "Planilha.zip",
+      }),
+      [],
+    );
+    expect(first.actionLabel).toBe("Visualizar");
+    expect(second.actionLabel).toBe("Baixar");
+    expect(second.label).toBe("Planilha.zip");
   });
 });

@@ -1,4 +1,4 @@
-import { apiRequest } from "./api";
+import { API_URL, apiRequest } from "./api";
 
 type CompanySummary = {
   id: string;
@@ -31,6 +31,17 @@ export type PortalProperty = {
   // para não quebrar nenhum consumidor/teste antigo que construa um
   // PortalProperty parcial sem esse campo.
   leads_summary?: PortalPropertyLeadsSummary;
+};
+
+// Fase 4D — documento do proprietário, já no formato privacy-safe devolvido
+// pelo backend (nunca path/publicId/provider/metadata internos).
+export type PortalOwnerDocument = {
+  id: string;
+  name: string;
+  category: "pdf" | "image" | "file";
+  mime_type: string;
+  created_at: string;
+  property_id: string | null;
 };
 
 export type PortalCharge = {
@@ -107,6 +118,11 @@ export type OwnerPortalResponse = {
   properties: PortalProperty[];
   transfers: PortalTransfer[];
   charges: PortalCharge[];
+  // Fase 4D — sempre presente na resposta real da API; opcional aqui só
+  // para não quebrar nenhum consumidor/teste antigo que construa um
+  // OwnerPortalResponse parcial sem esse campo (mesmo padrão de
+  // PortalProperty.leads_summary acima).
+  documents?: PortalOwnerDocument[];
 };
 
 export type TenantPortalResponse = {
@@ -140,6 +156,14 @@ export type TenantPortalResponse = {
 export async function getOwnerPortal(token: string) {
   if (token === "preview") return buildPreviewOwnerPortal();
   return apiRequest<OwnerPortalResponse>(`/public/portals/owners/${token}`);
+}
+
+// Fase 4D — link direto (view/download) de um documento do proprietário.
+// Nunca aponta para a secureUrl do provider de storage: sempre para o
+// próprio backend do ImobiFlow, que resolve/valida token+documentId antes de
+// servir o conteúdo (ver GET /public/portals/owners/:token/documents/:id).
+export function getOwnerPortalDocumentUrl(token: string, documentId: string) {
+  return `${API_URL}/public/portals/owners/${token}/documents/${documentId}`;
 }
 
 export async function getTenantPortal(token: string) {
@@ -182,6 +206,16 @@ function buildPreviewOwnerPortal(): OwnerPortalResponse {
           status: "em_andamento",
           corretor_responsavel: "Marina Souza",
         },
+      },
+    ],
+    documents: [
+      {
+        id: "preview-document",
+        name: "Contrato de locação.pdf",
+        category: "pdf",
+        mime_type: "application/pdf",
+        created_at: new Date().toISOString(),
+        property_id: "preview-property",
       },
     ],
     transfers: [

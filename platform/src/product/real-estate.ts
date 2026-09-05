@@ -5,6 +5,7 @@ import type { EligibleUser, ResourceAccessRow, ResourcePermission } from "./shar
 
 const previewOwnersKey = "imobiflow.preview.property_owners";
 const previewPropertiesKey = "imobiflow.preview.properties";
+const previewOwnerDocumentsKey = "imobiflow.preview.owner_documents";
 
 export type PropertyOwner = {
   id: string;
@@ -355,6 +356,72 @@ export async function regenerateOwnerPortalToken(ownerId: string) {
     method: "POST",
     token: getStoredToken() ?? undefined,
   });
+}
+
+// Fase 4D — Documentos do Proprietário (gestão interna, /app/proprietarios).
+export type OwnerDocument = {
+  id: string;
+  name: string;
+  category: "pdf" | "image" | "file";
+  mime_type: string;
+  created_at: string;
+  property_id: string | null;
+};
+
+export type OwnerDocumentUploadInput = {
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  content_base64: string;
+  property_id?: string;
+};
+
+export async function listOwnerDocuments(ownerId: string) {
+  if (isPreviewRealEstate()) {
+    return { documents: readPreviewOwnerDocuments()[ownerId] ?? [] };
+  }
+
+  return apiRequest<{ documents: OwnerDocument[] }>(`/real-estate/owners/${ownerId}/documents`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function uploadOwnerDocument(ownerId: string, input: OwnerDocumentUploadInput) {
+  if (isPreviewRealEstate()) {
+    const map = readPreviewOwnerDocuments();
+    const document: OwnerDocument = {
+      id: crypto.randomUUID(),
+      name: input.file_name,
+      category:
+        input.mime_type === "application/pdf" ? "pdf" : input.mime_type.startsWith("image/") ? "image" : "file",
+      mime_type: input.mime_type,
+      created_at: new Date().toISOString(),
+      property_id: input.property_id ?? null,
+    };
+    map[ownerId] = [document, ...(map[ownerId] ?? [])];
+    writePreviewOwnerDocuments(map);
+    return { document };
+  }
+
+  return apiRequest<{ document: OwnerDocument }>(`/real-estate/owners/${ownerId}/documents`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function deleteOwnerDocument(ownerId: string, documentId: string) {
+  if (isPreviewRealEstate()) {
+    const map = readPreviewOwnerDocuments();
+    map[ownerId] = (map[ownerId] ?? []).filter((document) => document.id !== documentId);
+    writePreviewOwnerDocuments(map);
+    return { ok: true, document_id: documentId };
+  }
+
+  return apiRequest<{ ok: boolean; document_id: string }>(
+    `/real-estate/owners/${ownerId}/documents/${documentId}`,
+    { method: "DELETE", token: getStoredToken() ?? undefined },
+  );
 }
 
 export async function listProperties(filters: PropertyListFilters = {}): Promise<PropertyPage> {
@@ -731,6 +798,23 @@ function readPreviewOwners() {
   } catch {
     return [];
   }
+}
+
+function readPreviewOwnerDocuments(): Record<string, OwnerDocument[]> {
+  if (typeof window === "undefined") return {};
+
+  try {
+    return JSON.parse(window.localStorage.getItem(previewOwnerDocumentsKey) ?? "{}") as Record<
+      string,
+      OwnerDocument[]
+    >;
+  } catch {
+    return {};
+  }
+}
+
+function writePreviewOwnerDocuments(map: Record<string, OwnerDocument[]>) {
+  safeSetPreviewItem(previewOwnerDocumentsKey, JSON.stringify(map));
 }
 
 function writePreviewOwners(owners: PropertyOwner[]) {

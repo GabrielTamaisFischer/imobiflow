@@ -3,6 +3,8 @@ import type { Request } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import {
   loadMysqlOwnerPortalCore,
+  loadMysqlOwnerPortalDocumentFile,
+  loadMysqlOwnerPortalDocuments,
   loadMysqlOwnerPortalLeadsSummary,
   touchMysqlOwnerPortalAccess,
 } from "../services/mysql-real-estate.js";
@@ -109,14 +111,15 @@ publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
     // token ausente/mal formado, inexistente, portalEnabled=false ou
     // proprietário não ativo — nunca revela qual dessas condições ocorreu.
     const { owner, company, properties } = await loadMysqlOwnerPortalCore(token);
-    const [financials, leadsSummaryByProperty] = await Promise.all([
+    const propertyIds = properties.map((property) => property.id);
+    const [financials, leadsSummaryByProperty, documents] = await Promise.all([
       loadOwnerFinancials(owner.companyId, owner.id),
       // Fase 4C: nunca aceita property_id do cliente — sempre derivado da
       // lista de imóveis já resolvida tenant-safe acima.
-      loadMysqlOwnerPortalLeadsSummary(
-        owner.companyId,
-        properties.map((property) => property.id),
-      ),
+      loadMysqlOwnerPortalLeadsSummary(owner.companyId, propertyIds),
+      // Fase 4D: idem — ownerId/propertyIds sempre derivados do token já
+      // resolvido, nunca do cliente.
+      loadMysqlOwnerPortalDocuments(owner.companyId, owner.id, propertyIds),
     ]);
 
     await Promise.all([
@@ -169,11 +172,97 @@ publicPortalsRouter.get("/owners/:token", async (req, res, next) => {
       })),
       transfers: financials.transfers,
       charges: financials.charges,
+      // Fase 4D: evolução aditiva — sempre presente (nunca undefined) para
+      // manter o payload determinístico, mas 100% opcional para qualquer
+      // consumidor antigo que ignore campos desconhecidos (compatibilidade
+      // com o payload da F4B/F4C).
+      documents,
     });
   } catch (error) {
     next(error);
   }
 });
+
+// Fase 4D — download/visualização de um documento do proprietário. Só
+// existe porque o requisito de segurança de arquivo (nenhum arquivo privado
+// pode virar público só para facilitar o portal) exige nunca expor a
+// secureUrl bruta do provider de storage ao cliente: o token nunca é
+// suficiente para "adivinhar" um link de arquivo, e um id de documento
+// sozinho nunca é suficiente sem o token — ambos são validados juntos
+// contra o mesmo proprietário/empresa já resolvidos, com purpose travado em
+// owner_document. Cross-owner, cross-company, purpose errado ou id
+// inexistente/arbitrário caem todos no mesmo 404 tenant-safe.
+publicPortalsRouter.get("/owners/:token/documents/:documentId", async (req, res, next) => {
+  try {
+    const token = String(req.params.token ?? "");
+    const documentId = String(req.params.documentId ?? "");
+    const { owner } = await loadMysqlOwnerPortalCore(token);
+
+    const file = await loadMysqlOwnerPortalDocumentFile(owner.companyId, owner.id, documentId);
+    if (!file) throw notFound("Documento não encontrado.");
+
+    // Nunca confiamos na secureUrl do cliente — ela nunca sai do backend:
+    // buscamos o conteúdo aqui e servimos com nossos próprios headers
+    // (Content-Type/Content-Disposition sanitizados), em vez de redirecionar
+    // para a URL do provider (o que vazaria o domínio/host real do storage
+    // e devolveria os headers do provider, fora do nosso controle).
+    //
+    // Limitação conhecida e documentada (não mascarada como privacidade
+    // real): no plano gratuito do Cloudinary em uso hoje, `secureUrl` já é
+    // uma URL publicamente acessível por qualquer um que a obtenha por
+    // outro meio (não há delivery assinado habilitado) — "obscura", não
+    // "privada" de fato. Este endpoint é o que impede que o portal ou
+    // qualquer outra tela da aplicação exponha essa URL diretamente; ele não
+    // revoga acesso a quem já tiver a URL bruta por outra via.
+    let upstream: Response;
+    try {
+      upstream = await fetch(file.secureUrl);
+    } catch {
+      throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
+        statusCode: 502,
+        code: "OWNER_DOCUMENT_FETCH_FAILED",
+      });
+    }
+    if (!upstream.ok) {
+      throw Object.assign(new Error("Não foi possível carregar o documento no momento."), {
+        statusCode: 502,
+        code: "OWNER_DOCUMENT_FETCH_FAILED",
+      });
+    }
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const disposition =
+      file.mimeType === "application/pdf" || file.mimeType.startsWith("image/")
+        ? "inline"
+        : "attachment";
+    const safeFilename = sanitizeDownloadFilename(file.originalFilename);
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader("Content-Length", String(buffer.byteLength));
+    res.setHeader(
+      "Content-Disposition",
+      `${disposition}; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
+    );
+    // Nunca deixar o navegador tentar "adivinhar"/executar o conteúdo como
+    // outra coisa (ex.: um PDF malformado sendo tratado como HTML).
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+function sanitizeDownloadFilename(rawName: string) {
+  // Remove separadores de path, caracteres de controle e aspas — nunca
+  // confia no nome de arquivo original (veio de um upload) para compor um
+  // header HTTP diretamente.
+  const cleaned = rawName
+    .replace(/[/\\]/g, "-")
+    // eslint-disable-next-line no-control-regex
+    .replace(/["\x00-\x1f]/g, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 150) : "documento";
+}
 
 publicPortalsRouter.get("/tenants/:token", async (req, res, next) => {
   try {

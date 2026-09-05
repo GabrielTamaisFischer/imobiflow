@@ -31,6 +31,7 @@ export type StoredFileRecord = {
 type StoredFileDelegate = {
   create(input: { data: Record<string, unknown> }): Promise<StoredFileRecord>;
   findFirst(input: Record<string, unknown>): Promise<StoredFileRecord | null>;
+  findMany(input: Record<string, unknown>): Promise<StoredFileRecord[]>;
   deleteMany(input: Record<string, unknown>): Promise<{ count: number }>;
 };
 
@@ -131,6 +132,34 @@ export async function findStoredFileForEntity(
   });
   if (record && requestingPermissions) assertStoredFilePurposeAccess(record.purpose, requestingPermissions);
   return record;
+}
+
+/**
+ * Fase 4D: primeira função a listar *vários* StoredFile de uma mesma
+ * entidade — até agora todo consumidor existente (property_media,
+ * inspection_media, website_logo) modela "vários arquivos" através de uma
+ * tabela própria (property_media, inspection_media no Supabase) e usa
+ * StoredFile só como referência 1:1 de segurança por arquivo. Documentos do
+ * proprietário não têm (e esta fase não cria) uma tabela própria — StoredFile
+ * é a única fonte da lista, por isso `purpose` é obrigatório aqui: nunca
+ * listamos "todo arquivo desta entidade" sem também travar por propósito
+ * (evita que um StoredFile de outro uso futuro do mesmo entityType vaze para
+ * cá). `requestingPermissions`, quando informado, aplica o mesmo controle de
+ * acesso por propósito (A6) que os demais finders — se o propósito pedido
+ * não é permitido para quem chama, nem tenta listar.
+ */
+export async function findStoredFilesForEntity(
+  companyId: string,
+  entityType: string,
+  entityId: string,
+  purpose: string,
+  requestingPermissions?: string[],
+) {
+  if (requestingPermissions) assertStoredFilePurposeAccess(purpose, requestingPermissions);
+  return storedFileDelegate().findMany({
+    where: { companyId, entityType, entityId, purpose },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 export async function findStoredFileByIdForEntity(

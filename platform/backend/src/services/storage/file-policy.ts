@@ -47,9 +47,19 @@ const rules: Record<StoragePurpose, UploadRule> = {
     maxBytes: 4 * MiB,
     resourceType: "image",
   },
+  // Fase 4D: documentos do proprietário (purpose=owner_document no
+  // StoredFile) reaproveitam este mesmo StoragePurpose "document" — mas
+  // muitos documentos reais de proprietário são fotos/scans (RG, CNH,
+  // comprovante) e não só PDF. Ampliar para os mesmos formatos de imagem já
+  // aceitos em property_image (mesma allow-list, mesmos magic bytes já
+  // validados abaixo) é a extensão mínima necessária para cobrir o
+  // requisito da F4D sem inventar um novo StoragePurpose/enum. resourceType
+  // aqui é só o default: o upload real sempre recalcula via
+  // resourceTypeForMime(mimeType) por arquivo (ver CloudinaryStorageProvider
+  // e real-estate.ts), então PDF e imagem no mesmo purpose já funcionam.
   document: {
-    mimeTypes: ["application/pdf"],
-    extensions: [".pdf"],
+    mimeTypes: ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/avif"],
+    extensions: [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".avif"],
     maxBytes: 10 * MiB,
     resourceType: "raw",
   },

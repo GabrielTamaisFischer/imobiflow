@@ -18,6 +18,12 @@ const { database } = vi.hoisted(() => ({
     propertyOwner: { findFirst: vi.fn(), update: vi.fn() },
     company: { findFirst: vi.fn() },
     property: { findMany: vi.fn() },
+    // Fase 4D: a rota HTTP do portal agora também carrega documentos
+    // (loadMysqlOwnerPortalDocuments → findStoredFilesForEntity →
+    // storedFile.findMany). Default vazio nos testes que só cobrem o núcleo
+    // pré-F4D do portal — os cenários específicos de documentos ficam em
+    // owner-portal-documents.test.ts.
+    storedFile: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 

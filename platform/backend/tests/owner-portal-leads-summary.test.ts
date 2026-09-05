@@ -15,6 +15,11 @@ const { database } = vi.hoisted(() => ({
     siteLead: { findMany: vi.fn() },
     lead: { findMany: vi.fn() },
     appointment: { findMany: vi.fn() },
+    // Fase 4D: a rota HTTP do portal também carrega documentos agora
+    // (loadMysqlOwnerPortalDocuments → storedFile.findMany). Vazio por
+    // padrão aqui — a cobertura de documentos fica em
+    // owner-portal-documents.test.ts.
+    storedFile: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 

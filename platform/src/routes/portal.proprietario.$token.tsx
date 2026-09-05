@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Building2, Home, Loader2, ReceiptText, WalletCards } from "lucide-react";
+import { Building2, FileText, Home, Loader2, ReceiptText, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   getOwnerPortal,
+  getOwnerPortalDocumentUrl,
   type OwnerPortalResponse,
   type PortalCharge,
+  type PortalOwnerDocument,
   type PortalProperty,
   type PortalTransfer,
 } from "@/product/public-portals";
@@ -142,6 +144,23 @@ function OwnerPortalPage() {
               </Panel>
             </section>
 
+            <Panel title="Documentos">
+              {!data.documents || data.documents.length === 0 ? (
+                <EmptyText>Nenhum documento disponível para você no momento.</EmptyText>
+              ) : (
+                <div className="space-y-3">
+                  {data.documents.map((document) => (
+                    <OwnerDocumentRow
+                      key={document.id}
+                      token={token}
+                      document={document}
+                      properties={data.properties}
+                    />
+                  ))}
+                </div>
+              )}
+            </Panel>
+
             <Panel title="Repasses">
               {data.transfers.length === 0 ? (
                 <EmptyText>Nenhum repasse calculado ainda.</EmptyText>
@@ -213,6 +232,77 @@ export function buildLeadsSummaryDisplay(
   }
 
   return { kind: "summary", badges, detailParts };
+}
+
+// Fase 4D — decisão pura de o que exibir para um documento do proprietário,
+// extraída pelo mesmo motivo/padrão de buildLeadsSummaryDisplay (testável
+// sem harness de renderização React). Nunca lê/expõe nada além dos 5 campos
+// privacy-safe já devolvidos pelo backend (id, name, category, mime_type,
+// created_at, property_id) — nenhum path/publicId/provider aparece aqui
+// porque nunca chegam a este componente.
+export type OwnerDocumentDisplay = {
+  label: string;
+  detail: string;
+  actionLabel: "Visualizar" | "Baixar";
+};
+
+const ownerDocumentCategoryLabels: Record<PortalOwnerDocument["category"], string> = {
+  pdf: "PDF",
+  image: "Imagem",
+  file: "Arquivo",
+};
+
+// exportado apenas para ser testado por unidade (ver comentário acima); não
+// é um componente React, então não quebra fast refresh na prática.
+// eslint-disable-next-line react-refresh/only-export-components
+export function describeOwnerDocument(
+  document: PortalOwnerDocument,
+  properties: PortalProperty[],
+): OwnerDocumentDisplay {
+  const relatedProperty = document.property_id
+    ? (properties.find((property) => property.id === document.property_id) ?? null)
+    : null;
+
+  const detailParts = [ownerDocumentCategoryLabels[document.category] ?? "Arquivo", formatDate(document.created_at)];
+  if (relatedProperty) detailParts.push(relatedProperty.title);
+
+  return {
+    label: document.name.trim() || "Documento sem nome",
+    detail: detailParts.join(" · "),
+    actionLabel: document.category === "pdf" || document.category === "image" ? "Visualizar" : "Baixar",
+  };
+}
+
+function OwnerDocumentRow({
+  token,
+  document,
+  properties,
+}: {
+  token: string;
+  document: PortalOwnerDocument;
+  properties: PortalProperty[];
+}) {
+  const display = describeOwnerDocument(document, properties);
+
+  return (
+    <article className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-background p-4">
+      <div className="flex min-w-0 items-start gap-3">
+        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{display.label}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{display.detail}</p>
+        </div>
+      </div>
+      <a
+        href={getOwnerPortalDocumentUrl(token, document.id)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-primary hover:bg-muted"
+      >
+        {display.actionLabel}
+      </a>
+    </article>
+  );
 }
 
 function PropertyLeadsSummary({ property }: { property: PortalProperty }) {

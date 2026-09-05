@@ -70,6 +70,11 @@ export function buildStorageFolder(input: {
   purpose: StoragePurpose;
   propertyId?: string | null;
   websiteId?: string | null;
+  // Fase 4D: quando presente, documentos "document" ficam em uma pasta por
+  // proprietário (nunca misturados com a pasta genérica de empresa) — só
+  // organização de storage, não afeta autorização (quem controla acesso é o
+  // StoredFile.purpose + as rotas, não o path do provider).
+  ownerId?: string | null;
 }) {
   const root = sanitizeSegment(env.CLOUDINARY_UPLOAD_FOLDER || "imobiflow");
   const companyId = sanitizeSegment(input.companyId);
@@ -86,7 +91,9 @@ export function buildStorageFolder(input: {
     case "website_logo":
       return `${root}/${companyId}/logos`;
     case "document":
-      return `${root}/${companyId}/documents`;
+      return input.ownerId
+        ? `${root}/${companyId}/owners/${sanitizeSegment(input.ownerId)}/documents`
+        : `${root}/${companyId}/documents`;
     case "website_asset":
     default:
       return `${root}/${companyId}/websites/${sanitizeSegment(input.websiteId ?? "shared")}/assets`;
