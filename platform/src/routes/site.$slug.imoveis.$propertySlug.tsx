@@ -58,6 +58,16 @@ export type PropertyMedia = {
   caption?: string | null;
   position?: number | null;
   is_cover?: boolean | null;
+  // Fast-follow F3F: sinal de confiança derivado da ESTRUTURA de onde a
+  // mídia veio (property_media = upload real, validado pelo backend via
+  // validateUploadFile + storage próprio), nunca de extensão/hostname da
+  // URL. Marcado apenas no ponto de construção do array `media` (useMemo
+  // abaixo) — itens vindos de `videos_json` (link externo cru, sem
+  // validação de backend) nunca passam por esse ponto e por isso nunca
+  // recebem essa flag, ficando `undefined` (falsy) por padrão. Isso é o
+  // que impede que uma URL maliciosa cadastrada em videos_json vire
+  // `<video src>` (ver classifyMediaFrame).
+  isOwnUpload?: boolean | null;
 };
 
 type ExtendedProperty = Property & {
@@ -118,7 +128,10 @@ function PublicPropertyPage() {
   const site = data?.site;
   const property = data?.property as ExtendedProperty | null;
   const properties = data?.properties?.length ? data.properties : data?.featured_properties ?? [];
-  const media = useMemo(() => sortMedia(property?.property_media ?? []), [property?.property_media]);
+  const media = useMemo(
+    () => sortMedia(property?.property_media ?? []).map((item) => ({ ...item, isOwnUpload: true })),
+    [property?.property_media],
+  );
   const photos = useMemo(() => getPhotoMedia(property, media), [media, property]);
   const videos = useMemo(() => {
     const uploaded = media.filter(isVideoMedia);
@@ -516,7 +529,24 @@ export function classifyMediaFrame(media: PropertyMedia): MediaFrameKind {
   // substring solta — evita que uma URL maliciosa como
   // "https://evil.com/?youtube.com=1" seja tratada como vídeo cru (o que a
   // levaria ao <video src> em vez do fallback seguro).
-  if (isVideoMedia(media) && !safeEmbed) return { kind: "video-file" };
+  //
+  // Fast-follow F3F (2026-09-05): a checagem acima não bastava — QUALQUER
+  // item de `videos_json` (URL externa crua digitada por um usuário com
+  // `properties.manage`, nunca validada pelo backend) chega aqui com
+  // `media_type: "video"` (ver mapeamento de `videos` no componente), o
+  // que satisfazia `isVideoMedia(media)` mesmo sem ser upload próprio.
+  // Combinado com `!safeEmbed` (verdadeiro para qualquer URL fora do
+  // allowlist), isso fazia QUALQUER URL externa arbitrária/maliciosa virar
+  // `<video src={url} preload="metadata">` — o navegador do visitante
+  // disparava uma requisição automática para o domínio externo (vazando
+  // IP/User-Agent/Referer) mesmo sem nenhum player real reconhecido.
+  // `media.isOwnUpload` só é verdadeiro para itens que passaram pelo
+  // useMemo `media` (upload real, validado por validateUploadFile no
+  // backend e hospedado pelo storage do próprio sistema) — itens de
+  // videos_json nunca recebem essa flag e por isso caem no fallback seguro
+  // (link "Abrir mídia cadastrada", sem request automático) em vez de
+  // <video src>. Não usa extensão nem hostname como sinal de confiança.
+  if (isVideoMedia(media) && !safeEmbed && media.isOwnUpload) return { kind: "video-file" };
 
   if (safeEmbed) return { kind: "iframe", embedUrl: safeEmbed.embedUrl, provider: safeEmbed.provider };
 
