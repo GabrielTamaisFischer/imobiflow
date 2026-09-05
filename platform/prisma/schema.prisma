@@ -343,7 +343,7 @@ model PropertyOwner {
   addressJson         Json         @map("address_json")
   notes               String?      @db.Text
   status              String       @default("active") @db.VarChar(40)
-  portalToken         String?      @map("portal_token") @db.VarChar(120)
+  portalToken         String?      @unique @map("portal_token") @db.VarChar(120)
   portalEnabled       Boolean      @default(false) @map("portal_enabled")
   portalLastAccessAt  DateTime?    @map("portal_last_access_at")
   createdAt           DateTime     @default(now()) @map("created_at")

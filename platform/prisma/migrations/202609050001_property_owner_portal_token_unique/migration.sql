@@ -1,0 +1,24 @@
+-- Fase 4B.2 — Endurecimento do Portal do Proprietário.
+--
+-- property_owners.portal_token não tinha constraint UNIQUE no banco. O
+-- endpoint público (GET /public/portals/owners/:token) já usava `findFirst`
+-- (não `findUnique`) exatamente por causa dessa ausência — isso não é uma
+-- falha de exploração conhecida (não há vetor de IDOR via parâmetro, o
+-- token já é a única entrada), mas é um risco estrutural: nada no banco
+-- impedia dois PropertyOwner (inclusive de empresas diferentes) acabarem
+-- com o mesmo token por colisão ou por um bug futuro de geração.
+--
+-- Pré-check real (2026-09-05, ambiente de staging) confirmou que é seguro
+-- aplicar a constraint agora: 15 PropertyOwner no total, 0 com
+-- portal_token NULL, 15 com token preenchido, 0 tokens vazios/inválidos,
+-- 0 duplicados não-nulos, maior token com 36 caracteres (coluna suporta até
+-- 120). Ver `scripts/fase-4b1-portal-token-precheck.ts` e o log de
+-- desenvolvimento da Fase 4B.2.
+--
+-- MySQL/TiDB (InnoDB) trata múltiplos NULL como valores distintos em um
+-- índice UNIQUE — proprietários sem portal_token (legado/importados,
+-- nenhum hoje) continuam permitidos sem conflito.
+--
+-- Nenhuma outra tabela ou coluna é alterada por esta migração.
+ALTER TABLE `property_owners`
+  ADD UNIQUE INDEX `property_owners_portal_token_key` (`portal_token`);
