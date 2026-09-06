@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { itemConditions, inspectionStatuses, inspectionTypes, nextStatus } from "../src/routes/inspections-mysql.js";
+import { ensureMutable, itemConditions, inspectionStatuses, inspectionTypes, nextStatus } from "../src/routes/inspections-mysql.js";
 
 describe("F5B Inspection domain lifecycle", () => {
   it("supports only the canonical entry and exit inspection types in F5B", () => {
@@ -29,6 +29,13 @@ describe("F5B Inspection domain lifecycle", () => {
     expect(() => nextStatus("completed", "in_progress")).toThrow("Transição de status inválida");
   });
 
+  it("allows only an explicit completed to archived transition", () => {
+    expect(() => ensureMutable({ status: "completed" }, "archived")).not.toThrow();
+    expect(() => ensureMutable({ status: "completed" })).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    expect(() => ensureMutable({ status: "completed" }, "archived", true)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    expect(() => ensureMutable({ status: "archived" }, "archived")).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+  });
+
   it("keeps the structured condition vocabulary bounded", () => {
     expect(itemConditions).toEqual([
       "not_inspected",
@@ -53,6 +60,12 @@ describe("F5B Inspection domain lifecycle", () => {
     expect(source).toContain("expected_version: z.number().int().positive()");
     expect(source).toContain("version: expectedVersion");
     expect(source).toContain("INSPECTION_VERSION_CONFLICT");
+  });
+
+  it("keeps completed room and item mutations guarded by inspection lifecycle", async () => {
+    const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
+    expect(source).toContain('await ensureMutable(inspection);');
+    expect(source).toContain('ensureMutable(existing, status, hasOtherChanges);');
   });
 
   it("does not accept tenant or role fields in the create contract", async () => {

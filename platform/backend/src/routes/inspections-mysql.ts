@@ -108,8 +108,9 @@ async function findInspection(req: RequestWithAccess, inspectionId: string, perm
   return inspection;
 }
 
-async function ensureMutable(inspection: { status: string }) {
-  if (inspection.status === "completed" || inspection.status === "archived") {
+function ensureMutable(inspection: { status: string }, requestedStatus?: string, hasOtherChanges = false) {
+  const isArchivingCompleted = inspection.status === "completed" && requestedStatus === "archived" && !hasOtherChanges;
+  if (inspection.status === "archived" || (inspection.status === "completed" && !isArchivingCompleted)) {
     throw Object.assign(new Error("Vistoria concluída ou arquivada não pode ser alterada."), { statusCode: 409, code: "INSPECTION_NOT_MUTABLE" });
   }
 }
@@ -172,9 +173,10 @@ mysqlInspectionsRouter.patch("/:id", requirePermission("inspections.manage"), as
   try {
     const input = patchInspectionSchema.parse(req.body), access = req.access!, companyId = access.company.id;
     const existing = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(existing);
-    const assignedUserId = input.assigned_user_id === undefined ? undefined : await resolveAssignee(companyId, input.assigned_user_id, access.appUser.id);
     const status = input.status === undefined ? undefined : nextStatus(existing.status, input.status);
+    const hasOtherChanges = input.assigned_user_id !== undefined || input.notes !== undefined;
+    ensureMutable(existing, status, hasOtherChanges);
+    const assignedUserId = input.assigned_user_id === undefined ? undefined : await resolveAssignee(companyId, input.assigned_user_id, access.appUser.id);
     const updated = await getPrisma().$transaction(async (tx) => {
       await bumpVersion(tx, existing.id, companyId, input.expected_version, { ...(input.notes !== undefined ? { notes: input.notes } : {}), ...(assignedUserId ? { assignedUserId } : {}), ...(status ? { status, ...(status === "completed" ? { completedAt: new Date() } : {}), ...(status === "archived" ? { archivedAt: new Date() } : {}) } : {}) });
       const row = await tx.inspection.findUniqueOrThrow({ where: { id: existing.id }, include: inspectionInclude });
@@ -267,4 +269,4 @@ mysqlInspectionsRouter.delete("/:id/rooms/:roomId/items/:itemId", requirePermiss
   } catch (error) { next(error); }
 });
 
-export { inspectionTypes, inspectionStatuses, itemConditions, nextStatus, IdempotencyConflictError };
+export { inspectionTypes, inspectionStatuses, itemConditions, nextStatus, ensureMutable, IdempotencyConflictError };
