@@ -53,6 +53,14 @@ export type SystemRoleKey =
 
 const allPermissions = permissionCatalog.map(([key]) => key);
 const viewPermissions = allPermissions.filter((key) => key.endsWith(".view"));
+export const brokerResourceScopedPermissions = [
+  "properties.view",
+  "properties.manage",
+  "crm.view",
+  "crm.manage",
+  "inspections.view",
+  "inspections.manage",
+] as const;
 
 export const roleTemplates: ReadonlyArray<{
   systemKey: SystemRoleKey;
@@ -171,7 +179,7 @@ export async function ensureDefaultCompanyRoles(
       const permissionId = permissions.get(key);
       const resourceScoped =
         template.systemKey === "broker" &&
-        ["properties.view", "properties.manage", "crm.view", "crm.manage", "inspections.view", "inspections.manage"].includes(key);
+        brokerResourceScopedPermissions.includes(key as (typeof brokerResourceScopedPermissions)[number]);
       return permissionId
         ? [{ roleId, permissionId, scope: resourceScoped ? "shared" : "company" }]
         : [];
