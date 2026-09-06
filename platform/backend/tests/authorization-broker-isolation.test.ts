@@ -8,10 +8,13 @@ vi.mock("../src/lib/website-builder-prisma.js", () => ({
 
 import {
   assertLeadAccess,
+  assertInspectionAccess,
+  buildInspectionScopeFilter,
   assertPropertyAccess,
   buildLeadScopeFilter,
   buildPropertyScopeFilter,
   canAccessLead,
+  canAccessInspection,
   canAccessProperty,
   canManageLeadSharing,
   canManagePropertySharing,
@@ -38,12 +41,14 @@ function access(params: {
       email: "qa@example.test",
       status: "active",
       role: params.role ?? "broker",
-      permissions: params.permissions ?? ["properties.view", "properties.manage", "crm.view", "crm.manage"],
+      permissions: params.permissions ?? ["properties.view", "properties.manage", "crm.view", "crm.manage", "inspections.view", "inspections.manage"],
       permissionScopes: params.scopes ?? {
         "properties.view": "shared",
         "properties.manage": "shared",
         "crm.view": "shared",
         "crm.manage": "shared",
+        "inspections.view": "shared",
+        "inspections.manage": "shared",
       },
     },
     company: { id: companyId, name: "Empresa QA", status: "active" },
@@ -121,6 +126,34 @@ describe("Phase 2.1 resource authorization", () => {
     });
   });
 
+  it("anchors Broker Inspection scope to the canonical Property scope", () => {
+    expect(buildInspectionScopeFilter(access())).toEqual({
+      companyId: "company-a",
+      property: {
+        is: {
+          companyId: "company-a",
+          OR: [
+            { responsibleUserId: "broker-a1" },
+            { accessGrants: { some: { companyId: "company-a", userId: "broker-a1", permission: { in: ["INSPECT"] } } } },
+          ],
+        },
+      },
+    });
+  });
+
+  it("maps an out-of-scope Inspection IDOR to tenant-safe 404", async () => {
+    const database = { property: {}, lead: {}, inspection: { findFirst: vi.fn().mockResolvedValue(null) } } as never;
+    await expect(canAccessInspection(access(), "inspection-a2", "inspections.view", "INSPECT", database)).resolves.toBe(false);
+    await expect(assertInspectionAccess(access(), "inspection-a2", "inspections.manage", "INSPECT", database)).rejects.toMatchObject({ statusCode: 404, code: "INSPECTION_NOT_FOUND" });
+  });
+
+  it("keeps elevated Inspection access at company scope", () => {
+    expect(buildInspectionScopeFilter(access({ role: "admin", scopes: {} }))).toEqual({
+      companyId: "company-a",
+      property: { is: { companyId: "company-a" } },
+    });
+  });
+
   it("requires EDIT grant for a Broker Lead mutation", () => {
     expect(buildLeadScopeFilter(access(), "crm.manage", "EDIT")).toMatchObject({
       companyId: "company-a",
@@ -195,6 +228,11 @@ describe("Phase 2.1 resource authorization", () => {
     const broker = roleTemplates.find((role) => role.systemKey === "broker")!;
     expect(broker.permissions).toContain("properties.manage");
     expect(broker.permissions).not.toContain("data.export");
+  });
+
+  it("gives Broker inspection permissions through the existing RBAC role", () => {
+    const broker = roleTemplates.find((role) => role.systemKey === "broker")!;
+    expect(broker.permissions).toEqual(expect.arrayContaining(["inspections.view", "inspections.manage"]));
   });
 
   it("keeps data.export in the canonical catalog for elevated roles", () => {

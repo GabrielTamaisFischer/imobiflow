@@ -73,7 +73,24 @@ export function buildLeadScopeFilter(
   };
 }
 
-type AuthorizationDatabase = Pick<PrismaClient, "property" | "lead">;
+type AuthorizationDatabase = Pick<PrismaClient, "property" | "lead" | "inspection">;
+
+/**
+ * Inspection nunca recebe companyId ou role do cliente. O escopo vem da
+ * sessão e é ancorado no Property canônico: Broker só alcança a Vistoria de
+ * imóvel próprio ou compartilhado com a permissão INSPECT; papéis elevados
+ * mantêm company scope.
+ */
+export function buildInspectionScopeFilter(
+  access: AccessContext,
+  permissionKey = "inspections.view",
+  required: ResourcePermission = "INSPECT",
+): Prisma.InspectionWhereInput {
+  return {
+    companyId: access.company.id,
+    property: { is: buildPropertyScopeFilter(access, permissionKey, required) },
+  };
+}
 
 export async function canAccessProperty(
   access: AccessContext,
@@ -105,6 +122,21 @@ export async function canAccessLead(
   );
 }
 
+export async function canAccessInspection(
+  access: AccessContext,
+  inspectionId: string,
+  permissionKey = "inspections.view",
+  required: ResourcePermission = "INSPECT",
+  database: AuthorizationDatabase = getPrisma(),
+) {
+  return Boolean(
+    await database.inspection.findFirst({
+      where: { id: inspectionId, AND: [buildInspectionScopeFilter(access, permissionKey, required)] },
+      select: { id: true },
+    }),
+  );
+}
+
 export async function assertPropertyAccess(
   access: AccessContext,
   propertyId: string,
@@ -126,6 +158,18 @@ export async function assertLeadAccess(
 ) {
   if (!(await canAccessLead(access, leadId, permissionKey, required, database))) {
     throw resourceNotFound("LEAD_NOT_FOUND", "Lead não encontrado.");
+  }
+}
+
+export async function assertInspectionAccess(
+  access: AccessContext,
+  inspectionId: string,
+  permissionKey = "inspections.view",
+  required: ResourcePermission = "INSPECT",
+  database: AuthorizationDatabase = getPrisma(),
+) {
+  if (!(await canAccessInspection(access, inspectionId, permissionKey, required, database))) {
+    throw resourceNotFound("INSPECTION_NOT_FOUND", "Vistoria não encontrada.");
   }
 }
 

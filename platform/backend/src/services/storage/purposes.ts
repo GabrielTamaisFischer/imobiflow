@@ -90,24 +90,17 @@ export function inferStoredFilePurpose(entityType: string): StoredFilePurpose {
  * backend no momento da requisição) ou "public" (delivery padrão atual,
  * inalterado).
  *
- * ESCOPO DELIBERADAMENTE LIMITADO A `owner_document` NESTA CORREÇÃO — não
- * porque os demais propósitos de documento (`contract_document`,
- * `signed_contract`, `tenant_document`, `buyer_document`,
- * `financial_document`, `signature_evidence`) sejam menos sensíveis (não
- * são: todos guardam documento de cliente/contrato/financeiro), mas porque
- * o blocker resolvido aqui foi levantado especificamente pela homologação
- * da F4D (documentos do proprietário). Estender `authenticated` aos demais
- * propósitos sem que isso seja pedido explicitamente seria expandir o
- * escopo desta correção silenciosamente — registrado como pendência
- * separada em vez de decidido aqui (ver Bugs Ativos/Pendências).
+ * F5B: as três classes de arquivo de Vistoria foram explicitamente decididas
+ * como privadas/autenticadas antes da implementação do módulo. Assim como
+ * owner_document, nunca podem depender de obscuridade da URL do provider.
  */
 export const STORED_FILE_DELIVERY_ACCESS: Record<StoredFilePurpose, "public" | "authenticated"> = {
   property_media: "public",
   contract_document: "public",
   signed_contract: "public",
-  inspection_evidence: "public",
-  inspection_report: "public",
-  inspection_comparison: "public",
+  inspection_evidence: "authenticated",
+  inspection_report: "authenticated",
+  inspection_comparison: "authenticated",
   owner_document: "authenticated",
   tenant_document: "public",
   buyer_document: "public",

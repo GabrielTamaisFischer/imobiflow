@@ -119,9 +119,15 @@ describe("[F4E fast-follow] delivery access para owner_document no Cloudinary", 
     expect(receivedOptions.type).toBeUndefined();
   });
 
-  it("#3 deliveryAccessForPurpose só retorna authenticated para owner_document — todos os outros propósitos existentes continuam public", () => {
+  it("#3 documentos de proprietário e artefatos privados de vistoria exigem delivery authenticated", () => {
+    const privateInspectionPurposes = new Set([
+      "owner_document",
+      "inspection_evidence",
+      "inspection_report",
+      "inspection_comparison",
+    ]);
     for (const purpose of STORED_FILE_PURPOSES) {
-      const expected = purpose === "owner_document" ? "authenticated" : "public";
+      const expected = privateInspectionPurposes.has(purpose) ? "authenticated" : "public";
       expect(deliveryAccessForPurpose(purpose)).toBe(expected);
     }
   });

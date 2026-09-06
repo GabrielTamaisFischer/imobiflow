@@ -77,6 +77,8 @@ export const roleTemplates: ReadonlyArray<{
       "crm.manage",
       "properties.view",
       "properties.manage",
+      "inspections.view",
+      "inspections.manage",
       "owners.view",
       "appointments.view",
       "appointments.manage",
@@ -169,7 +171,7 @@ export async function ensureDefaultCompanyRoles(
       const permissionId = permissions.get(key);
       const resourceScoped =
         template.systemKey === "broker" &&
-        ["properties.view", "properties.manage", "crm.view", "crm.manage"].includes(key);
+        ["properties.view", "properties.manage", "crm.view", "crm.manage", "inspections.view", "inspections.manage"].includes(key);
       return permissionId
         ? [{ roleId, permissionId, scope: resourceScoped ? "shared" : "company" }]
         : [];

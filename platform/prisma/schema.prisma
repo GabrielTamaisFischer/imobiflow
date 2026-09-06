@@ -41,6 +41,11 @@ model Company {
   importRows    ImportRow[]
   propertyAccessGrants PropertyAccess[]
   leadAccessGrants LeadAccess[]
+  inspections     Inspection[]
+  inspectionRooms InspectionRoom[]
+  inspectionItems InspectionItem[]
+  inspectionEvidence InspectionEvidence[]
+  inspectionEvents InspectionEvent[]
 
   @@index([status])
   @@map("companies")
@@ -81,6 +86,9 @@ model AppUser {
   propertyAccessGranted PropertyAccess[] @relation("PropertyAccessGrantedBy")
   leadAccessGrants LeadAccess[] @relation("LeadAccessUser")
   leadAccessGranted LeadAccess[] @relation("LeadAccessGrantedBy")
+  assignedInspections Inspection[] @relation("InspectionAssignee")
+  createdInspections Inspection[] @relation("InspectionCreator")
+  inspectionEvents InspectionEvent[] @relation("InspectionEventActor")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -421,6 +429,7 @@ model Property {
   importJob               ImportJob?      @relation(fields: [importJobId], references: [id], onDelete: SetNull)
   importRows              ImportRow[]
   accessGrants            PropertyAccess[]
+  inspections             Inspection[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -513,6 +522,7 @@ model StoredFile {
   // documentada, nunca persistido. Usado pelo controle mínimo de acesso em
   // services/storage/purposes.ts (STORED_FILE_PURPOSES).
   purpose          String?  @db.VarChar(40)
+  inspectionEvidence InspectionEvidence?
 
   @@unique([provider, publicId])
   @@index([companyId, entityType, entityId])
@@ -520,6 +530,113 @@ model StoredFile {
   @@index([companyId, importJobId])
   @@index([companyId, purpose])
   @@map("stored_files")
+}
+
+// F5B: agregado canônico de Vistoria. Usa UUIDs (inclusive IDs enviados pelo
+// cliente) para evitar remapeamento quando a fila offline for implementada na
+// F5D. `version` é do agregado: toda mutação estrutural de Room/Item também a
+// incrementa, impedindo overwrite silencioso entre dispositivos.
+model Inspection {
+  id             String     @id @default(uuid()) @db.Char(36)
+  companyId      String     @map("company_id") @db.Char(36)
+  propertyId     String     @map("property_id") @db.Char(36)
+  assignedUserId String     @map("assigned_user_id") @db.Char(36)
+  createdBy      String     @map("created_by") @db.Char(36)
+  type           String     @default("entry") @db.VarChar(20)
+  status         String     @default("draft") @db.VarChar(20)
+  notes          String?    @db.Text
+  version        Int        @default(1)
+  completedAt    DateTime?  @map("completed_at")
+  archivedAt     DateTime?  @map("archived_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  company        Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property       Property   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  assignedUser   AppUser    @relation("InspectionAssignee", fields: [assignedUserId], references: [id], onDelete: Restrict)
+  creator        AppUser    @relation("InspectionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  rooms          InspectionRoom[]
+  evidence       InspectionEvidence[]
+  events         InspectionEvent[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, propertyId, createdAt])
+  @@index([companyId, assignedUserId, status])
+  @@map("inspections")
+}
+
+model InspectionRoom {
+  id           String     @id @default(uuid()) @db.Char(36)
+  companyId    String     @map("company_id") @db.Char(36)
+  inspectionId String     @map("inspection_id") @db.Char(36)
+  name         String     @db.VarChar(140)
+  position     Int        @default(0)
+  notes        String?    @db.Text
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  inspection   Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  items        InspectionItem[]
+  evidence     InspectionEvidence[]
+
+  @@index([companyId, inspectionId, position])
+  @@map("inspection_rooms")
+}
+
+model InspectionItem {
+  id        String         @id @default(uuid()) @db.Char(36)
+  companyId String         @map("company_id") @db.Char(36)
+  roomId    String         @map("room_id") @db.Char(36)
+  name      String         @db.VarChar(160)
+  condition String         @default("not_inspected") @db.VarChar(30)
+  position  Int            @default(0)
+  notes     String?        @db.Text
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  room      InspectionRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  evidence  InspectionEvidence[]
+
+  @@index([companyId, roomId, position])
+  @@map("inspection_items")
+}
+
+// Metadados/ordem da evidencia; o binário e o provider continuam em
+// StoredFile. O arquivo deve usar entityType=inspection_evidence e o ID desta
+// associação como entityId, evitando um storage paralelo.
+model InspectionEvidence {
+  id           String          @id @default(uuid()) @db.Char(36)
+  companyId    String          @map("company_id") @db.Char(36)
+  inspectionId String          @map("inspection_id") @db.Char(36)
+  roomId       String?         @map("room_id") @db.Char(36)
+  itemId       String?         @map("item_id") @db.Char(36)
+  storedFileId String          @unique(map: "inspection_evidence_stored_file_id_key") @map("stored_file_id") @db.Char(36)
+  position     Int             @default(0)
+  caption      String?         @db.VarChar(240)
+  createdAt    DateTime        @default(now()) @map("created_at")
+  company      Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  inspection   Inspection      @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  room         InspectionRoom? @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  item         InspectionItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  storedFile   StoredFile      @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, inspectionId, position])
+  @@map("inspection_evidence")
+}
+
+model InspectionEvent {
+  id           String      @id @default(uuid()) @db.Char(36)
+  companyId    String      @map("company_id") @db.Char(36)
+  inspectionId String      @map("inspection_id") @db.Char(36)
+  actorId      String?     @map("actor_id") @db.Char(36)
+  eventType    String      @map("event_type") @db.VarChar(80)
+  metadataJson Json?       @map("metadata_json")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  inspection   Inspection  @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  actor        AppUser?    @relation("InspectionEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, inspectionId, createdAt])
+  @@map("inspection_events")
 }
 
 // A4 (Fase A): ledger de idempotência para operações financeiras sensíveis a
