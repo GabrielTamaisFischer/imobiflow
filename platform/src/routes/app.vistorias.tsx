@@ -1,6 +1,6 @@
 import { ClipboardList, Loader2, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
@@ -15,11 +15,13 @@ const typeLabels = { entry: "Entrada", exit: "Saída" };
 
 function InspectionsPage() {
   const { session, isLoading } = useSessionGuard();
+  const isDetailRoute = useRouterState({ select: (state) => state.matches.some((match) => match.routeId === "/app/vistorias/$inspectionId") });
   const [rows, setRows] = useState<MysqlInspection[]>([]); const [properties, setProperties] = useState<PropertySummary[]>([]); const [users, setUsers] = useState<Array<{ id: string; name: string }>>([]); const [page, setPage] = useState(1); const [status, setStatus] = useState<MysqlInspectionStatus | undefined>(); const [pagination, setPagination] = useState<MysqlInspectionPage["pagination"] | null>(null); const [loading, setLoading] = useState(true); const [showForm, setShowForm] = useState(false); const [error, setError] = useState<string | null>(null);
   const module = getModuleByKey("inspections"); const canCreate = canManage(session?.access.appUser, "inspections.manage");
   async function refresh() { setLoading(true); setError(null); try { const [ip, pp, up] = await Promise.all([listMysqlInspections(page, 25, status), listProperties({ page: 1, pageSize: 100 }), listPropertyEligibleUsers()]); setRows(ip.inspections); setPagination(ip.pagination); setProperties(pp.items); setUsers(up.users); } catch (e) { setError(getSafeApiErrorMessage(e, "Não foi possível carregar as vistorias.")); } finally { setLoading(false); } }
   useEffect(() => { if (!isLoading && session) void refresh(); }, [isLoading, session, page, status]);
   if (isLoading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Validando acesso...</main>;
+  if (isDetailRoute) return <Outlet />;
   return <ModulePage session={session} module={module}><div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-base font-semibold">Vistorias</h2><p className="text-sm text-muted-foreground">Acompanhe laudos vinculados aos imóveis da sua empresa.</p></div>{canCreate ? <button type="button" onClick={() => setShowForm((v) => !v)} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"><Plus className="h-4 w-4" />Nova vistoria</button> : null}</div>
     <div className="mb-4 flex flex-wrap items-center gap-2"><label className="text-sm font-medium" htmlFor="inspection-status">Status</label><select id="inspection-status" value={status ?? "all"} onChange={(e) => { setPage(1); setStatus(e.target.value === "all" ? undefined : e.target.value as MysqlInspectionStatus); }} className="h-9 rounded-md border border-input bg-background px-3 text-sm"><option value="all">Todos</option>{Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><span className="text-sm text-muted-foreground">{pagination?.total ?? 0} vistoria(s)</span></div>
     {showForm && canCreate ? <NewInspectionForm properties={properties} onCancel={() => setShowForm(false)} onCreated={() => { setShowForm(false); setPage(1); void refresh(); }} /> : null}{error ? <div role="alert" className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}

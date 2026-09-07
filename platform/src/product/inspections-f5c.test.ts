@@ -32,4 +32,11 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain('canManage(session?.access.appUser, "inspections.manage")');
     expect(list).toContain('actionLabel={canCreate ? "Criar vistoria" : undefined}');
   });
+
+  it("entrega a rota filha ao outlet em vez de cobri-la com a listagem", async () => {
+    const list = await source("../routes/app.vistorias.tsx");
+    expect(list).toContain("Outlet");
+    expect(list).toContain('match.routeId === "/app/vistorias/$inspectionId"');
+    expect(list).toContain("if (isDetailRoute) return <Outlet />");
+  });
 });
