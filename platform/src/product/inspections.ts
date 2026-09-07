@@ -3,6 +3,54 @@ import { getStoredToken, isPreviewToken } from "./auth";
 import { compactPreviewMediaUrl, safeSetPreviewItem } from "./preview-storage";
 import { listAllProperties, type Property, type PropertySummary } from "./real-estate";
 
+/** Canonical MySQL inspection API (F5C). This deliberately has no preview/local fallback. */
+export type MysqlInspectionCondition = "not_inspected" | "excellent" | "good" | "fair" | "poor" | "damaged" | "not_applicable";
+export type MysqlInspectionStatus = "draft" | "in_progress" | "completed" | "archived";
+export type MysqlInspectionItem = { id: string; name: string; condition: MysqlInspectionCondition; position: number; notes: string | null };
+export type MysqlInspectionRoom = { id: string; name: string; position: number; notes: string | null; items: MysqlInspectionItem[] };
+export type MysqlInspection = {
+  id: string; property_id: string; assigned_user_id: string; created_by: string; type: "entry" | "exit";
+  status: MysqlInspectionStatus; notes: string | null; version: number; completed_at: string | null; archived_at: string | null;
+  created_at: string; updated_at: string; property?: { id: string; code: string | null; title: string };
+  assigned_user?: { id: string; name: string }; rooms: MysqlInspectionRoom[];
+};
+export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } };
+
+function mysqlToken() { return getStoredToken() ?? undefined; }
+function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
+export async function listMysqlInspections(page = 1, pageSize = 25, status?: MysqlInspectionStatus) {
+  const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (status) query.set("status", status);
+  return apiRequest<MysqlInspectionPage>(`/real-estate/inspections?${query}`, { token: mysqlToken() });
+}
+export async function getMysqlInspection(id: string) {
+  return apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { token: mysqlToken() });
+}
+export async function createMysqlInspection(input: { id: string; property_id: string; assigned_user_id?: string; type: "entry" | "exit"; notes?: string | null }) {
+  return apiRequest<{ inspection: MysqlInspection; replayed?: boolean }>("/real-estate/inspections", { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function patchMysqlInspection(id: string, input: { expected_version: number; assigned_user_id?: string; notes?: string | null; status?: MysqlInspectionStatus }) {
+  return apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function createMysqlRoom(inspectionId: string, input: { id: string; expected_version: number; name: string; position: number; notes?: string | null }) {
+  return apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function patchMysqlRoom(inspectionId: string, roomId: string, input: { expected_version: number; name?: string; position?: number; notes?: string | null }) {
+  return apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function deleteMysqlRoom(inspectionId: string, roomId: string, expected_version: number) {
+  return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
+}
+export async function createMysqlItem(inspectionId: string, roomId: string, input: { id: string; expected_version: number; name: string; condition: MysqlInspectionCondition; position: number; notes?: string | null }) {
+  return apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function patchMysqlItem(inspectionId: string, roomId: string, itemId: string, input: { expected_version: number; name?: string; condition?: MysqlInspectionCondition; position?: number; notes?: string | null }) {
+  return apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function deleteMysqlItem(inspectionId: string, roomId: string, itemId: string, expected_version: number) {
+  return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
+}
+
 const previewInspectionsKey = "imobiflow.preview.inspections";
 const previewRoomsKey = "imobiflow.preview.inspection_rooms";
 const previewItemsKey = "imobiflow.preview.inspection_items";
