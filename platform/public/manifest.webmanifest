@@ -1,0 +1,10 @@
+{
+  "name": "ImobiFlow",
+  "short_name": "ImobiFlow",
+  "description": "Operação imobiliária com vistorias offline.",
+  "start_url": "/app",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f172a",
+  "icons": []
+}

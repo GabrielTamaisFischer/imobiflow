@@ -2,6 +2,16 @@ import { apiRequest } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
 import { compactPreviewMediaUrl, safeSetPreviewItem } from "./preview-storage";
 import { listAllProperties, type Property, type PropertySummary } from "./real-estate";
+import {
+  getInspectionOfflineScope,
+  isOfflineRuntime,
+  queueInspectionMutation,
+  readInspectionSnapshot,
+  saveInspectionSnapshot,
+  type OfflineMutation,
+  type OfflineSyncSender,
+  syncInspectionOfflineQueue,
+} from "./inspection-offline";
 
 /** Canonical MySQL inspection API (F5C). This deliberately has no preview/local fallback. */
 export type MysqlInspectionCondition = "not_inspected" | "excellent" | "good" | "fair" | "poor" | "damaged" | "not_applicable";
@@ -9,7 +19,7 @@ export type MysqlInspectionStatus = "draft" | "in_progress" | "completed" | "arc
 export type MysqlInspectionItem = { id: string; name: string; condition: MysqlInspectionCondition; position: number; notes: string | null };
 export type MysqlInspectionRoom = { id: string; name: string; position: number; notes: string | null; items: MysqlInspectionItem[] };
 export type MysqlInspection = {
-  id: string; property_id: string; assigned_user_id: string; created_by: string; type: "entry" | "exit";
+  id: string; property_id: string; assigned_user_id: string | null; created_by: string; type: "entry" | "exit";
   status: MysqlInspectionStatus; notes: string | null; version: number; completed_at: string | null; archived_at: string | null;
   created_at: string; updated_at: string; property?: { id: string; code: string | null; title: string };
   assigned_user?: { id: string; name: string }; rooms: MysqlInspectionRoom[];
@@ -18,37 +28,132 @@ export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: 
 
 function mysqlToken() { return getStoredToken() ?? undefined; }
 function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
+function isOfflineError(error: unknown) { return isOfflineRuntime() || (error instanceof TypeError && /fetch|network/i.test(error.message)) || (error instanceof Error && /failed to fetch|network|offline|conectar/i.test(error.message)); }
+function offlineHeaders(key?: string) { return key ? idempotencyKey(key) : undefined; }
+function localNow() { return new Date().toISOString(); }
+
+async function offlineSnapshot(id: string) {
+  return readInspectionSnapshot(id);
+}
+
+async function applyOfflineMutation(mutation: OfflineMutation) {
+  const snapshot = await offlineSnapshot(mutation.inspectionId);
+  if (!snapshot) throw new Error("Abra a vistoria online antes de trabalhar offline.");
+  const inspection = structuredClone(snapshot.inspection);
+  const payload = mutation.payload;
+  const bump = () => { inspection.version += 1; inspection.updated_at = localNow(); };
+  if (mutation.entityType === "inspection") {
+    if (mutation.operation === "update") {
+      if (typeof payload.notes === "string" || payload.notes === null) inspection.notes = payload.notes as string | null;
+      if (typeof payload.assigned_user_id === "string") inspection.assigned_user_id = payload.assigned_user_id;
+    }
+  } else if (mutation.entityType === "room") {
+    const room = inspection.rooms.find((item) => item.id === mutation.entityId);
+    if (mutation.operation === "create") inspection.rooms.push(payload as unknown as MysqlInspectionRoom);
+    else if (room && mutation.operation === "update") Object.assign(room, payload);
+    else if (mutation.operation === "delete") inspection.rooms = inspection.rooms.filter((item) => item.id !== mutation.entityId);
+  } else {
+    const room = inspection.rooms.find((item) => item.id === String(payload.room_id));
+    const item = room?.items.find((entry) => entry.id === mutation.entityId);
+    if (mutation.operation === "create" && room) room.items.push(payload as unknown as MysqlInspectionItem);
+    else if (item && mutation.operation === "update") Object.assign(item, payload);
+    else if (room && mutation.operation === "delete") room.items = room.items.filter((entry) => entry.id !== mutation.entityId);
+  }
+  bump();
+  await saveInspectionSnapshot(inspection, undefined, undefined, "offline");
+  return inspection;
+}
+
+async function queueOffline(mutation: Omit<OfflineMutation, "id" | "createdAt" | "status">) {
+  await queueInspectionMutation(mutation);
+  return applyOfflineMutation({ ...mutation, id: "local", createdAt: localNow(), status: "pending" });
+}
+
 export async function listMysqlInspections(page = 1, pageSize = 25, status?: MysqlInspectionStatus) {
   const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (status) query.set("status", status);
   return apiRequest<MysqlInspectionPage>(`/real-estate/inspections?${query}`, { token: mysqlToken() });
 }
 export async function getMysqlInspection(id: string) {
-  return apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { token: mysqlToken() });
+  try {
+    const response = await apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { token: mysqlToken() });
+    await saveInspectionSnapshot(response.inspection);
+    return response;
+  } catch (error) {
+    if (!isOfflineError(error)) throw error;
+    const snapshot = await offlineSnapshot(id);
+    if (!snapshot) throw error;
+    return { inspection: snapshot.inspection, offline: true };
+  }
 }
 export async function createMysqlInspection(input: { id: string; property_id: string; assigned_user_id?: string; type: "entry" | "exit"; notes?: string | null }) {
   return apiRequest<{ inspection: MysqlInspection; replayed?: boolean }>("/real-estate/inspections", { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
 }
-export async function patchMysqlInspection(id: string, input: { expected_version: number; assigned_user_id?: string; notes?: string | null; status?: MysqlInspectionStatus }) {
-  return apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+export async function patchMysqlInspection(id: string, input: { expected_version: number; assigned_user_id?: string | null; notes?: string | null; status?: MysqlInspectionStatus }, options?: { offline?: boolean; idempotencyKey?: string }) {
+  if (options?.offline !== false && isOfflineRuntime()) {
+    if (input.status === "completed" || input.status === "archived") throw Object.assign(new Error("Concluir ou arquivar exige conexão."), { code: "OFFLINE_LIFECYCLE_UNSUPPORTED" });
+    const inspection = await queueOffline({ companyId: getInspectionOfflineScope()?.companyId ?? "", userId: getInspectionOfflineScope()?.userId ?? "", inspectionId: id, entityType: "inspection", entityId: id, operation: "update", payload: input as Record<string, unknown>, baseVersion: input.expected_version, idempotencyKey: options?.idempotencyKey ?? crypto.randomUUID() });
+    return { inspection, offline: true };
+  }
+  const response = await apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { method: "PATCH", headers: offlineHeaders(options?.idempotencyKey), body: JSON.stringify(input), token: mysqlToken() });
+  await saveInspectionSnapshot(response.inspection);
+  return response;
 }
-export async function createMysqlRoom(inspectionId: string, input: { id: string; expected_version: number; name: string; position: number; notes?: string | null }) {
-  return apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+export async function createMysqlRoom(inspectionId: string, input: { id: string; expected_version: number; name: string; position: number; notes?: string | null }, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) {
+    const scope = getInspectionOfflineScope();
+    const room = { id: input.id, name: input.name, position: input.position, notes: input.notes ?? null, items: [] };
+    const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "room", entityId: input.id, operation: "create", payload: room as unknown as Record<string, unknown>, baseVersion: input.expected_version, idempotencyKey: input.id });
+    return { room: room as Omit<MysqlInspectionRoom, "items">, inspection, offline: true };
+  }
+  try {
+    const response = await apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+    return response;
+  } catch (error) { if (!isOfflineError(error)) throw error; return createMysqlRoom(inspectionId, input, { offline: true }); }
 }
-export async function patchMysqlRoom(inspectionId: string, roomId: string, input: { expected_version: number; name?: string; position?: number; notes?: string | null }) {
-  return apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+export async function patchMysqlRoom(inspectionId: string, roomId: string, input: { expected_version: number; name?: string; position?: number; notes?: string | null }, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) {
+    const scope = getInspectionOfflineScope();
+    const room = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "room", entityId: roomId, operation: "update", payload: input as Record<string, unknown>, baseVersion: input.expected_version, idempotencyKey: crypto.randomUUID() });
+    return { room: room.rooms.find((entry) => entry.id === roomId)!, inspection: room, offline: true };
+  }
+  try { return await apiRequest<{ room: Omit<MysqlInspectionRoom, "items"> }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() }); }
+  catch (error) { if (!isOfflineError(error)) throw error; return patchMysqlRoom(inspectionId, roomId, input, { offline: true }); }
 }
-export async function deleteMysqlRoom(inspectionId: string, roomId: string, expected_version: number) {
-  return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
+export async function deleteMysqlRoom(inspectionId: string, roomId: string, expected_version: number, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) { const scope = getInspectionOfflineScope(); const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "room", entityId: roomId, operation: "delete", payload: {}, baseVersion: expected_version, idempotencyKey: crypto.randomUUID() }); return { ok: true, inspection, offline: true }; }
+  try { return await apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() }); }
+  catch (error) { if (!isOfflineError(error)) throw error; return deleteMysqlRoom(inspectionId, roomId, expected_version, { offline: true }); }
 }
-export async function createMysqlItem(inspectionId: string, roomId: string, input: { id: string; expected_version: number; name: string; condition: MysqlInspectionCondition; position: number; notes?: string | null }) {
-  return apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
+export async function createMysqlItem(inspectionId: string, roomId: string, input: { id: string; expected_version: number; name: string; condition: MysqlInspectionCondition; position: number; notes?: string | null }, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) { const scope = getInspectionOfflineScope(); const item = { id: input.id, name: input.name, condition: input.condition, position: input.position, notes: input.notes ?? null, room_id: roomId }; const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "item", entityId: input.id, operation: "create", payload: item, baseVersion: input.expected_version, idempotencyKey: input.id }); return { item, inspection, offline: true }; }
+  try { return await apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items`, { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() }); }
+  catch (error) { if (!isOfflineError(error)) throw error; return createMysqlItem(inspectionId, roomId, input, { offline: true }); }
 }
-export async function patchMysqlItem(inspectionId: string, roomId: string, itemId: string, input: { expected_version: number; name?: string; condition?: MysqlInspectionCondition; position?: number; notes?: string | null }) {
-  return apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+export async function patchMysqlItem(inspectionId: string, roomId: string, itemId: string, input: { expected_version: number; name?: string; condition?: MysqlInspectionCondition; position?: number; notes?: string | null }, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) { const scope = getInspectionOfflineScope(); const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "item", entityId: itemId, operation: "update", payload: { ...input, room_id: roomId }, baseVersion: input.expected_version, idempotencyKey: crypto.randomUUID() }); return { item: inspection.rooms.flatMap((room) => room.items).find((item) => item.id === itemId)!, inspection, offline: true }; }
+  try { return await apiRequest<{ item: MysqlInspectionItem }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() }); }
+  catch (error) { if (!isOfflineError(error)) throw error; return patchMysqlItem(inspectionId, roomId, itemId, input, { offline: true }); }
 }
-export async function deleteMysqlItem(inspectionId: string, roomId: string, itemId: string, expected_version: number) {
-  return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
+export async function deleteMysqlItem(inspectionId: string, roomId: string, itemId: string, expected_version: number, options?: { offline?: boolean }) {
+  if (options?.offline === true || isOfflineRuntime()) { const scope = getInspectionOfflineScope(); const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "item", entityId: itemId, operation: "delete", payload: { room_id: roomId }, baseVersion: expected_version, idempotencyKey: crypto.randomUUID() }); return { ok: true, inspection, offline: true }; }
+  try { return await apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() }); }
+  catch (error) { if (!isOfflineError(error)) throw error; return deleteMysqlItem(inspectionId, roomId, itemId, expected_version, { offline: true }); }
+}
+
+export async function syncMysqlInspectionOfflineQueue(inspectionId?: string) {
+  const sender: OfflineSyncSender = async (mutation) => {
+    const p = mutation.payload;
+    if (mutation.entityType === "inspection") return (await patchMysqlInspection(mutation.inspectionId, p as never, { offline: false, idempotencyKey: mutation.idempotencyKey })).inspection;
+    if (mutation.entityType === "room" && mutation.operation === "create") { await createMysqlRoom(mutation.inspectionId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
+    if (mutation.entityType === "room" && mutation.operation === "update") { await patchMysqlRoom(mutation.inspectionId, mutation.entityId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
+    if (mutation.entityType === "room") { await deleteMysqlRoom(mutation.inspectionId, mutation.entityId, mutation.baseVersion, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
+    if (mutation.entityType === "item" && mutation.operation === "create") { await createMysqlItem(mutation.inspectionId, String(p.room_id), p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
+    if (mutation.entityType === "item" && mutation.operation === "update") { await patchMysqlItem(mutation.inspectionId, String(p.room_id), mutation.entityId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
+    await deleteMysqlItem(mutation.inspectionId, String(p.room_id), mutation.entityId, mutation.baseVersion, { offline: false });
+    return (await getMysqlInspection(mutation.inspectionId)).inspection;
+  };
+  return syncInspectionOfflineQueue(sender, inspectionId);
 }
 
 const previewInspectionsKey = "imobiflow.preview.inspections";
