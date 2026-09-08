@@ -1,10 +1,15 @@
 import { Prisma } from "@prisma/client";
 import { Router } from "express";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
 import { assertInspectionAccess, assertPropertyAccess, buildInspectionScopeFilter } from "../services/authorization.js";
 import { IdempotencyConflictError, resolveIdempotencyKey, withIdempotency } from "../services/idempotency.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
+import { getStorageProvider, getStorageProviderForName, buildStorageFolder } from "../services/storage/index.js";
+import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
+import { validateUploadFile } from "../services/storage/file-policy.js";
+import type { StorageResourceType } from "../services/storage/types.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const mysqlInspectionsRouter = Router();
@@ -49,6 +54,23 @@ const itemSchema = z.object({
 const itemPatchSchema = itemSchema.omit({ id: true }).partial({ name: true, condition: true, position: true, notes: true }).extend({ expected_version: z.number().int().positive() })
   .refine((input) => input.name !== undefined || input.condition !== undefined || input.position !== undefined || input.notes !== undefined, { message: "Informe ao menos um campo para atualizar." });
 const versionSchema = z.object({ expected_version: z.number().int().positive() });
+const evidenceCreateSchema = z.object({
+  id: z.string().uuid().optional(),
+  room_id: z.string().uuid().optional().nullable(),
+  item_id: z.string().uuid().optional().nullable(),
+  file_name: z.string().min(1).max(240),
+  mime_type: z.string().min(3).max(120),
+  size_bytes: z.number().int().positive().max(10 * 1024 * 1024),
+  content_base64: z.string().min(1),
+  caption: z.string().trim().max(240).optional().nullable(),
+  position: z.number().int().min(0).max(9999).default(0),
+});
+const evidencePatchSchema = z.object({
+  expected_version: z.number().int().positive(),
+  caption: z.string().trim().max(240).optional().nullable(),
+  position: z.number().int().min(0).max(9999).optional(),
+}).refine((input) => input.caption !== undefined || input.position !== undefined, { message: "Informe caption ou position." });
+const evidenceOrderSchema = z.object({ expected_version: z.number().int().positive(), evidence: z.array(z.object({ id: z.string().uuid(), position: z.number().int().min(0).max(9999) })).min(1).max(200) });
 
 const inspectionInclude = {
   property: { select: { id: true, code: true, title: true, responsibleUserId: true } },
@@ -86,6 +108,51 @@ function serializeInspection(inspection: any) {
       items: room.items?.map((item: any) => ({ id: item.id, name: item.name, condition: item.condition, position: item.position, notes: item.notes })) ?? [],
     })) ?? [],
   };
+}
+
+function decodeBase64File(value: string) {
+  const payload = value.includes(",") ? value.slice(value.indexOf(",") + 1) : value;
+  try {
+    const body = Buffer.from(payload, "base64");
+    if (!body.length) throw new Error("empty");
+    return body;
+  } catch {
+    throw invalid("Conteúdo do arquivo inválido.", "INVALID_UPLOAD");
+  }
+}
+
+function serializeEvidence(row: any, signedUrl: string | null = null) {
+  return {
+    id: row.id,
+    inspection_id: row.inspectionId,
+    room_id: row.roomId,
+    item_id: row.itemId,
+    file_name: row.storedFile?.originalFilename ?? null,
+    mime_type: row.storedFile?.mimeType ?? null,
+    file_size: row.storedFile?.sizeBytes ?? null,
+    width: row.storedFile?.width ?? null,
+    height: row.storedFile?.height ?? null,
+    caption: row.caption,
+    position: row.position,
+    created_at: row.createdAt.toISOString(),
+    signed_url: signedUrl,
+  };
+}
+
+async function evidenceSignedUrl(file: any, purpose = "inspection_evidence") {
+  if (!file || deliveryAccessForPurpose(file.purpose ?? purpose) !== "authenticated") return null;
+  const provider = getStorageProviderForName(file.provider as any);
+  if (!provider.getAuthenticatedDownloadUrl) return null;
+  return provider.getAuthenticatedDownloadUrl({ publicId: file.publicId, resourceType: file.resourceType as StorageResourceType, format: file.format });
+}
+
+async function loadEvidence(companyId: string, inspectionId: string) {
+  const rows = await getPrisma().inspectionEvidence.findMany({
+    where: { companyId, inspectionId },
+    include: { storedFile: true },
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+  });
+  return Promise.all(rows.map(async (row) => serializeEvidence(row, await evidenceSignedUrl(row.storedFile))));
 }
 
 async function resolveAssignee(companyId: string, requestedUserId: string | undefined, fallbackUserId: string) {
@@ -167,6 +234,123 @@ mysqlInspectionsRouter.post("/", requirePermission("inspections.manage"), async 
 
 mysqlInspectionsRouter.get("/:id", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
   try { res.json({ inspection: serializeInspection(await findInspection(req, String(req.params.id), "inspections.view")) }); } catch (error) { next(error); }
+});
+
+// F5E: evidências são armazenadas no pipeline canônico StoredFile/Cloudinary.
+// O DTO só expõe uma URL autenticada curta gerada a partir do registro seguro;
+// nunca expõe secureUrl/publicId persistidos.
+mysqlInspectionsRouter.get("/:id/evidence", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    res.json({ evidence: await loadEvidence(req.access!.company.id, inspection.id) });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.post("/:id/evidence", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  let uploaded: any = null;
+  try {
+    const access = req.access!;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    await ensureMutable(inspection);
+    const input = evidenceCreateSchema.parse(req.body);
+    const body = decodeBase64File(input.content_base64);
+    const policy = validateUploadFile({ purpose: "inspection_evidence", fileName: input.file_name, mimeType: input.mime_type, declaredSizeBytes: input.size_bytes, body });
+    const roomId = input.room_id ?? null;
+    const itemId = input.item_id ?? null;
+    if (roomId) {
+      const room = await getPrisma().inspectionRoom.findFirst({ where: { id: roomId, inspectionId: inspection.id, companyId: access.company.id }, select: { id: true } });
+      if (!room) throw notFound();
+    }
+    if (itemId) {
+      const item = await getPrisma().inspectionItem.findFirst({ where: { id: itemId, companyId: access.company.id, room: { inspectionId: inspection.id } }, select: { id: true, roomId: true } });
+      if (!item || (roomId && item.roomId !== roomId)) throw notFound();
+    }
+    const evidenceId = input.id ?? randomUUID();
+    const key = resolveIdempotencyKey(req, `inspection.evidence.create:${evidenceId}`);
+    const { result, replayed } = await withIdempotency(access.company.id, "inspection.evidence.create", key, async () => {
+      const storage = getStorageProvider();
+      uploaded = await storage.uploadFile({
+        companyId: access.company.id,
+        entityType: "inspection_evidence",
+        entityId: evidenceId,
+        purpose: "inspection_evidence",
+        fileName: input.file_name,
+        mimeType: policy.normalizedMimeType,
+        sizeBytes: policy.measuredSizeBytes,
+        body,
+        folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_evidence", inspectionId: inspection.id }),
+        deliveryAccess: deliveryAccessForPurpose("inspection_evidence"),
+      });
+      await getPrisma().$transaction(async (tx) => {
+        await bumpVersion(tx, inspection.id, access.company.id, inspection.version);
+        const file = await tx.storedFile.create({ data: {
+          companyId: access.company.id, entityType: "inspection_evidence", entityId: evidenceId,
+          provider: uploaded!.provider, publicId: uploaded!.publicId, resourceType: uploaded!.resourceType,
+          secureUrl: uploaded!.secureUrl, originalFilename: input.file_name, mimeType: policy.normalizedMimeType,
+          sizeBytes: policy.measuredSizeBytes, format: uploaded!.format ?? null, uploadedBy: access.appUser.id,
+          purpose: "inspection_evidence", metadataJson: { inspection_id: inspection.id, room_id: roomId, item_id: itemId },
+        } });
+        const evidence = await tx.inspectionEvidence.create({ data: { id: evidenceId, companyId: access.company.id, inspectionId: inspection.id, roomId, itemId, storedFileId: file.id, caption: input.caption ?? null, position: input.position } , include: { storedFile: true } });
+        await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.evidence_added", { evidence_id: evidence.id, room_id: roomId, item_id: itemId, position: input.position });
+        return evidence.id;
+      });
+      return { evidence_id: evidenceId };
+    });
+    const row = await getPrisma().inspectionEvidence.findUniqueOrThrow({ where: { id: result.evidence_id }, include: { storedFile: true } });
+    res.status(replayed ? 200 : 201).json({ evidence: serializeEvidence(row, await evidenceSignedUrl(row.storedFile)), replayed });
+  } catch (error) {
+    // Best-effort compensação: só remove o asset criado por esta requisição,
+    // mantendo a resposta sanitizada caso o banco rejeite a associação.
+    if (uploaded) {
+      try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* não mascarar a causa original */ }
+    }
+    next(error);
+  }
+});
+
+mysqlInspectionsRouter.patch("/:id/evidence/order", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    await ensureMutable(inspection);
+    const input = evidenceOrderSchema.parse(req.body);
+    const ids = input.evidence.map((entry) => entry.id);
+    const rows = await getPrisma().inspectionEvidence.findMany({ where: { id: { in: ids }, inspectionId: inspection.id, companyId: access.company.id }, select: { id: true } });
+    if (rows.length !== ids.length) throw notFound();
+    await getPrisma().$transaction(async (tx) => {
+      await bumpVersion(tx, inspection.id, access.company.id, input.expected_version);
+      for (const entry of input.evidence) await tx.inspectionEvidence.update({ where: { id: entry.id }, data: { position: entry.position } });
+      await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.evidence_reordered", { count: ids.length });
+    });
+    res.json({ evidence: await loadEvidence(access.company.id, inspection.id) });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.patch("/:id/evidence/:evidenceId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    await ensureMutable(inspection);
+    const input = evidencePatchSchema.parse(req.body);
+    const existing = await getPrisma().inspectionEvidence.findFirst({ where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }, include: { storedFile: true } });
+    if (!existing) throw notFound();
+    await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, access.company.id, input.expected_version); await tx.inspectionEvidence.update({ where: { id: existing.id }, data: { ...(input.caption !== undefined ? { caption: input.caption } : {}), ...(input.position !== undefined ? { position: input.position } : {}) } }); await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.evidence_updated", { evidence_id: existing.id }); });
+    const row = await getPrisma().inspectionEvidence.findUniqueOrThrow({ where: { id: existing.id }, include: { storedFile: true } });
+    res.json({ evidence: serializeEvidence(row, await evidenceSignedUrl(row.storedFile)) });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.delete("/:id/evidence/:evidenceId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    await ensureMutable(inspection);
+    const existing = await getPrisma().inspectionEvidence.findFirst({ where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }, include: { storedFile: true } });
+    if (!existing) throw notFound();
+    const { expected_version } = versionSchema.parse(req.body);
+    if (inspection.version !== expected_version) throw conflict();
+    const provider = getStorageProviderForName(existing.storedFile.provider as any);
+    await provider.deleteFile({ publicId: existing.storedFile.publicId, resourceType: existing.storedFile.resourceType as StorageResourceType, deliveryAccess: deliveryAccessForPurpose("inspection_evidence") });
+    await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, access.company.id, expected_version); await tx.inspectionEvidence.delete({ where: { id: existing.id } }); await tx.storedFile.delete({ where: { id: existing.storedFileId } }); await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.evidence_removed", { evidence_id: existing.id }); });
+    res.json({ ok: true, evidence_id: existing.id });
+  } catch (error) { next(error); }
 });
 
 mysqlInspectionsRouter.patch("/:id", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {

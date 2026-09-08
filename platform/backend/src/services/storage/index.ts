@@ -69,6 +69,7 @@ export function buildStorageFolder(input: {
   companyId: string;
   purpose: StoragePurpose;
   propertyId?: string | null;
+  inspectionId?: string | null;
   websiteId?: string | null;
   // Fase 4D: quando presente, documentos "document" ficam em uma pasta por
   // proprietário (nunca misturados com a pasta genérica de empresa) — só
@@ -80,6 +81,8 @@ export function buildStorageFolder(input: {
   const companyId = sanitizeSegment(input.companyId);
 
   switch (input.purpose) {
+    case "inspection_evidence":
+      return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/evidence`;
     case "property_image":
       return `${root}/${companyId}/properties/${sanitizeSegment(input.propertyId ?? "shared")}/images`;
     case "property_video":

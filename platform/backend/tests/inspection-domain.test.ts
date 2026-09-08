@@ -68,6 +68,32 @@ describe("F5B Inspection domain lifecycle", () => {
     expect(source).toContain('ensureMutable(existing, status, hasOtherChanges);');
   });
 
+  it("uses the private StoredFile evidence pipeline with tenant-safe lifecycle guards", async () => {
+    const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
+    expect(source).toContain('purpose: "inspection_evidence"');
+    expect(source).toContain('deliveryAccessForPurpose("inspection_evidence")');
+    expect(source).toContain('requirePermission("inspections.view")');
+    expect(source).toContain('requirePermission("inspections.manage")');
+    expect(source).toContain('await ensureMutable(inspection);');
+    expect(source).toContain('where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }');
+  });
+
+  it("makes evidence retries idempotent and validates the binary before provider upload", async () => {
+    const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
+    expect(source).toContain('withIdempotency(access.company.id, "inspection.evidence.create", key');
+    expect(source).toContain('validateUploadFile({ purpose: "inspection_evidence"');
+    expect(source).toContain("content_base64");
+    expect(source).toContain("INSPECTION_VERSION_CONFLICT");
+  });
+
+  it("does not expose provider URLs as evidence DTO data", async () => {
+    const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
+    const serializer = source.slice(source.indexOf("function serializeEvidence"), source.indexOf("async function evidenceSignedUrl"));
+    expect(serializer).not.toContain("secureUrl");
+    expect(serializer).not.toContain("publicId");
+    expect(serializer).toContain("signed_url");
+  });
+
   it("does not accept tenant or role fields in the create contract", async () => {
     const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
     const createSchema = source.slice(source.indexOf("const createInspectionSchema"), source.indexOf("const patchInspectionSchema"));

@@ -63,6 +63,12 @@ const rules: Record<StoragePurpose, UploadRule> = {
     maxBytes: 10 * MiB,
     resourceType: "raw",
   },
+  inspection_evidence: {
+    mimeTypes: ["image/jpeg", "image/png", "image/webp"],
+    extensions: [".jpg", ".jpeg", ".png", ".webp"],
+    maxBytes: 8 * MiB,
+    resourceType: "image",
+  },
 };
 
 const blockedExtensions = new Set([".exe", ".bat", ".cmd", ".js", ".mjs", ".cjs", ".html", ".htm", ".svg"]);

@@ -17,6 +17,7 @@ import {
 export type MysqlInspectionCondition = "not_inspected" | "excellent" | "good" | "fair" | "poor" | "damaged" | "not_applicable";
 export type MysqlInspectionStatus = "draft" | "in_progress" | "completed" | "archived";
 export type MysqlInspectionItem = { id: string; name: string; condition: MysqlInspectionCondition; position: number; notes: string | null };
+export type MysqlInspectionEvidence = { id: string; inspection_id: string; room_id: string | null; item_id: string | null; file_name: string | null; mime_type: string | null; file_size: number | null; width: number | null; height: number | null; caption: string | null; position: number; created_at: string; signed_url: string | null };
 export type MysqlInspectionRoom = { id: string; name: string; position: number; notes: string | null; items: MysqlInspectionItem[] };
 export type MysqlInspection = {
   id: string; property_id: string; assigned_user_id: string | null; created_by: string; type: "entry" | "exit";
@@ -139,6 +140,32 @@ export async function deleteMysqlItem(inspectionId: string, roomId: string, item
   if (options?.offline === true || isOfflineRuntime()) { const scope = getInspectionOfflineScope(); const inspection = await queueOffline({ companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, entityType: "item", entityId: itemId, operation: "delete", payload: { room_id: roomId }, baseVersion: expected_version, idempotencyKey: crypto.randomUUID() }); return { ok: true, inspection, offline: true }; }
   try { return await apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() }); }
   catch (error) { if (!isOfflineError(error)) throw error; return deleteMysqlItem(inspectionId, roomId, itemId, expected_version, { offline: true }); }
+}
+
+export async function listMysqlInspectionEvidence(inspectionId: string) {
+  return apiRequest<{ evidence: MysqlInspectionEvidence[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { token: mysqlToken() });
+}
+
+export async function uploadMysqlInspectionEvidence(inspectionId: string, input: { id?: string; room_id?: string | null; item_id?: string | null; file: File; caption?: string | null; position?: number }) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Upload de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
+  const contentBase64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error ?? new Error("Não foi possível ler o arquivo.")); reader.readAsDataURL(input.file); });
+  const id = input.id ?? crypto.randomUUID();
+  return apiRequest<{ evidence: MysqlInspectionEvidence; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify({ id, room_id: input.room_id ?? null, item_id: input.item_id ?? null, file_name: input.file.name, mime_type: input.file.type, size_bytes: input.file.size, content_base64: contentBase64, caption: input.caption ?? null, position: input.position ?? 0 }), token: mysqlToken() });
+}
+
+export async function patchMysqlInspectionEvidence(inspectionId: string, evidenceId: string, input: { expected_version: number; caption?: string | null; position?: number }) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Alteração de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
+  return apiRequest<{ evidence: MysqlInspectionEvidence }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence/${encodeURIComponent(evidenceId)}`, { method: "PATCH", body: JSON.stringify(input), token: mysqlToken() });
+}
+
+export async function reorderMysqlInspectionEvidence(inspectionId: string, expected_version: number, evidence: Array<{ id: string; position: number }>) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Ordenação de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
+  return apiRequest<{ evidence: MysqlInspectionEvidence[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence/order`, { method: "PATCH", body: JSON.stringify({ expected_version, evidence }), token: mysqlToken() });
+}
+
+export async function deleteMysqlInspectionEvidence(inspectionId: string, evidenceId: string, expected_version: number) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Remoção de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
+  return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence/${encodeURIComponent(evidenceId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
 }
 
 export async function syncMysqlInspectionOfflineQueue(inspectionId?: string) {
