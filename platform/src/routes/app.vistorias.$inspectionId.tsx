@@ -60,4 +60,79 @@ function InspectionDetailPageIntegrated() {
 
 function IntegratedRooms({ inspection, canEdit, onChanged, onError }: { inspection: MysqlInspection; canEdit: boolean; onChanged: (next: MysqlInspection) => void; onError: (e: unknown) => void }) { const [adding, setAdding] = useState(false); const [name, setName] = useState(""); const [notes, setNotes] = useState(""); const [position, setPosition] = useState(String(inspection.rooms.length)); const [busy, setBusy] = useState(false); useEffect(() => { if (!adding) setPosition(String(inspection.rooms.length)); }, [inspection.rooms.length, adding]); async function addRoom() { if (!name.trim()) return; setBusy(true); try { await createMysqlRoom(inspection.id, { id: crypto.randomUUID(), expected_version: inspection.version, name: name.trim(), notes: notes.trim() || null, position: Number(position) }); onChanged((await getMysqlInspection(inspection.id)).inspection); setName(""); setNotes(""); setAdding(false); } catch (e) { onError(e); } finally { setBusy(false); } } return <section className="space-y-3"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><h2 className="text-lg font-semibold">Ambientes</h2>{canEdit ? <button type="button" onClick={() => setAdding((value) => !value)} className="inline-flex h-10 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground"><Plus className="h-4 w-4" />Adicionar ambiente</button> : null}</div>{adding ? <div className="space-y-3 rounded-lg border border-border bg-card p-4"><label className="block text-sm">Nome<input required autoFocus value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="block text-sm">Observações<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="mt-1 w-full rounded-md border border-input p-3" /></label><label className="block text-sm">Posição<input type="number" min="0" value={position} onChange={(e) => setPosition(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={() => setAdding(false)} className="h-10 rounded-md border border-border px-4 text-sm">Cancelar</button><button type="button" disabled={busy || !name.trim()} onClick={() => void addRoom()} className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground">Salvar ambiente</button></div></div> : null}{inspection.rooms.length === 0 ? <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">Nenhum ambiente adicionado ainda.</p> : inspection.rooms.map((room) => <IntegratedRoomCard key={room.id} inspection={inspection} room={room} canEdit={canEdit} onChanged={onChanged} onError={onError} />)}</section>; }
 
-function IntegratedRoomCard({ inspection, room, canEdit, onChanged, onError }: { inspection: MysqlInspection; room: MysqlInspectionRoom; canEdit: boolean; onChanged: (next: MysqlInspection) => void; onError: (e: unknown) => void }) { const [editing, setEditing] = useState(false); const [name, setName] = useState(room.name); const [notes, setNotes] = useState(room.notes ?? ""); const [position, setPosition] = useState(String(room.position)); async function save() { try { await patchMysqlRoom(inspection.id, room.id, { expected_version: inspection.version, name, notes: notes || null, position: Number(position) }); onChanged((await getMysqlInspection(inspection.id)).inspection); setEditing(false); } catch (e) { onError(e); } } return <article className="rounded-lg border border-border bg-card p-4"><div className="flex items-center justify-between gap-3"><h3 className="font-semibold">{room.name}</h3>{canEdit ? <button type="button" className="h-10 rounded-md border border-border px-3 text-sm" onClick={() => setEditing((value) => !value)}>Editar ambiente</button> : null}</div>{editing ? <div className="mt-3 space-y-2"><label className="block text-sm">Nome<input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="block text-sm">Observações<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="mt-1 w-full rounded-md border border-input p-3" /></label><label className="block text-sm">Posição<input type="number" min="0" value={position} onChange={(e) => setPosition(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><button type="button" onClick={() => void save()} className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"><Save className="h-4 w-4" />Salvar ambiente</button></div> : null}<div className="mt-3 space-y-2">{room.items.map((item) => <div key={item.id} className="rounded-md border border-border p-3 text-sm"><span>{item.name}</span><span className="ml-2 text-muted-foreground">{conditionLabels[item.condition]}</span></div>)}</div></article>; }
+function IntegratedRoomCardLegacy({ inspection, room, canEdit, onChanged, onError }: { inspection: MysqlInspection; room: MysqlInspectionRoom; canEdit: boolean; onChanged: (next: MysqlInspection) => void; onError: (e: unknown) => void }) { const [editing, setEditing] = useState(false); const [name, setName] = useState(room.name); const [notes, setNotes] = useState(room.notes ?? ""); const [position, setPosition] = useState(String(room.position)); async function save() { try { await patchMysqlRoom(inspection.id, room.id, { expected_version: inspection.version, name, notes: notes || null, position: Number(position) }); onChanged((await getMysqlInspection(inspection.id)).inspection); setEditing(false); } catch (e) { onError(e); } } return <article className="rounded-lg border border-border bg-card p-4"><div className="flex items-center justify-between gap-3"><h3 className="font-semibold">{room.name}</h3>{canEdit ? <button type="button" className="h-10 rounded-md border border-border px-3 text-sm" onClick={() => setEditing((value) => !value)}>Editar ambiente</button> : null}</div>{editing ? <div className="mt-3 space-y-2"><label className="block text-sm">Nome<input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="block text-sm">Observações<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="mt-1 w-full rounded-md border border-input p-3" /></label><label className="block text-sm">Posição<input type="number" min="0" value={position} onChange={(e) => setPosition(e.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><button type="button" onClick={() => void save()} className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"><Save className="h-4 w-4" />Salvar ambiente</button></div> : null}<div className="mt-3 space-y-2">{room.items.map((item) => <div key={item.id} className="rounded-md border border-border p-3 text-sm"><span>{item.name}</span><span className="ml-2 text-muted-foreground">{conditionLabels[item.condition]}</span></div>)}</div></article>; }
+
+function IntegratedRoomCard({ inspection, room, canEdit, onChanged, onError }: { inspection: MysqlInspection; room: MysqlInspectionRoom; canEdit: boolean; onChanged: (next: MysqlInspection) => void; onError: (e: unknown) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [roomName, setRoomName] = useState(room.name);
+  const [roomNotes, setRoomNotes] = useState(room.notes ?? "");
+  const [roomPosition, setRoomPosition] = useState(String(room.position));
+  const [itemName, setItemName] = useState("");
+  const [itemNotes, setItemNotes] = useState("");
+  const [itemCondition, setItemCondition] = useState<MysqlInspectionCondition>("not_inspected");
+  const [itemPosition, setItemPosition] = useState(String(room.items.length));
+
+  async function refresh() {
+    onChanged((await getMysqlInspection(inspection.id)).inspection);
+  }
+
+  async function addItem() {
+    if (!itemName.trim()) return;
+    try {
+      await createMysqlItem(inspection.id, room.id, {
+        id: crypto.randomUUID(),
+        expected_version: inspection.version,
+        name: itemName.trim(),
+        condition: itemCondition,
+        position: Number(itemPosition),
+        notes: itemNotes.trim() || null,
+      });
+      await refresh();
+      setItemName("");
+      setItemNotes("");
+      setItemCondition("not_inspected");
+      setItemPosition(String(room.items.length + 1));
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function updateItem(itemId: string, condition: MysqlInspectionCondition, notes: string | null) {
+    try {
+      await patchMysqlItem(inspection.id, room.id, itemId, { expected_version: inspection.version, condition, notes });
+      await refresh();
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function removeItem(itemId: string) {
+    if (!window.confirm("Remover este item?")) return;
+    try {
+      await deleteMysqlItem(inspection.id, room.id, itemId, inspection.version);
+      await refresh();
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  async function saveRoom() {
+    try {
+      await patchMysqlRoom(inspection.id, room.id, { expected_version: inspection.version, name: roomName.trim(), notes: roomNotes.trim() || null, position: Number(roomPosition) });
+      await refresh();
+      setEditing(false);
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  return <article className="rounded-lg border border-border bg-card p-4">
+    <div className="flex items-center justify-between gap-3"><h3 className="font-semibold">{room.name}</h3>{canEdit ? <button type="button" className="h-10 rounded-md border border-border px-3 text-sm" onClick={() => setEditing((value) => !value)}>Editar ambiente</button> : null}</div>
+    {editing ? <div className="mt-3 space-y-2"><label className="block text-sm">Nome<input aria-label="Nome do ambiente" value={roomName} onChange={(event) => setRoomName(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="block text-sm">Observações<textarea aria-label="Observações do ambiente" value={roomNotes} onChange={(event) => setRoomNotes(event.target.value)} rows={3} className="mt-1 w-full rounded-md border border-input p-3" /></label><label className="block text-sm">Posição<input aria-label="Posição do ambiente" type="number" min="0" value={roomPosition} onChange={(event) => setRoomPosition(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><button type="button" onClick={() => void saveRoom()} className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"><Save className="h-4 w-4" />Salvar ambiente</button></div> : null}
+    <div className="mt-3 space-y-2">
+      {room.items.map((item) => <div key={item.id} className="rounded-md border border-border p-3"><div className="flex flex-col gap-2 sm:flex-row sm:items-center"><span className="flex-1 text-sm font-medium">{item.name}</span><select aria-label={`Condição de ${item.name}`} disabled={!canEdit} value={item.condition} onChange={(event) => void updateItem(item.id, event.target.value as MysqlInspectionCondition, item.notes)} className="h-9 rounded-md border border-input bg-background px-2 text-sm">{Object.entries(conditionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{canEdit ? <button type="button" onClick={() => void removeItem(item.id)} className="text-destructive" aria-label={`Remover ${item.name}`}><Trash2 className="h-4 w-4" /></button> : null}</div><input aria-label={`Observações de ${item.name}`} disabled={!canEdit} defaultValue={item.notes ?? ""} onBlur={(event) => { if (event.target.value !== (item.notes ?? "")) void updateItem(item.id, item.condition, event.target.value || null); }} placeholder="Observações do item" className="mt-2 h-9 w-full rounded-md border border-input px-3 text-sm" /></div>)}
+      {room.items.length === 0 ? <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">Nenhum item adicionado ainda.</p> : null}
+    </div>
+    {canEdit ? <div className="mt-3 space-y-2 rounded-md border border-dashed border-border p-3"><p className="text-sm font-medium">Adicionar item</p><input aria-label="Nome do item" value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="Nome do item" className="h-10 w-full rounded-md border border-input px-3 text-sm" /><select aria-label="Condição do item" value={itemCondition} onChange={(event) => setItemCondition(event.target.value as MysqlInspectionCondition)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">{Object.entries(conditionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><textarea aria-label="Observações do item" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Observações do item" rows={2} className="w-full rounded-md border border-input p-3 text-sm" /><input aria-label="Posição do item" type="number" min="0" value={itemPosition} onChange={(event) => setItemPosition(event.target.value)} className="h-10 w-full rounded-md border border-input px-3 text-sm" /><button type="button" disabled={!itemName.trim()} onClick={() => void addItem()} className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"><Plus className="h-4 w-4" />Adicionar item</button></div> : null}
+  </article>;
+}

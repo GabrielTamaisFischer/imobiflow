@@ -56,4 +56,17 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain("Atualizamos os dados para você.");
     expect(detail).toContain("void reload()");
   });
+
+  it("integra criacao, edicao e readonly de itens no Room", async () => {
+    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    expect(detail).toContain("Nenhum item adicionado ainda.");
+    expect(detail).toContain("Adicionar item");
+    expect(detail).toContain("createMysqlItem(inspection.id, room.id");
+    expect(detail).toContain("expected_version: inspection.version");
+    expect(detail).toContain("condition: itemCondition");
+    expect(detail).toContain("notes: itemNotes.trim() || null");
+    expect(detail).toContain("patchMysqlItem(inspection.id, room.id, itemId");
+    expect(detail).toContain("deleteMysqlItem(inspection.id, room.id, itemId");
+    expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
+  });
 });
