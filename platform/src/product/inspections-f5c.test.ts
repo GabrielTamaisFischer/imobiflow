@@ -39,4 +39,21 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(list).toContain('match.routeId === "/app/vistorias/$inspectionId"');
     expect(list).toContain("if (isDetailRoute) return <Outlet />");
   });
+
+  it("oferece criação de ambiente somente enquanto a vistoria é mutável", async () => {
+    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    expect(detail).toContain("Adicionar ambiente");
+    expect(detail).toContain("Nenhum ambiente adicionado ainda.");
+    expect(detail).toContain("createMysqlRoom(inspection.id");
+    expect(detail).toContain("expected_version: inspection.version");
+    expect(detail).toContain("crypto.randomUUID()");
+    expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
+  });
+
+  it("refaz o carregamento após conflito de versão nas mutações do detalhe", async () => {
+    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    expect(detail).toContain("INSPECTION_VERSION_CONFLICT");
+    expect(detail).toContain("Atualizamos os dados para você.");
+    expect(detail).toContain("void reload()");
+  });
 });
