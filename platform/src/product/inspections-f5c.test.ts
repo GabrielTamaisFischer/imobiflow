@@ -69,4 +69,15 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain("deleteMysqlItem(inspection.id, room.id, itemId");
     expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
   });
+
+  it("oferece arquivamento somente para completed com locking e confirmacao", async () => {
+    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    expect(detail).toContain('inspection.status === "completed"');
+    expect(detail).toContain("Arquivar vistoria");
+    expect(detail).toContain('window.confirm("Arquivar esta vistoria?")');
+    expect(detail).toContain('status: "archived"');
+    expect(detail).toContain("expected_version: inspection.version");
+    expect(detail).toContain("handleMutationError(e)");
+    expect(detail).toContain('inspection.status !== "completed" && inspection.status !== "archived"');
+  });
 });
