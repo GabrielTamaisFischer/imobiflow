@@ -83,6 +83,12 @@ export function buildStorageFolder(input: {
   switch (input.purpose) {
     case "inspection_evidence":
       return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/evidence`;
+    case "inspection_report":
+      return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/reports`;
+    case "inspection_comparison":
+      return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/comparisons`;
+    case "inspection_signature":
+      return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/signatures`;
     case "property_image":
       return `${root}/${companyId}/properties/${sanitizeSegment(input.propertyId ?? "shared")}/images`;
     case "property_video":

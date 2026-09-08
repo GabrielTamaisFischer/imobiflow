@@ -9,6 +9,8 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { getStorageProvider, getStorageProviderForName, buildStorageFolder } from "../services/storage/index.js";
 import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { validateUploadFile } from "../services/storage/file-policy.js";
+import { createStoredFileRecord } from "../services/storage/stored-files.js";
+import { buildInspectionSnapshot, buildPdfBuffer, compareInspections, snapshotHash } from "../services/inspection-f5f.js";
 import type { StorageResourceType } from "../services/storage/types.js";
 import type { RequestWithAccess } from "../types/access.js";
 
@@ -153,6 +155,21 @@ async function loadEvidence(companyId: string, inspectionId: string) {
     orderBy: [{ position: "asc" }, { createdAt: "asc" }],
   });
   return Promise.all(rows.map(async (row) => serializeEvidence(row, await evidenceSignedUrl(row.storedFile))));
+}
+
+async function privateArtifactUrl(file: any, purpose: string) {
+  if (!file || deliveryAccessForPurpose(file.purpose ?? purpose) !== "authenticated") return null;
+  const provider = getStorageProviderForName(file.provider as any);
+  return provider.getAuthenticatedDownloadUrl?.({ publicId: file.publicId, resourceType: file.resourceType as StorageResourceType, format: file.format }) ?? null;
+}
+
+function artifactDto(file: any, metadata: any, signedUrl: string | null) {
+  return { id: file.id, entity_id: file.entityId, purpose: file.purpose, file_name: file.originalFilename, mime_type: file.mimeType, size_bytes: file.sizeBytes, created_at: file.createdAt.toISOString(), metadata, signed_url: signedUrl };
+}
+
+async function artifactFiles(companyId: string, entityType: string, inspectionId: string, purpose: string) {
+  const rows = await getPrisma().storedFile.findMany({ where: { companyId, entityType, purpose }, orderBy: { createdAt: "desc" } });
+  return rows.filter((row: any) => (row.metadataJson as any)?.inspection_id === inspectionId);
 }
 
 async function resolveAssignee(companyId: string, requestedUserId: string | undefined, fallbackUserId: string) {
@@ -450,6 +467,114 @@ mysqlInspectionsRouter.delete("/:id/rooms/:roomId/items/:itemId", requirePermiss
     if (!item) throw notFound();
     await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, companyId, input.expected_version); await tx.inspectionItem.delete({ where: { id: item.id } }); await event(tx, companyId, inspection.id, access.appUser.id, "inspection.item_removed", { item_id: item.id }); });
     res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// F5F: relatórios, assinaturas eletrônicas simples e comparação são artefatos
+// privados no StoredFile. O snapshot fica no metadataJson para que o documento
+// emitido não mude quando a Inspection corrente evoluir.
+mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  let uploaded: any = null;
+  try {
+    const access = req.access!;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    if (inspection.status !== "completed" && inspection.status !== "archived") throw invalid("O laudo final exige uma vistoria concluída.", "INSPECTION_REPORT_REQUIRES_COMPLETED");
+    const regenerate = req.body?.regenerate === true;
+    const existing = await artifactFiles(access.company.id, "inspection_report", inspection.id, "inspection_report");
+    if (existing.length && !regenerate) {
+      const file = existing[0];
+      return res.json({ report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_report")), replayed: true });
+    }
+    const evidence = await getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: inspection.id }, include: { storedFile: true }, orderBy: [{ position: "asc" }, { createdAt: "asc" }] });
+    const snapshot = buildInspectionSnapshot(inspection, evidence);
+    const hash = snapshotHash(snapshot);
+    const reportId = randomUUID();
+    const sections = [
+      `Inspection: ${snapshot.inspection_id} | Tipo: ${snapshot.type} | Status: ${snapshot.status}`,
+      `Empresa: ${snapshot.company_id}`,
+      `Imóvel: ${snapshot.property?.code ?? ""} ${snapshot.property?.title ?? ""}`,
+      `Responsável: ${snapshot.assigned_user?.name ?? "Não definido"} | Concluída em: ${snapshot.completed_at ?? "não concluída"}`,
+      `Observações: ${snapshot.notes ?? "-"}`,
+      ...snapshot.rooms.flatMap((room) => [`Ambiente: ${room.name} — ${room.notes ?? ""}`, ...room.items.map((item) => `Item: ${item.name} | Condição: ${item.condition} | Observações: ${item.notes ?? "-"}`)]),
+      `Evidências: ${snapshot.evidence.map((item) => item.file_name ?? item.id).join(", ") || "nenhuma"}`,
+      `Hash do snapshot: ${hash}`,
+    ];
+    const body = buildPdfBuffer("Laudo de vistoria", sections);
+    const policy = validateUploadFile({ purpose: "inspection_report", fileName: `inspection-${inspection.id}-${reportId}.pdf`, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
+    const key = resolveIdempotencyKey(req, `inspection.report:${inspection.id}:${regenerate ? reportId : "latest"}`);
+    const { result, replayed } = await withIdempotency(access.company.id, "inspection.report", key, async () => {
+      const storage = getStorageProvider();
+      uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, purpose: "inspection_report", fileName: `inspection-${inspection.id}-${reportId}.pdf`, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_report", inspectionId: inspection.id }), deliveryAccess: deliveryAccessForPurpose("inspection_report") });
+      await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_report", metadata: { inspection_id: inspection.id, inspection_version: inspection.version, snapshot, snapshot_hash: hash, generated_at: new Date().toISOString() } });
+      await getPrisma().$transaction(async (tx) => event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.report_generated", { report_id: reportId, inspection_version: inspection.version, snapshot_hash: hash, regenerated: regenerate }));
+      return { report_id: reportId, snapshot_hash: hash };
+    });
+    const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_report", entityId: result.report_id, purpose: "inspection_report" } });
+    return res.status(replayed ? 200 : 201).json({ report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_report")), replayed });
+  } catch (error) {
+    if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
+    next(error);
+  }
+});
+
+mysqlInspectionsRouter.get("/:id/reports", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    const rows = await artifactFiles(req.access!.company.id, "inspection_report", inspection.id, "inspection_report");
+    res.json({ reports: await Promise.all(rows.map(async (row: any) => artifactDto(row, row.metadataJson, await privateArtifactUrl(row, "inspection_report")))) });
+  } catch (error) { next(error); }
+});
+
+const signatureSchema = z.object({ report_id: z.string().uuid().optional(), signer_name: z.string().trim().min(1).max(180), signer_role: z.enum(["responsible", "owner", "tenant", "other"]), accepted_terms: z.boolean().default(true), signature_base64: z.string().min(1).max(8_000_000) });
+mysqlInspectionsRouter.post("/:id/signatures", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  let uploaded: any = null;
+  try {
+    const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage"), input = signatureSchema.parse(req.body);
+    if (inspection.status !== "completed") throw invalid("A assinatura exige uma vistoria concluída e não arquivada.", "INSPECTION_SIGNATURE_REQUIRES_COMPLETED");
+    if (!input.accepted_terms) throw invalid("É necessário confirmar a assinatura.", "SIGNATURE_TERMS_REQUIRED");
+    const reports = await artifactFiles(access.company.id, "inspection_report", inspection.id, "inspection_report");
+    const report = input.report_id ? reports.find((row: any) => row.entityId === input.report_id) : reports[0];
+    if (!report) throw invalid("Gere o laudo antes de assinar.", "INSPECTION_REPORT_REQUIRED");
+    const body = decodeBase64File(input.signature_base64);
+    const mimeType = input.signature_base64.startsWith("data:image/jpeg") ? "image/jpeg" : input.signature_base64.startsWith("data:image/webp") ? "image/webp" : "image/png";
+    const signatureId = randomUUID();
+    const signatureExtension = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
+    const signatureFileName = `signature-${signatureId}.${signatureExtension}`;
+    const policy = validateUploadFile({ purpose: "inspection_signature", fileName: signatureFileName, mimeType, declaredSizeBytes: body.byteLength, body });
+    const storage = getStorageProvider();
+    uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_signature", entityId: signatureId, purpose: "inspection_signature", fileName: signatureFileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_signature", inspectionId: inspection.id }), deliveryAccess: deliveryAccessForPurpose("inspection_signature") });
+    const metadata = { inspection_id: inspection.id, report_id: report.entityId, signer_name: input.signer_name, signer_role: input.signer_role, accepted_terms: input.accepted_terms, signed_at: new Date().toISOString(), signature_hash: snapshotHash(body.toString("base64")) };
+    await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_signature", entityId: signatureId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_signature", metadata });
+    await getPrisma().$transaction(async (tx) => event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.signature_created", { signature_id: signatureId, report_id: report.entityId, signer_role: input.signer_role }));
+    const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_signature", entityId: signatureId, purpose: "inspection_signature" } });
+    res.status(201).json({ signature: artifactDto(file, metadata, await privateArtifactUrl(file, "inspection_signature")), signature_type: "simple_electronic_capture" });
+  } catch (error) {
+    if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
+    next(error);
+  }
+});
+
+mysqlInspectionsRouter.get("/:id/signatures", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try { const inspection = await findInspection(req, String(req.params.id), "inspections.view"); const rows = await artifactFiles(req.access!.company.id, "inspection_signature", inspection.id, "inspection_signature"); res.json({ signatures: await Promise.all(rows.map(async (row: any) => artifactDto(row, row.metadataJson, await privateArtifactUrl(row, "inspection_signature")))) }); } catch (error) { next(error); }
+});
+
+const comparisonSchema = z.object({ baseline_inspection_id: z.string().uuid(), regenerate: z.boolean().optional().default(false) });
+mysqlInspectionsRouter.post("/:id/comparison", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!, exit = await findInspection(req, String(req.params.id), "inspections.view"), input = comparisonSchema.parse(req.body), entry = await findInspection(req, input.baseline_inspection_id, "inspections.view");
+    if (entry.propertyId !== exit.propertyId || entry.companyId !== exit.companyId) throw invalid("A comparação exige o mesmo imóvel e empresa.", "COMPARISON_SCOPE_INVALID");
+    if (!["completed", "archived"].includes(entry.status) || !["completed", "archived"].includes(exit.status)) throw invalid("A comparação exige vistorias concluídas.", "COMPARISON_REQUIRES_COMPLETED");
+    const [entryEvidence, exitEvidence] = await Promise.all([getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: entry.id }, include: { storedFile: true } }), getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: exit.id }, include: { storedFile: true } })]);
+    const comparison = compareInspections(buildInspectionSnapshot(entry, entryEvidence), buildInspectionSnapshot(exit, exitEvidence));
+    const hash = snapshotHash(comparison);
+    const existing = await artifactFiles(access.company.id, "inspection_comparison", exit.id, "inspection_comparison");
+    if (existing.length && !input.regenerate) return res.json({ comparison, report: artifactDto(existing[0], existing[0].metadataJson, await privateArtifactUrl(existing[0], "inspection_comparison")), replayed: true });
+    const comparisonId = randomUUID(), body = buildPdfBuffer("Comparação de vistorias", [`Entrada: ${entry.id}`, `Saída: ${exit.id}`, ...comparison.rooms.flatMap((room) => [ `Ambiente ${room.name}: ${room.outcome}`, ...room.items.map((item: any) => `Item ${item.name}: ${item.entry ?? "-"} -> ${item.exit ?? "-"} (${item.outcome})`) ]), `Hash: ${hash}` ]);
+    const storage = getStorageProvider(), uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison", fileName: `comparison-${exit.id}-${comparisonId}.pdf`, mimeType: "application/pdf", sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_comparison", inspectionId: exit.id }), deliveryAccess: deliveryAccessForPurpose("inspection_comparison") });
+    await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_comparison", metadata: { inspection_id: exit.id, baseline_inspection_id: entry.id, comparison, comparison_hash: hash } });
+    await getPrisma().$transaction(async (tx) => event(tx, access.company.id, exit.id, access.appUser.id, "inspection.comparison_generated", { comparison_id: comparisonId, baseline_inspection_id: entry.id, comparison_hash: hash }));
+    const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison" } });
+    res.status(201).json({ comparison, report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_comparison")) });
   } catch (error) { next(error); }
 });
 

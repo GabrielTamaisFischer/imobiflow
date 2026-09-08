@@ -26,6 +26,7 @@ export type MysqlInspection = {
   assigned_user?: { id: string; name: string }; rooms: MysqlInspectionRoom[];
 };
 export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } };
+export type MysqlInspectionArtifact = { id: string; entity_id: string; purpose: string; file_name: string; mime_type: string; size_bytes: number | null; created_at: string; metadata: Record<string, unknown>; signed_url: string | null };
 
 function mysqlToken() { return getStoredToken() ?? undefined; }
 function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
@@ -166,6 +167,22 @@ export async function reorderMysqlInspectionEvidence(inspectionId: string, expec
 export async function deleteMysqlInspectionEvidence(inspectionId: string, evidenceId: string, expected_version: number) {
   if (isOfflineRuntime()) throw Object.assign(new Error("Remoção de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
   return apiRequest<{ ok: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence/${encodeURIComponent(evidenceId)}`, { method: "DELETE", body: JSON.stringify({ expected_version }), token: mysqlToken() });
+}
+
+export async function generateMysqlInspectionReport(inspectionId: string, regenerate = false) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Gerar laudo exige conexão."), { code: "OFFLINE_REPORT_UNSUPPORTED" });
+  return apiRequest<{ report: MysqlInspectionArtifact; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/report`, { method: "POST", headers: idempotencyKey(`${inspectionId}:report:${regenerate ? crypto.randomUUID() : "latest"}`), body: JSON.stringify({ regenerate }), token: mysqlToken() });
+}
+export async function listMysqlInspectionReports(inspectionId: string) {
+  return apiRequest<{ reports: MysqlInspectionArtifact[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/reports`, { token: mysqlToken() });
+}
+export async function createMysqlInspectionSignature(inspectionId: string, input: { signer_name: string; signer_role: "responsible" | "owner" | "tenant" | "other"; accepted_terms: boolean; signature_base64: string; report_id?: string }) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Assinar exige conexão."), { code: "OFFLINE_SIGNATURE_UNSUPPORTED" });
+  return apiRequest<{ signature: MysqlInspectionArtifact; signature_type: "simple_electronic_capture" }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/signatures`, { method: "POST", headers: idempotencyKey(`${inspectionId}:signature:${crypto.randomUUID()}`), body: JSON.stringify(input), token: mysqlToken() });
+}
+export async function generateMysqlInspectionComparison(inspectionId: string, baselineInspectionId: string, regenerate = false) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Comparar vistorias exige conexão."), { code: "OFFLINE_COMPARISON_UNSUPPORTED" });
+  return apiRequest<{ comparison: unknown; report: MysqlInspectionArtifact }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison`, { method: "POST", body: JSON.stringify({ baseline_inspection_id: baselineInspectionId, regenerate }), token: mysqlToken() });
 }
 
 export async function syncMysqlInspectionOfflineQueue(inspectionId?: string) {

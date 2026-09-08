@@ -10,7 +10,10 @@ export type StoragePurpose =
   | "website_asset"
   | "website_logo"
   | "document"
-  | "inspection_evidence";
+  | "inspection_evidence"
+  | "inspection_report"
+  | "inspection_comparison"
+  | "inspection_signature";
 
 // Fast-follow de privacidade (F4E): decisão explícita de delivery no
 // provider, passada pelo chamador — nunca inferida implicitamente dentro do

@@ -21,6 +21,7 @@ export const STORED_FILE_PURPOSES = [
   "buyer_document",
   "financial_document",
   "signature_evidence",
+  "inspection_signature",
   // F3C (2026-09-04): logo da empresa usado como overlay de marca d'água nas
   // fotos publicadas (nunca no original). Guardado como StoredFile normal
   // (entityType "company_watermark_logo", entityId=companyId) — não é um
@@ -55,6 +56,7 @@ export const STORED_FILE_PURPOSE_PERMISSION: Record<StoredFilePurpose, string | 
   buyer_document: "owners.view",
   financial_document: "finance.view",
   signature_evidence: "contracts.view",
+  inspection_signature: "inspections.view",
   company_logo: "site.manage",
 };
 
@@ -106,6 +108,7 @@ export const STORED_FILE_DELIVERY_ACCESS: Record<StoredFilePurpose, "public" | "
   buyer_document: "public",
   financial_document: "public",
   signature_evidence: "public",
+  inspection_signature: "authenticated",
   company_logo: "public",
 };
 
