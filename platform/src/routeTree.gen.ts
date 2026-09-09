@@ -47,6 +47,7 @@ import { Route as AppAgendaRouteImport } from './routes/app.agenda'
 import { Route as SiteSlugIndexRouteImport } from './routes/site.$slug.index'
 import { Route as PortalProprietarioTokenRouteImport } from './routes/portal.proprietario.$token'
 import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquilino.$token'
+import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
 import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
@@ -245,6 +246,11 @@ const PortalInquilinoTokenRoute = PortalInquilinoTokenRouteImport.update({
   path: '/portal/inquilino/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PortalCompradorTokenRoute = PortalCompradorTokenRouteImport.update({
+  id: '/portal/comprador/$token',
+  path: '/portal/comprador/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppVistoriasInspectionIdRoute =
   AppVistoriasInspectionIdRouteImport.update({
     id: '/$inspectionId',
@@ -325,6 +331,7 @@ export interface FileRoutesByFullPath {
   '/app/': typeof AppIndexRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
   '/site/$slug/': typeof SiteSlugIndexRoute
@@ -370,6 +377,7 @@ export interface FileRoutesByTo {
   '/app': typeof AppIndexRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
   '/site/$slug': typeof SiteSlugIndexRoute
@@ -418,6 +426,7 @@ export interface FileRoutesById {
   '/app/': typeof AppIndexRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
   '/site/$slug/': typeof SiteSlugIndexRoute
@@ -467,6 +476,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
     | '/site/$slug/'
@@ -512,6 +522,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
     | '/site/$slug'
@@ -559,6 +570,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
     | '/site/$slug/'
@@ -588,6 +600,7 @@ export interface RootRouteChildren {
   ResultadosRoute: typeof ResultadosRoute
   AssinarVistoriaTokenRoute: typeof AssinarVistoriaTokenRoute
   SiteSlugRoute: typeof SiteSlugRouteWithChildren
+  PortalCompradorTokenRoute: typeof PortalCompradorTokenRoute
   PortalInquilinoTokenRoute: typeof PortalInquilinoTokenRoute
   PortalProprietarioTokenRoute: typeof PortalProprietarioTokenRoute
 }
@@ -860,6 +873,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PortalInquilinoTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/portal/comprador/$token': {
+      id: '/portal/comprador/$token'
+      path: '/portal/comprador/$token'
+      fullPath: '/portal/comprador/$token'
+      preLoaderRoute: typeof PortalCompradorTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/vistorias/$inspectionId': {
       id: '/app/vistorias/$inspectionId'
       path: '/$inspectionId'
@@ -1056,6 +1076,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResultadosRoute: ResultadosRoute,
   AssinarVistoriaTokenRoute: AssinarVistoriaTokenRoute,
   SiteSlugRoute: SiteSlugRouteWithChildren,
+  PortalCompradorTokenRoute: PortalCompradorTokenRoute,
   PortalInquilinoTokenRoute: PortalInquilinoTokenRoute,
   PortalProprietarioTokenRoute: PortalProprietarioTokenRoute,
 }
