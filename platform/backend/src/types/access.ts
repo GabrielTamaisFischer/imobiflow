@@ -48,7 +48,16 @@ export type AccessContext = {
   } | null;
 };
 
+export type PortalPartyAccess = {
+  id: string;
+  companyId: string;
+  name: string;
+  email: string | null;
+  partyType: "tenant" | "buyer";
+};
+
 export type RequestWithAccess = Request & {
   access?: AccessContext;
   authSessionId?: string;
+  portalParty?: PortalPartyAccess;
 };

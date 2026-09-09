@@ -1059,6 +1059,9 @@ model ContractParty {
   signatureRequired Boolean  @default(true) @map("signature_required")
   signatureStatus  String   @default("pending") @map("signature_status") @db.VarChar(30)
   signedAt         DateTime? @map("signed_at")
+  portalTokenHash  String?  @unique(map: "contract_parties_portal_token_hash_key") @map("portal_token_hash") @db.Char(64)
+  portalEnabled    Boolean  @default(false) @map("portal_enabled")
+  portalLastAccessAt DateTime? @map("portal_last_access_at")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -1066,6 +1069,7 @@ model ContractParty {
 
   @@index([companyId, contractId])
   @@index([companyId, partyType])
+  @@index([companyId, partyType, portalEnabled])
   @@map("contract_parties_mysql")
 }
 

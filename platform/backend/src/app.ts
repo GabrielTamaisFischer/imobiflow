@@ -27,6 +27,7 @@ import { publicInspectionsRouter } from "./routes/public-inspections.js";
 import { publicPortalsRouter } from "./routes/public-portals.js";
 import { publicSitesRouter } from "./routes/public-sites.js";
 import { realEstateRouter } from "./routes/real-estate.js";
+import { mysqlPortalRouter } from "./routes/portal-mysql.js";
 import { rentalsRouter } from "./routes/rentals.js";
 import { sitesRouter } from "./routes/sites.js";
 import { testLabRouter } from "./routes/test-lab.js";
@@ -131,6 +132,8 @@ export function createApp() {
   app.use("/public/inspections", publicInspectionsRouter);
   app.use("/public/portals", publicPortalsRouter);
   app.use("/public/sites", publicSitesRouter);
+  // F8A: token-bound, privacy-safe aggregates for external tenant/buyer portals.
+  app.use("/portal", mysqlPortalRouter);
   app.use("/real-estate", realEstateRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);

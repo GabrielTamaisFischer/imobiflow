@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { requireActiveSubscription, requireAuth, requireCompany, requirePermission } from "../middleware/auth.js";
 import { buildPropertyScopeFilter } from "../services/authorization.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
@@ -14,6 +14,7 @@ import { validateUploadFile } from "../services/storage/file-policy.js";
 import { resolveIdempotencyKey, withIdempotency } from "../services/idempotency.js";
 import { assertSafeContractContent, resolveContractPlaceholders } from "../services/contract-editor-f6d.js";
 import { findPartyForContract, canPartyDownloadSignedDocument, canPartySignVersion, canPartyViewContract, getContractsForParty } from "../services/contract-party-portal.js";
+import { hashOpaqueToken } from "../services/mysql-auth.js";
 
 export const mysqlContractsRouter = Router();
 mysqlContractsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
@@ -169,6 +170,32 @@ mysqlContractsRouter.post("/from-lead", requirePermission("contracts.manage"), a
       return tx.contract.findUniqueOrThrow({ where: { id: contract.id }, include });
     });
     res.status(201).json({ contract: serialize(created), source: { lead_id: lead.id, property_id: input.property_id } });
+  } catch (error) { next(error); }
+});
+
+// F8A: provision/revoke an opaque external portal token for one exact party.
+// The raw token is returned only on provisioning and only the hash is stored.
+mysqlContractsRouter.post("/:id/parties/:partyId/portal", requirePermission("contracts.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const contract = await findContract(req, String(req.params.id), true);
+    const party = await db().contractParty.findFirst({ where: { id: String(req.params.partyId), companyId: access.company.id, contractId: contract.id }, select: { id: true, partyType: true, name: true, email: true } });
+    if (!party || !["tenant", "buyer"].includes(party.partyType)) throw notFound();
+    const token = randomBytes(32).toString("base64url");
+    await db().contractParty.update({ where: { id: party.id }, data: { portalTokenHash: hashOpaqueToken(token), portalEnabled: true, portalLastAccessAt: null } });
+    await db().contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, actorUserId: access.appUser.id, eventType: "contract.party_portal_enabled", payloadJson: { party_id: party.id, party_type: party.partyType } } });
+    res.status(201).json({ portal: { party_id: party.id, party_type: party.partyType, name: party.name, email: party.email, enabled: true, token } });
+  } catch (error) { next(error); }
+});
+
+mysqlContractsRouter.delete("/:id/parties/:partyId/portal", requirePermission("contracts.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const contract = await findContract(req, String(req.params.id), true);
+    const result = await db().contractParty.updateMany({ where: { id: String(req.params.partyId), companyId: access.company.id, contractId: contract.id }, data: { portalTokenHash: null, portalEnabled: false } });
+    if (!result.count) throw notFound();
+    await db().contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, actorUserId: access.appUser.id, eventType: "contract.party_portal_disabled", payloadJson: { party_id: String(req.params.partyId) } } });
+    res.status(204).send();
   } catch (error) { next(error); }
 });
 
