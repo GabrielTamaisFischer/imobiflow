@@ -367,7 +367,13 @@ mysqlContractsRouter.post("/portal/:id/signatures", async (req: RequestWithAcces
     if (!party) throw notFound();
     if (party.name.trim().toLowerCase() !== input.signer_name.trim().toLowerCase()) throw invalid("O nome não corresponde à parte autenticada.", "SIGNER_NAME_MISMATCH");
     const version = await db().contractVersion.findFirst({ where: { id: input.version_id, contractId, companyId: access.company.id } });
-    if (!version || (version.status !== "signed" && !await canPartySignVersion(db(), identity, contractId, version.id))) throw notFound();
+    if (!version) throw notFound();
+    const replayKey = resolveIdempotencyKey(req, `contract.signature:${version.id}:${party.id}`);
+    if (party.signatureStatus === "signed") {
+      const prior = await db().idempotencyKey.findUnique({ where: { companyId_scope_idempotencyKey: { companyId: access.company.id, scope: "contract.signature.create", idempotencyKey: replayKey } } });
+      if (prior?.status === "completed" && prior.responseJson) return res.status(200).json({ ...(prior.responseJson as object), replayed: true });
+    }
+    if (version.status !== "signed" && !await canPartySignVersion(db(), identity, contractId, version.id)) throw notFound();
     const contract = await db().contract.findFirst({ where: { id: contractId, companyId: access.company.id }, select: { id: true, propertyId: true } });
     if (!contract) throw notFound();
     const key = resolveIdempotencyKey(req, `contract.signature:${version.id}:${party.id}`);
