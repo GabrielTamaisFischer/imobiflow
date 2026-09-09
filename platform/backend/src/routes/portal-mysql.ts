@@ -1,10 +1,12 @@
 import { Router } from "express";
+import { z } from "zod";
 import { hashOpaqueToken } from "../services/mysql-auth.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { loadBuyerPortal, loadTenantPortal } from "../services/portal-f8a.js";
 import type { PortalPartyAccess, RequestWithAccess } from "../types/access.js";
 import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { getStorageProviderForName } from "../services/storage/index.js";
+import { createPortalSignature } from "../services/portal-signatures-f8b.js";
 
 export const mysqlPortalRouter = Router();
 const db = () => getPrisma() as any;
@@ -51,6 +53,35 @@ mysqlPortalRouter.get("/buyer/me", requirePortalParty("buyer"), async (req: Requ
     res.json(portal);
   } catch (error) { next(error); }
 });
+
+export const portalSignatureSchema = z.object({
+  version_id: z.string().uuid(),
+  signer_name: z.string().trim().min(2).max(180),
+  accepted_terms: z.boolean().default(true),
+  signature_base64: z.string().min(1).max(8_000_000),
+}).strict();
+
+function portalSignatureRoute(partyType: "tenant" | "buyer") {
+  return [requirePortalParty(partyType), async (req: RequestWithAccess, res: any, next: any) => {
+    try {
+      const party = req.portalParty!;
+      const input = portalSignatureSchema.parse(req.body);
+      if (party.partyType !== partyType) return next(Object.assign(new Error("Parte não autorizada."), { statusCode: 404, code: "PORTAL_PARTY_NOT_FOUND" }));
+      if (party.name.trim().toLowerCase() !== input.signer_name.trim().toLowerCase()) return next(Object.assign(new Error("O nome não corresponde à parte autenticada."), { statusCode: 422, code: "SIGNER_NAME_MISMATCH" }));
+      const contract = await db().contract.findFirst({ where: { id: String(req.params.id), companyId: party.companyId, parties: { some: { id: party.id, companyId: party.companyId, partyType, signatureRequired: true } } }, select: { id: true, propertyId: true } });
+      if (!contract) return next(Object.assign(new Error("Contrato não encontrado."), { statusCode: 404, code: "PORTAL_CONTRACT_NOT_FOUND" }));
+      const version = await db().contractVersion.findFirst({ where: { id: input.version_id, contractId: contract.id, companyId: party.companyId }, select: { id: true, versionNumber: true, status: true } });
+      if (!version) return next(Object.assign(new Error("Versão não encontrada."), { statusCode: 404, code: "PORTAL_VERSION_NOT_FOUND" }));
+      const partyState = await db().contractParty.findFirst({ where: { id: party.id, companyId: party.companyId, contractId: contract.id, partyType, signatureRequired: true }, select: { signatureStatus: true } });
+      if (!partyState) return next(Object.assign(new Error("Parte do portal não encontrada."), { statusCode: 404, code: "PORTAL_PARTY_NOT_FOUND" }));
+      const result = await createPortalSignature({ db: db(), companyId: party.companyId, contractId: contract.id, propertyId: contract.propertyId, partyId: party.id, partyType, partySignatureStatus: partyState.signatureStatus, version, signerName: input.signer_name, signatureBase64: input.signature_base64, acceptedTerms: input.accepted_terms, request: req });
+      return res.status(result.replayed ? 200 : 201).json({ ...result.result, replayed: result.replayed });
+    } catch (error) { return next(error); }
+  }];
+}
+
+mysqlPortalRouter.post("/tenant/contracts/:id/signatures", ...portalSignatureRoute("tenant") as any);
+mysqlPortalRouter.post("/buyer/contracts/:id/signatures", ...portalSignatureRoute("buyer") as any);
 
 function portalDocumentRoute(partyType: "tenant" | "buyer") {
   return [requirePortalParty(partyType), async (req: RequestWithAccess, res: any, next: any) => {
