@@ -8,6 +8,7 @@ import { automationRouter } from "./routes/automation.js";
 import { aiRouter } from "./routes/ai.js";
 import { authRouter } from "./routes/auth.js";
 import { appointmentsRouter } from "./routes/appointments.js";
+import { mysqlAppointmentsRouter } from "./routes/appointments-mysql.js";
 import { billingRouter } from "./routes/billing.js";
 import { contractsRouter } from "./routes/contracts.js";
 import { mysqlContractsRouter } from "./routes/contracts-mysql.js";
@@ -106,6 +107,9 @@ export function createApp() {
   app.use("/auth", authRouter);
   app.use("/ai", aiRouter);
   app.use("/appointments", appointmentsRouter);
+  // F7A: agendamento canônico MySQL/Prisma; a rota legada Supabase acima
+  // permanece isolada para compatibilidade de clientes antigos.
+  app.use("/real-estate/appointments", mysqlAppointmentsRouter);
   app.use("/automation", automationRouter);
   app.use("/billing", billingRouter);
   app.use("/contracts", contractsRouter);

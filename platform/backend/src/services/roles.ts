@@ -61,6 +61,8 @@ export const brokerResourceScopedPermissions = [
   "inspections.view",
   "inspections.manage",
   "contracts.view",
+  "appointments.view",
+  "appointments.manage",
 ] as const;
 
 export const roleTemplates: ReadonlyArray<{
