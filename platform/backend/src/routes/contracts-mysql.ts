@@ -13,7 +13,7 @@ import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { validateUploadFile } from "../services/storage/file-policy.js";
 import { resolveIdempotencyKey, withIdempotency } from "../services/idempotency.js";
 import { assertSafeContractContent, resolveContractPlaceholders } from "../services/contract-editor-f6d.js";
-import { canPartyDownloadSignedDocument, canPartySignVersion, canPartyViewContract, getContractsForParty } from "../services/contract-party-portal.js";
+import { findPartyForContract, canPartyDownloadSignedDocument, canPartySignVersion, canPartyViewContract, getContractsForParty } from "../services/contract-party-portal.js";
 
 export const mysqlContractsRouter = Router();
 mysqlContractsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
@@ -192,6 +192,25 @@ mysqlContractsRouter.get("/portal/:id", async (req: RequestWithAccess, res, next
   } catch (error) { next(error); }
 });
 
+const portalDocumentQuery = z.object({ version_id: z.string().uuid().optional() });
+mysqlContractsRouter.get("/portal/:id/document", async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const contractId = String(req.params.id);
+    const identity = { companyId: access.company.id, email: access.appUser.email };
+    const query = portalDocumentQuery.parse(req.query);
+    if (!(await canPartyViewContract(db(), identity, contractId))) throw notFound();
+    const version = await db().contractVersion.findFirst({
+      where: { companyId: access.company.id, contractId, status: "signed", ...(query.version_id ? { id: query.version_id } : {}) },
+      orderBy: { versionNumber: "desc" },
+    });
+    if (!version?.documentFileId || !(await canPartyDownloadSignedDocument(db(), identity, contractId, version.id))) throw notFound();
+    const file = await db().storedFile.findFirst({ where: { id: version.documentFileId, companyId: access.company.id, entityType: "contract_version", entityId: version.id, purpose: "contract_document" } });
+    if (!file) throw notFound();
+    res.json({ document: contractArtifactDto(file, file.metadataJson, await privateContractUrl(file)), version_id: version.id, document_hash: version.documentHash });
+  } catch (error) { next(error); }
+});
+
 mysqlContractsRouter.get("/:id", requirePermission("contracts.view"), async (req: RequestWithAccess, res, next) => {
   try { res.json({ contract: serialize(await findContract(req, String(req.params.id))) }); } catch (error) { next(error); }
 });
@@ -283,7 +302,9 @@ mysqlContractsRouter.get("/:id/versions/:versionId/document", requirePermission(
   } catch (error) { next(error); }
 });
 
-const signatureSchema = z.object({ version_id: z.string().uuid(), party_id: z.string().uuid().optional(), signer_name: z.string().trim().min(2).max(180), signer_role: z.enum(["owner", "tenant", "buyer", "seller", "broker", "guarantor", "company", "witness", "other"]), accepted_terms: z.boolean().default(true), signature_base64: z.string().min(1).max(8_000_000) });
+const signerRoleSchema = z.enum(["owner", "tenant", "buyer", "seller", "broker", "guarantor", "company", "witness", "other"]);
+const signatureSchema = z.object({ version_id: z.string().uuid(), party_id: z.string().uuid().optional(), signer_name: z.string().trim().min(2).max(180), signer_role: signerRoleSchema, accepted_terms: z.boolean().default(true), signature_base64: z.string().min(1).max(8_000_000) });
+const portalSignatureSchema = signatureSchema.omit({ party_id: true, signer_role: true });
 mysqlContractsRouter.post("/:id/signatures", requirePermission("contracts.manage"), async (req: RequestWithAccess, res, next) => {
   let uploaded: any = null;
   try {
@@ -322,6 +343,58 @@ mysqlContractsRouter.post("/:id/signatures", requirePermission("contracts.manage
         await tx.contractVersion.update({ where: { id: version.id }, data: { status: nextStatus, signedAt: nextStatus === "signed" ? new Date() : null } });
         await tx.contract.update({ where: { id: contract.id }, data: { status: nextStatus, signedVersion: nextStatus === "signed" ? version.versionNumber : null } });
         await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, versionId: version.id, actorUserId: access.appUser.id, eventType: "contract.signature_created", payloadJson: { signature_file_id: file.id, party_id: party.id, signer_role: input.signer_role, version: version.versionNumber, signed_count: signed, required_count: required } } });
+        await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, versionId: version.id, actorUserId: access.appUser.id, eventType: `contract.${nextStatus}`, payloadJson: { version: version.versionNumber, signed_count: signed, required_count: required } } });
+      });
+      return { signature_id: file.id, version_id: version.id, signature_type: "simple_electronic_capture" as const };
+    });
+    res.status(replayed ? 200 : 201).json({ ...result, replayed });
+  } catch (error) {
+    if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as any, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
+    next(error);
+  }
+});
+
+/** Party signing derives both party and signer role from the authenticated email. */
+mysqlContractsRouter.post("/portal/:id/signatures", async (req: RequestWithAccess, res, next) => {
+  let uploaded: any = null;
+  try {
+    const access = req.access!;
+    const contractId = String(req.params.id);
+    const input = portalSignatureSchema.parse(req.body);
+    if (!input.accepted_terms) throw invalid("É necessário confirmar a assinatura.", "SIGNATURE_TERMS_REQUIRED");
+    const identity = { companyId: access.company.id, email: access.appUser.email };
+    const party = await findPartyForContract(db(), identity, contractId);
+    if (!party) throw notFound();
+    if (party.name.trim().toLowerCase() !== input.signer_name.trim().toLowerCase()) throw invalid("O nome não corresponde à parte autenticada.", "SIGNER_NAME_MISMATCH");
+    const version = await db().contractVersion.findFirst({ where: { id: input.version_id, contractId, companyId: access.company.id } });
+    if (!version || (version.status !== "signed" && !await canPartySignVersion(db(), identity, contractId, version.id))) throw notFound();
+    const contract = await db().contract.findFirst({ where: { id: contractId, companyId: access.company.id }, select: { id: true, propertyId: true } });
+    if (!contract) throw notFound();
+    const key = resolveIdempotencyKey(req, `contract.signature:${version.id}:${party.id}`);
+    if (version.status === "signed") {
+      const prior = await db().idempotencyKey.findUnique({ where: { companyId_scope_idempotencyKey: { companyId: access.company.id, scope: "contract.signature.create", idempotencyKey: key } } });
+      if (prior?.status === "completed" && prior.responseJson) return res.status(200).json({ ...(prior.responseJson as object), replayed: true });
+      throw conflict("A versão já está assinada.", "CONTRACT_VERSION_SIGNED");
+    }
+    if (!["generated", "awaiting_signature", "waiting_signature", "partially_signed"].includes(version.status)) throw conflict("A versão não está disponível para assinatura.", "CONTRACT_VERSION_IMMUTABLE");
+    const body = decodeBase64File(input.signature_base64);
+    const mimeType = input.signature_base64.startsWith("data:image/jpeg") ? "image/jpeg" : input.signature_base64.startsWith("data:image/webp") ? "image/webp" : "image/png";
+    const signatureId = randomUUID();
+    const extension = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
+    const fileName = `contract-signature-${contract.id}-${version.versionNumber}-${signatureId}.${extension}`;
+    const policy = validateUploadFile({ purpose: "contract_signature", fileName, mimeType, declaredSizeBytes: body.byteLength, body });
+    const { result, replayed } = await withIdempotency(access.company.id, "contract.signature.create", key, async () => {
+      const storage = getStorageProvider();
+      uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "contract_signature", entityId: contract.id, purpose: "signature_evidence", fileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "signature_evidence", propertyId: contract.propertyId }), deliveryAccess: deliveryAccessForPurpose("signature_evidence"), metadata: { signature_id: signatureId, contract_version_id: version.id } });
+      const file = await createStoredFileRecord({ companyId: access.company.id, entityType: "contract_signature", entityId: contract.id, file: uploaded, uploadedBy: access.appUser.id, purpose: "signature_evidence", metadata: { signature_id: signatureId, contract_id: contract.id, contract_version_id: version.id, party_id: party.id, signer_name: input.signer_name, signer_role: party.partyType, accepted_terms: input.accepted_terms, signature_hash: contractSnapshotHash(body.toString("base64")) } });
+      await db().$transaction(async (tx: any) => {
+        await tx.contractParty.update({ where: { id: party.id }, data: { signatureStatus: "signed", signedAt: new Date() } });
+        const required = await tx.contractParty.count({ where: { companyId: access.company.id, contractId: contract.id, signatureRequired: true } });
+        const signed = await tx.contractParty.count({ where: { companyId: access.company.id, contractId: contract.id, signatureRequired: true, signatureStatus: "signed" } });
+        const nextStatus = signed >= required ? "signed" : signed > 0 ? "partially_signed" : "waiting_signature";
+        await tx.contractVersion.update({ where: { id: version.id }, data: { status: nextStatus, signedAt: nextStatus === "signed" ? new Date() : null } });
+        await tx.contract.update({ where: { id: contract.id }, data: { status: nextStatus, signedVersion: nextStatus === "signed" ? version.versionNumber : null } });
+        await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, versionId: version.id, actorUserId: access.appUser.id, eventType: "contract.signature_created", payloadJson: { signature_file_id: file.id, party_id: party.id, signer_role: party.partyType, version: version.versionNumber, signed_count: signed, required_count: required } } });
         await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, versionId: version.id, actorUserId: access.appUser.id, eventType: `contract.${nextStatus}`, payloadJson: { version: version.versionNumber, signed_count: signed, required_count: required } } });
       });
       return { signature_id: file.id, version_id: version.id, signature_type: "simple_electronic_capture" as const };

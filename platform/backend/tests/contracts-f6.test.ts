@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { canTransitionContract, contractSnapshotHash, stableContractJson } from "../src/services/contracts-f6.js";
 import { deliveryAccessForPurpose } from "../src/services/storage/purposes.js";
 import { validateUploadFile } from "../src/services/storage/file-policy.js";
-import { canPartyViewContract, canPartySignVersion } from "../src/services/contract-party-portal.js";
+import { findPartyForContract, canPartyViewContract, canPartySignVersion } from "../src/services/contract-party-portal.js";
 import { brokerResourceScopedPermissions, roleTemplates } from "../src/services/roles.js";
 
 describe("F6A contrato canônico", () => {
@@ -72,5 +72,23 @@ describe("F6A contrato canônico", () => {
     const { canPartyDownloadSignedDocument } = await import("../src/services/contract-party-portal.js");
     await expect(canPartyDownloadSignedDocument(fakeDb, { companyId: "company-a", email: "tenant@example.test" }, "contract-a", "version-a")).resolves.toBe(true);
     await expect(canPartyDownloadSignedDocument(fakeDb, { companyId: "company-b", email: "tenant@example.test" }, "contract-a", "version-a")).resolves.toBe(false);
+  });
+
+  it("resolve parte e assinatura somente pelo tenant e email da sessão", async () => {
+    const calls: any[] = [];
+    const fakeDb = {
+      contractParty: {
+        findFirst: async (args: any) => {
+          calls.push(args);
+          return args.where.companyId === "company-a" && args.where.contractId === "contract-a" && args.where.email === "tenant@example.test"
+            ? { id: "party-a", partyType: "tenant", name: "Tenant QA", email: "tenant@example.test", signatureRequired: true, signatureStatus: "pending" }
+            : null;
+        },
+      },
+    } as any;
+    const party = await findPartyForContract(fakeDb, { companyId: "company-a", email: " TENANT@EXAMPLE.TEST " }, "contract-a", { signatureRequired: true, signatureStatus: "pending" });
+    expect(party?.id).toBe("party-a");
+    expect(calls[0].where).toMatchObject({ companyId: "company-a", contractId: "contract-a", email: "tenant@example.test", signatureRequired: true, signatureStatus: "pending" });
+    await expect(findPartyForContract(fakeDb, { companyId: "company-b", email: "tenant@example.test" }, "contract-a")).resolves.toBeNull();
   });
 });
