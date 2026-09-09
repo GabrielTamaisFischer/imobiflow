@@ -1342,6 +1342,9 @@ export function serializeCompanySite(site: any) {
     primary_color: site.primaryColor,
     settings_json: site.settingsJson ?? {},
     seo_json: site.seoJson ?? {},
+    template_key: site.templateKey ?? null,
+    version: site.version ?? 1,
+    published_config_json: site.publishedConfigJson ?? null,
     published_at: toIso(site.publishedAt),
     created_at: toIso(site.createdAt),
     updated_at: toIso(site.updatedAt),
@@ -1350,21 +1353,23 @@ export function serializeCompanySite(site: any) {
 
 export function publicSiteView(site: any) {
   const serialized = serializeCompanySite(site);
+  const snapshot = isRecord(site.publishedConfigJson) ? site.publishedConfigJson : null;
+  const published = snapshot ? { ...serialized, ...snapshot } : serialized;
   return {
-    id: serialized.id,
-    slug: serialized.slug,
-    custom_domain: serialized.custom_domain,
-    brand_name: serialized.brand_name,
-    headline: serialized.headline,
-    description: serialized.description,
-    phone: serialized.phone,
-    whatsapp: serialized.whatsapp,
-    email: serialized.email,
-    logo_url: serialized.logo_url,
-    primary_color: serialized.primary_color,
-    settings_json: serialized.settings_json,
-    seo_json: serialized.seo_json,
-    published_at: serialized.published_at,
+    id: published.id,
+    slug: published.slug,
+    custom_domain: published.custom_domain,
+    brand_name: published.brand_name,
+    headline: published.headline,
+    description: published.description,
+    phone: published.phone,
+    whatsapp: published.whatsapp,
+    email: published.email,
+    logo_url: published.logo_url,
+    primary_color: published.primary_color,
+    settings_json: published.settings_json,
+    seo_json: published.seo_json,
+    published_at: published.published_at,
   };
 }
 

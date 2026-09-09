@@ -57,6 +57,9 @@ export type CompanySite = {
     hero_image_url?: string;
     watermark?: WatermarkSettings;
   };
+  template_key?: string | null;
+  version?: number;
+  published_config_json?: Record<string, unknown> | null;
   seo_json: Record<string, unknown>;
   published_at: string | null;
   created_at: string;
@@ -87,6 +90,7 @@ export type PublicPropertyResponse = PublicSiteResponse & {
 };
 
 export type CompanySiteInput = {
+  expected_version?: number;
   slug: string;
   custom_domain?: string;
   brand_name: string;

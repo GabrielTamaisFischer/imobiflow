@@ -5,7 +5,7 @@ import {
   requireActiveSubscription,
   requireAuth,
   requireCompany,
-  requirePermission,
+  requireSiteManage,
 } from "../middleware/auth.js";
 import {
   isSiteSlugTakenByAnotherCompany,
@@ -29,6 +29,11 @@ import {
 import { WATERMARK_POSITIONS } from "../services/storage/types.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
 import type { RequestWithAccess } from "../types/access.js";
+import {
+  applyCompanySiteTemplate,
+  COMPANY_SITE_TEMPLATES,
+  parseCompanySiteConfig,
+} from "../services/company-site-foundation.js";
 
 export const sitesRouter = Router();
 
@@ -51,6 +56,7 @@ export const watermarkSettingsSchema = z
   .strict();
 
 export const siteSchema = z.object({
+  expected_version: z.number().int().positive().optional(),
   slug: z.string().min(3).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   custom_domain: z.string().max(180).optional().or(z.literal("")),
   brand_name: z.string().min(2).max(160),
@@ -87,10 +93,17 @@ export const siteSchema = z.object({
     })
     .catchall(z.unknown())
     .default({}),
-  seo_json: z.record(z.unknown()).optional().default({}),
+    seo_json: z.record(z.unknown()).optional().default({}),
 });
 
-sitesRouter.get("/settings", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
+const templateApplySchema = z.object({
+  template_key: z.string().min(1).max(100),
+  expected_version: z.number().int().positive().optional(),
+});
+
+const publishSchema = z.object({ expected_version: z.number().int().positive().optional() }).default({});
+
+sitesRouter.get("/settings", requireSiteManage, async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
     const [site, watermarkLogo] = await Promise.all([
@@ -99,6 +112,48 @@ sitesRouter.get("/settings", requirePermission("site.manage"), async (req: Reque
     ]);
 
     res.json({ site: site ? serializeCompanySite(site) : null, watermark_logo: serializeWatermarkLogo(watermarkLogo) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+sitesRouter.get("/templates", requireSiteManage, (_req: RequestWithAccess, res) => {
+  res.json({ templates: COMPANY_SITE_TEMPLATES });
+});
+
+sitesRouter.post("/template", requireSiteManage, async (req: RequestWithAccess, res, next) => {
+  try {
+    const companyId = req.access!.company.id;
+    const userId = req.access!.appUser.id;
+    const input = templateApplySchema.parse(req.body);
+    const existing = await prisma().companySite.findFirst({ where: { companyId } });
+    if (!existing) throw siteNotFound();
+    const templateConfig = applyCompanySiteTemplate(input.template_key);
+    const where = input.expected_version === undefined
+      ? { id: existing.id, companyId }
+      : { id: existing.id, companyId, version: input.expected_version };
+    const updated = await prisma().companySite.updateMany({
+      where,
+      data: {
+        settingsJson: { ...(existing.settingsJson as Record<string, unknown>), ...templateConfig } as Prisma.InputJsonValue,
+        templateKey: templateConfig.template_key,
+        version: { increment: 1 },
+      },
+    });
+    if (updated.count !== 1) throw siteVersionConflict();
+    const site = await prisma().companySite.findUnique({ where: { id: existing.id } });
+    if (!site) throw siteNotFound();
+    await prisma().websiteAuditLog.create({
+      data: {
+        companyId,
+        actorUserId: uuidOrNull(userId),
+        action: "site_settings_saved",
+        entityType: "company_sites",
+        entityId: site.id,
+        metadataJson: { template_key: templateConfig.template_key, operation: "template_applied" },
+      },
+    });
+    res.json({ site: serializeCompanySite(site) });
   } catch (error) {
     next(error);
   }
@@ -123,7 +178,7 @@ const watermarkLogoUploadSchema = z.object({
 // sobre "qual é o logo atual".
 sitesRouter.post(
   "/settings/watermark-logo",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -186,7 +241,7 @@ sitesRouter.post(
 
 sitesRouter.delete(
   "/settings/watermark-logo",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -244,11 +299,12 @@ function serializeWatermarkLogo(
   };
 }
 
-sitesRouter.put("/settings", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
+sitesRouter.put("/settings", requireSiteManage, async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
     const userId = req.access!.appUser.id;
     const input = siteSchema.parse(req.body);
+    const validatedConfig = parseCompanySiteConfig(input.settings_json);
     const existing = await prisma().companySite.findFirst({ where: { companyId } });
 
     // P0 multiempresa: o schema ja garante slug globalmente unico
@@ -277,13 +333,25 @@ sitesRouter.put("/settings", requirePermission("site.manage"), async (req: Reque
       email: emptyToNull(input.email),
       logoUrl: emptyToNull(input.logo_url),
       primaryColor: input.primary_color,
-      settingsJson: input.settings_json as Prisma.InputJsonValue,
+      settingsJson: validatedConfig as Prisma.InputJsonValue,
       seoJson: input.seo_json as Prisma.InputJsonValue,
+      templateKey: typeof validatedConfig.template_key === "string" ? validatedConfig.template_key : null,
     };
 
-    const site = existing
-      ? await prisma().companySite.update({ where: { id: existing.id }, data })
-      : await prisma().companySite.create({ data: { ...data, status: "draft" } });
+    let site;
+    if (existing) {
+      const updated = await prisma().companySite.updateMany({
+        where: input.expected_version === undefined
+          ? { id: existing.id, companyId }
+          : { id: existing.id, companyId, version: input.expected_version },
+        data: { ...data, version: { increment: 1 } },
+      });
+      if (updated.count !== 1) throw siteVersionConflict();
+      site = await prisma().companySite.findUnique({ where: { id: existing.id } });
+    } else {
+      site = await prisma().companySite.create({ data: { ...data, status: "draft" } });
+    }
+    if (!site) throw siteNotFound();
 
     await prisma().websiteAuditLog.create({
       data: {
@@ -302,17 +370,30 @@ sitesRouter.put("/settings", requirePermission("site.manage"), async (req: Reque
   }
 });
 
-sitesRouter.post("/publish", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
+sitesRouter.post("/publish", requireSiteManage, async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
     const userId = req.access!.appUser.id;
+    const input = publishSchema.parse(req.body);
     const existing = await prisma().companySite.findFirst({ where: { companyId } });
     if (!existing) throw siteNotFound();
 
-    const site = await prisma().companySite.update({
-      where: { id: existing.id },
-      data: { status: "published", publishedAt: new Date() },
+    const publishedAt = new Date();
+    const publishedConfig = serializeCompanySite({ ...existing, status: "published", publishedAt });
+    const updated = await prisma().companySite.updateMany({
+      where: input.expected_version === undefined
+        ? { id: existing.id, companyId }
+        : { id: existing.id, companyId, version: input.expected_version },
+      data: {
+        status: "published",
+        publishedAt,
+        publishedConfigJson: publishedConfig as Prisma.InputJsonValue,
+        version: { increment: 1 },
+      },
     });
+    if (updated.count !== 1) throw siteVersionConflict();
+    const site = await prisma().companySite.findUnique({ where: { id: existing.id } });
+    if (!site) throw siteNotFound();
 
     await prisma().websiteAuditLog.create({
       data: {
@@ -331,17 +412,23 @@ sitesRouter.post("/publish", requirePermission("site.manage"), async (req: Reque
   }
 });
 
-sitesRouter.post("/unpublish", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
+sitesRouter.post("/unpublish", requireSiteManage, async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
     const userId = req.access!.appUser.id;
+    const input = publishSchema.parse(req.body);
     const existing = await prisma().companySite.findFirst({ where: { companyId } });
     if (!existing) throw siteNotFound();
 
-    const site = await prisma().companySite.update({
-      where: { id: existing.id },
-      data: { status: "offline" },
+    const updated = await prisma().companySite.updateMany({
+      where: input.expected_version === undefined
+        ? { id: existing.id, companyId }
+        : { id: existing.id, companyId, version: input.expected_version },
+      data: { status: "offline", version: { increment: 1 } },
     });
+    if (updated.count !== 1) throw siteVersionConflict();
+    const site = await prisma().companySite.findUnique({ where: { id: existing.id } });
+    if (!site) throw siteNotFound();
 
     await prisma().websiteAuditLog.create({
       data: {
@@ -360,7 +447,7 @@ sitesRouter.post("/unpublish", requirePermission("site.manage"), async (req: Req
   }
 });
 
-sitesRouter.get("/leads", requirePermission("site.manage"), async (req: RequestWithAccess, res, next) => {
+sitesRouter.get("/leads", requireSiteManage, async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
     const leads = await prisma().siteLead.findMany({
@@ -408,7 +495,7 @@ sitesRouter.get("/leads", requirePermission("site.manage"), async (req: RequestW
 // explícita do imóvel — nunca como efeito colateral de publicar no site.
 sitesRouter.post(
   "/properties/:id/publish",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -473,7 +560,7 @@ sitesRouter.post(
 // é reaproveitada (resolveWhatsAppOwnerNotification), nunca reimplementada aqui.
 sitesRouter.get(
   "/properties/:id/whatsapp-link",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -492,7 +579,7 @@ sitesRouter.get(
 // enviada/recebida — só que o usuário abriu o WhatsApp com o texto pronto.
 sitesRouter.post(
   "/properties/:id/whatsapp-link-opened",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -513,7 +600,7 @@ sitesRouter.post(
 
 sitesRouter.post(
   "/properties/:id/unpublish",
-  requirePermission("site.manage"),
+  requireSiteManage,
   async (req: RequestWithAccess, res, next) => {
     try {
       const companyId = req.access!.company.id;
@@ -606,6 +693,13 @@ function siteSlugTaken() {
     new Error("Este endereço (slug) já está em uso por outra imobiliária. Escolha outro."),
     { statusCode: 409, code: "SITE_SLUG_TAKEN" },
   );
+}
+
+function siteVersionConflict() {
+  return Object.assign(new Error("O site foi alterado por outra sessão. Recarregue antes de salvar."), {
+    statusCode: 409,
+    code: "SITE_VERSION_CONFLICT",
+  });
 }
 
 function propertyNotFound() {

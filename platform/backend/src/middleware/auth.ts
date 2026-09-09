@@ -78,6 +78,19 @@ export function requirePermission(permission: string) {
   };
 }
 
+/** CompanySite is an organization-wide surface. Brokers may manage their own
+ * resources, but never receive global site administration by implication. */
+export function requireSiteManage(req: RequestWithAccess, res: Response, next: NextFunction) {
+  const permissions = req.access?.appUser.permissions ?? [];
+  const role = req.access?.appUser.role;
+  if (!permissions.includes("site.manage") || role === "broker") {
+    return res
+      .status(403)
+      .json({ error: "PERMISSION_DENIED", message: "Usuario sem permissao para gerenciar o site da empresa." });
+  }
+  return next();
+}
+
 export function requireRole(...roles: string[]) {
   return (req: RequestWithAccess, res: Response, next: NextFunction) => {
     if (!req.access || !roles.includes(req.access.appUser.role)) {
