@@ -46,6 +46,12 @@ model Company {
   inspectionItems InspectionItem[]
   inspectionEvidence InspectionEvidence[]
   inspectionEvents InspectionEvent[]
+  contracts       Contract[]
+  contractParties ContractParty[]
+  contractVersions ContractVersion[]
+  contractEvents  ContractEvent[]
+  contractClauses ContractClause[]
+  contractClauseInstances ContractClauseInstance[]
 
   @@index([status])
   @@map("companies")
@@ -89,6 +95,8 @@ model AppUser {
   assignedInspections Inspection[] @relation("InspectionAssignee")
   createdInspections Inspection[] @relation("InspectionCreator")
   inspectionEvents InspectionEvent[] @relation("InspectionEventActor")
+  createdContracts Contract[] @relation("ContractCreator")
+  contractEvents ContractEvent[] @relation("ContractEventActor")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -430,6 +438,7 @@ model Property {
   importRows              ImportRow[]
   accessGrants            PropertyAccess[]
   inspections             Inspection[]
+  contracts               Contract[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -557,6 +566,8 @@ model Inspection {
   rooms          InspectionRoom[]
   evidence       InspectionEvidence[]
   events         InspectionEvent[]
+  contractEntryLinks Contract[] @relation("ContractEntryInspection")
+  contractExitLinks  Contract[] @relation("ContractExitInspection")
 
   @@index([companyId, status, createdAt])
   @@index([companyId, propertyId, createdAt])
@@ -790,6 +801,7 @@ model Lead {
   siteLeads         SiteLead[]
   activities        LeadActivity[]
   accessGrants      LeadAccess[]
+  contracts         Contract[]
 
   @@index([companyId, source, createdAt])
   @@index([companyId, stageId, status, createdAt])
@@ -964,6 +976,143 @@ model Appointment {
   @@index([companyId, propertyId])
   @@index([companyId, startsAt])
   @@map("appointments")
+}
+
+model Contract {
+  id                String   @id @default(uuid()) @db.Char(36)
+  companyId         String   @map("company_id") @db.Char(36)
+  propertyId        String   @map("property_id") @db.Char(36)
+  leadId            String?  @map("lead_id") @db.Char(36)
+  entryInspectionId String?  @map("entry_inspection_id") @db.Char(36)
+  exitInspectionId  String?  @map("exit_inspection_id") @db.Char(36)
+  createdBy         String?  @map("created_by") @db.Char(36)
+  title             String   @db.VarChar(240)
+  contractType      String   @map("contract_type") @db.VarChar(40)
+  status            String   @default("draft") @db.VarChar(40)
+  startsAt          DateTime? @map("starts_at")
+  endsAt            DateTime? @map("ends_at")
+  totalAmountCents  Int?     @map("total_amount_cents")
+  monthlyAmountCents Int?    @map("monthly_amount_cents")
+  depositCents      Int?     @map("deposit_cents")
+  notes             String?  @db.Text
+  currentVersion    Int      @default(0) @map("current_version")
+  signedVersion     Int?     @map("signed_version")
+  metadataJson      Json     @map("metadata_json")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property          Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  lead              Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  entryInspection   Inspection? @relation("ContractEntryInspection", fields: [entryInspectionId], references: [id], onDelete: SetNull)
+  exitInspection    Inspection? @relation("ContractExitInspection", fields: [exitInspectionId], references: [id], onDelete: SetNull)
+  creator           AppUser? @relation("ContractCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  parties           ContractParty[]
+  versions          ContractVersion[]
+  events            ContractEvent[]
+  clauses           ContractClauseInstance[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, propertyId, status])
+  @@index([companyId, contractType, createdAt])
+  @@map("contracts_mysql")
+}
+
+model ContractParty {
+  id               String   @id @default(uuid()) @db.Char(36)
+  companyId        String   @map("company_id") @db.Char(36)
+  contractId       String   @map("contract_id") @db.Char(36)
+  partyType        String   @map("party_type") @db.VarChar(40)
+  name             String   @db.VarChar(180)
+  document         String?  @db.VarChar(40)
+  email            String?  @db.VarChar(180)
+  phone            String?  @db.VarChar(40)
+  signatureRequired Boolean  @default(true) @map("signature_required")
+  signatureStatus  String   @default("pending") @map("signature_status") @db.VarChar(30)
+  signedAt         DateTime? @map("signed_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contract         Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, contractId])
+  @@index([companyId, partyType])
+  @@map("contract_parties_mysql")
+}
+
+model ContractVersion {
+  id             String   @id @default(uuid()) @db.Char(36)
+  companyId      String   @map("company_id") @db.Char(36)
+  contractId     String   @map("contract_id") @db.Char(36)
+  versionNumber  Int      @map("version_number")
+  status         String   @default("draft") @db.VarChar(40)
+  snapshotJson   Json     @map("snapshot_json")
+  documentFileId String?  @map("document_file_id") @db.Char(36)
+  documentHash   String?  @map("document_hash") @db.Char(64)
+  generatedAt    DateTime? @map("generated_at")
+  signedAt       DateTime? @map("signed_at")
+  createdBy      String?  @map("created_by") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at")
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contract       Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, versionNumber])
+  @@index([companyId, contractId, status])
+  @@map("contract_versions_mysql")
+}
+
+model ContractEvent {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String   @map("company_id") @db.Char(36)
+  contractId  String   @map("contract_id") @db.Char(36)
+  versionId   String?  @map("version_id") @db.Char(36)
+  actorUserId String?  @map("actor_user_id") @db.Char(36)
+  eventType   String   @map("event_type") @db.VarChar(100)
+  payloadJson Json     @map("payload_json")
+  createdAt   DateTime @default(now()) @map("created_at")
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  actor       AppUser? @relation("ContractEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, contractId, createdAt])
+  @@index([companyId, eventType, createdAt])
+  @@map("contract_events_mysql")
+}
+
+model ContractClause {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String?  @map("company_id") @db.Char(36)
+  contractType String  @map("contract_type") @db.VarChar(40)
+  category    String   @db.VarChar(80)
+  title       String   @db.VarChar(240)
+  content     String   @db.Text
+  active      Boolean  @default(true)
+  createdBy   String?  @map("created_by") @db.Char(36)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sourcedInstances ContractClauseInstance[] @relation("ClauseSource")
+  @@index([companyId, contractType, active])
+  @@index([contractType, active])
+  @@map("contract_clauses_mysql")
+}
+
+model ContractClauseInstance {
+  id             String   @id @default(uuid()) @db.Char(36)
+  companyId      String   @map("company_id") @db.Char(36)
+  contractId     String   @map("contract_id") @db.Char(36)
+  sourceClauseId String?  @map("source_clause_id") @db.Char(36)
+  title          String   @db.VarChar(240)
+  content        String   @db.Text
+  position       Int      @default(0)
+  metadataJson   Json     @map("metadata_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contract       Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  sourceClause   ContractClause? @relation("ClauseSource", fields: [sourceClauseId], references: [id], onDelete: SetNull)
+  @@index([companyId, contractId, position])
+  @@index([companyId, sourceClauseId])
+  @@map("contract_clause_instances_mysql")
 }
 
 enum WebsiteStatus {

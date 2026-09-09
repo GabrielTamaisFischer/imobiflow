@@ -89,6 +89,12 @@ export function buildStorageFolder(input: {
       return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/comparisons`;
     case "inspection_signature":
       return `${root}/${companyId}/inspections/${sanitizeSegment(input.inspectionId ?? "shared")}/signatures`;
+    case "contract_attachment":
+    case "contract_document":
+    case "contract_signature":
+    case "signature_evidence":
+    case "signed_contract":
+      return `${root}/${companyId}/contracts/${sanitizeSegment(input.propertyId ?? "shared")}/documents`;
     case "property_image":
       return `${root}/${companyId}/properties/${sanitizeSegment(input.propertyId ?? "shared")}/images`;
     case "property_video":

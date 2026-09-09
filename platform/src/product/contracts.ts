@@ -13,16 +13,17 @@ export type Contract = {
   template_id: string | null;
   contract_number: string | null;
   title: string;
-  contract_type: "rental" | "sale" | "management" | "service" | "other";
+  contract_type: "rental" | "sale";
   status:
     | "draft"
     | "generated"
-    | "sent"
     | "waiting_signature"
+    | "awaiting_signature"
+    | "partially_signed"
     | "signed"
     | "active"
     | "cancelled"
-    | "expired"
+    | "terminated"
     | "archived";
   starts_at: string | null;
   ends_at: string | null;
@@ -33,6 +34,7 @@ export type Contract = {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  current_version: number;
   properties?: {
     id: string;
     code: string | null;
@@ -49,6 +51,7 @@ export type Contract = {
     phone: string | null;
     portal_token: string | null;
     portal_enabled: boolean;
+    signature_required: boolean;
   }>;
 };
 
@@ -72,7 +75,7 @@ export type ContractParty = {
 };
 
 export type ContractInput = {
-  property_id?: string;
+  property_id: string;
   contract_number?: string;
   title: string;
   contract_type: Contract["contract_type"];
@@ -94,29 +97,94 @@ export type ContractInput = {
 };
 
 export function isPreviewContracts() {
-  return isPreviewToken(getStoredToken());
+  return false;
 }
 
 export async function listContracts() {
-  if (isPreviewContracts()) return { contracts: await readPreviewContractsWithProperties() };
-
-  return apiRequest<{ contracts: Contract[] }>("/contracts?status=all", {
+  const response = await apiRequest<{ contracts: Contract[] }>("/real-estate/contracts?status=all", {
     token: getStoredToken() ?? undefined,
   });
+  return { contracts: response.contracts.map(normalizeContract) };
 }
 
 export async function createContract(input: ContractInput) {
-  if (isPreviewContracts()) {
-    const contract = await createPreviewContract(input);
-    const parties = readPreviewParties().filter((party) => party.contract_id === contract.id);
-    return { contract, parties };
-  }
-
-  return apiRequest<{ contract: Contract; parties: ContractParty[] }>("/contracts", {
+  const response = await apiRequest<{ contract: Contract }>("/real-estate/contracts", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, id: crypto.randomUUID(), parties: input.parties ?? [] }),
     token: getStoredToken() ?? undefined,
   });
+  return { contract: normalizeContract(response.contract) };
+}
+
+export async function getContract(id: string) {
+  const response = await apiRequest<{ contract: Contract }>(`/real-estate/contracts/${id}`, { token: getStoredToken() ?? undefined });
+  return { contract: normalizeContract(response.contract) };
+}
+
+export async function updateContract(id: string, input: Record<string, unknown>) {
+  const response = await apiRequest<{ contract: Contract }>(`/real-estate/contracts/${id}`, {
+    method: "PATCH", body: JSON.stringify(input), token: getStoredToken() ?? undefined,
+  });
+  return { contract: normalizeContract(response.contract) };
+}
+
+export async function listContractVersions(id: string) {
+  return apiRequest<{ versions: any[] }>(`/real-estate/contracts/${id}/versions`, { token: getStoredToken() ?? undefined });
+}
+
+export async function listContractEvents(id: string) {
+  return apiRequest<{ events: any[] }>(`/real-estate/contracts/${id}/events`, { token: getStoredToken() ?? undefined });
+}
+
+export async function generateContractVersion(id: string, idempotencyKey = crypto.randomUUID()) {
+  return apiRequest<{ version: any; replayed?: boolean }>(`/real-estate/contracts/${id}/versions`, {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: "{}", token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function listContractSignatures(id: string) {
+  return apiRequest<{ signatures: any[] }>(`/real-estate/contracts/${id}/signatures`, { token: getStoredToken() ?? undefined });
+}
+
+export async function listContractAttachments(id: string) {
+  return apiRequest<{ attachments: any[] }>(`/real-estate/contracts/${id}/attachments`, { token: getStoredToken() ?? undefined });
+}
+
+export async function createContractSignature(id: string, input: { version_id: string; party_id?: string; signer_name: string; signer_role: string; signature_base64: string }) {
+  return apiRequest<{ signature_id: string; replayed?: boolean }>(`/real-estate/contracts/${id}/signatures`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ ...input, accepted_terms: true }), token: getStoredToken() ?? undefined });
+}
+
+export async function uploadContractAttachment(id: string, file: File) {
+  const content_base64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("Não foi possível ler o anexo.")); reader.readAsDataURL(file); });
+  return apiRequest<{ attachment: any }>(`/real-estate/contracts/${id}/attachments`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ filename: file.name, mime_type: file.type, content_base64 }), token: getStoredToken() ?? undefined });
+}
+
+export type ContractClause = { id: string; company_id: string | null; contract_type: "rental" | "sale"; category: string; title: string; content: string; active: boolean; system: boolean; position?: number };
+export async function listContractClauses(contractType?: Contract["contract_type"]) { return apiRequest<{ clauses: ContractClause[] }>(`/real-estate/contract-clauses${contractType ? `?contract_type=${contractType}` : ""}`, { token: getStoredToken() ?? undefined }); }
+export async function addContractClause(contractId: string, clause: Pick<ContractClause, "title" | "content"> & { source_clause_id?: string | null; position?: number }) { return apiRequest<{ clause: ContractClause }>(`/real-estate/contract-clauses/contracts/${contractId}`, { method: "POST", body: JSON.stringify(clause), token: getStoredToken() ?? undefined }); }
+export async function updateContractClause(contractId: string, clauseId: string, input: Partial<Pick<ContractClause, "title" | "content" | "position">>) { return apiRequest<{ clause: ContractClause }>(`/real-estate/contract-clauses/contracts/${contractId}/${clauseId}`, { method: "PATCH", body: JSON.stringify(input), token: getStoredToken() ?? undefined }); }
+export async function deleteContractClause(contractId: string, clauseId: string) { return apiRequest<{ ok: boolean }>(`/real-estate/contract-clauses/contracts/${contractId}/${clauseId}`, { method: "DELETE", token: getStoredToken() ?? undefined }); }
+export async function listContractClauseInstances(contractId: string) { return apiRequest<{ clauses: ContractClause[] }>(`/real-estate/contract-clauses/contracts/${contractId}`, { token: getStoredToken() ?? undefined }); }
+
+function normalizeContract(raw: any): Contract {
+  const parties = raw.parties ?? raw.contract_parties ?? [];
+  return {
+    ...raw,
+    current_version: raw.current_version ?? raw.currentVersion ?? 0,
+    signed_version: raw.signed_version ?? raw.signedVersion ?? null,
+    properties: raw.property ?? raw.properties ?? null,
+    contract_parties: parties.map((party: any) => ({
+      ...party,
+      company_id: party.company_id ?? party.companyId,
+      contract_id: party.contract_id ?? party.contractId,
+      party_type: party.party_type ?? party.partyType,
+      signature_status: party.signature_status ?? party.signatureStatus,
+      signature_required: party.signature_required ?? party.signatureRequired ?? true,
+      signed_at: party.signed_at ?? party.signedAt,
+      created_at: party.created_at ?? party.createdAt,
+      updated_at: party.updated_at ?? party.updatedAt,
+    })),
+  };
 }
 
 function readPreviewContracts() {
@@ -179,6 +247,7 @@ async function createPreviewContract(input: ContractInput): Promise<Contract> {
     metadata: {},
     created_at: now,
     updated_at: now,
+    current_version: 0,
     properties: buildPropertySummary(property),
     contract_parties: [],
   };
@@ -212,6 +281,7 @@ async function createPreviewContract(input: ContractInput): Promise<Contract> {
       name: party.name,
       email: party.email,
       phone: party.phone,
+      signature_required: party.signature_required,
       portal_token: party.portal_token,
       portal_enabled: party.portal_enabled,
     })),

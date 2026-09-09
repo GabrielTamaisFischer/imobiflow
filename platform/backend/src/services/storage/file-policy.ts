@@ -87,6 +87,36 @@ const rules: Record<StoragePurpose, UploadRule> = {
     maxBytes: 2 * MiB,
     resourceType: "image",
   },
+  contract_attachment: {
+    mimeTypes: ["application/pdf", "image/jpeg", "image/png", "image/webp"],
+    extensions: [".pdf", ".jpg", ".jpeg", ".png", ".webp"],
+    maxBytes: 10 * MiB,
+    resourceType: "raw",
+  },
+  signature_evidence: {
+    mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+    extensions: [".png", ".jpg", ".jpeg", ".webp"],
+    maxBytes: 2 * MiB,
+    resourceType: "image",
+  },
+  contract_document: {
+    mimeTypes: ["application/pdf"],
+    extensions: [".pdf"],
+    maxBytes: 20 * MiB,
+    resourceType: "raw",
+  },
+  signed_contract: {
+    mimeTypes: ["application/pdf"],
+    extensions: [".pdf"],
+    maxBytes: 20 * MiB,
+    resourceType: "raw",
+  },
+  contract_signature: {
+    mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+    extensions: [".png", ".jpg", ".jpeg", ".webp"],
+    maxBytes: 2 * MiB,
+    resourceType: "image",
+  },
 };
 
 const blockedExtensions = new Set([".exe", ".bat", ".cmd", ".js", ".mjs", ".cjs", ".html", ".htm", ".svg"]);

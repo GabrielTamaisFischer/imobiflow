@@ -60,6 +60,7 @@ export const brokerResourceScopedPermissions = [
   "crm.manage",
   "inspections.view",
   "inspections.manage",
+  "contracts.view",
 ] as const;
 
 export const roleTemplates: ReadonlyArray<{
@@ -87,6 +88,7 @@ export const roleTemplates: ReadonlyArray<{
       "properties.manage",
       "inspections.view",
       "inspections.manage",
+      "contracts.view",
       "owners.view",
       "appointments.view",
       "appointments.manage",

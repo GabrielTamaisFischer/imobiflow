@@ -10,6 +10,8 @@ import { authRouter } from "./routes/auth.js";
 import { appointmentsRouter } from "./routes/appointments.js";
 import { billingRouter } from "./routes/billing.js";
 import { contractsRouter } from "./routes/contracts.js";
+import { mysqlContractsRouter } from "./routes/contracts-mysql.js";
+import { contractClausesRouter } from "./routes/contract-clauses-mysql.js";
 import { crmRouter } from "./routes/crm.js";
 import { dashboardRouter } from "./routes/dashboard.js";
 import { financeRouter } from "./routes/finance.js";
@@ -107,6 +109,9 @@ export function createApp() {
   app.use("/automation", automationRouter);
   app.use("/billing", billingRouter);
   app.use("/contracts", contractsRouter);
+  // F6A: contrato canônico MySQL/Prisma; o endpoint legado Supabase permanece separado.
+  app.use("/real-estate/contracts", mysqlContractsRouter);
+  app.use("/real-estate/contract-clauses", contractClausesRouter);
   app.use("/crm", crmRouter);
   app.use("/dashboard", dashboardRouter);
   app.use("/finance", financeRouter);

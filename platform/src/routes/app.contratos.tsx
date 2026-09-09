@@ -1,12 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Copy, FileSignature, Loader2, Mail, MessageCircle, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
 import {
   createContract,
+  updateContract,
+  generateContractVersion,
+  getContract,
+  createContractSignature,
+  uploadContractAttachment,
+  addContractClause,
+  deleteContractClause,
+  listContractClauses,
+  listContractClauseInstances,
+  updateContractClause,
+  listContractAttachments,
+  listContractEvents,
+  listContractSignatures,
+  listContractVersions,
   listContracts,
   type Contract,
+  type ContractParty,
   type ContractInput,
 } from "@/product/contracts";
 import { getModuleByKey } from "@/product/app-modules";
@@ -21,20 +36,18 @@ export const Route = createFileRoute("/app/contratos")({
 const contractTypeLabels = {
   rental: "Locação",
   sale: "Venda",
-  management: "Administração",
-  service: "Serviço",
-  other: "Outro",
 };
 
 const statusLabels = {
   draft: "Rascunho",
   generated: "Gerado",
-  sent: "Enviado",
   waiting_signature: "Aguardando assinatura",
+  awaiting_signature: "Aguardando assinatura",
+  partially_signed: "Parcialmente assinado",
   signed: "Assinado",
   active: "Ativo",
   cancelled: "Cancelado",
-  expired: "Expirado",
+  terminated: "Encerrado",
   archived: "Arquivado",
 };
 
@@ -46,6 +59,9 @@ function ContractsPage() {
   const [isContractsLoading, setIsContractsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   async function refreshContracts() {
     setIsContractsLoading(true);
@@ -102,12 +118,6 @@ function ContractsPage() {
         </button>
       </div>
 
-      {session?.access.subscription?.plan_slug === "preview" ? (
-        <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
-          Modo visualização ativo: contratos criados aqui ficam apenas neste navegador.
-        </div>
-      ) : null}
-
       {showForm ? (
         <ContractForm
           properties={properties}
@@ -119,11 +129,20 @@ function ContractsPage() {
         />
       ) : null}
 
+      {selectedContractId ? (
+        <ContractDetail contractId={selectedContractId} onClose={() => setSelectedContractId(null)} />
+      ) : null}
+
       {error ? (
         <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {error}
         </div>
       ) : null}
+
+      {!isContractsLoading && contracts.length > 0 ? <div className="mb-4 grid gap-2 rounded-lg border border-border bg-card p-3 sm:grid-cols-[1fr_auto]">
+        <input aria-label="Buscar contratos" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por título, número ou imóvel" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+        <select aria-label="Filtrar status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-10 rounded-md border border-input bg-background px-3 text-sm"><option value="all">Todos os status</option>{Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+      </div> : null}
 
       {isContractsLoading ? (
         <section className="flex min-h-[320px] items-center justify-center rounded-lg border border-border bg-card text-sm text-muted-foreground">
@@ -140,8 +159,8 @@ function ContractsPage() {
         />
       ) : (
         <section className="grid gap-4 lg:grid-cols-2">
-          {contracts.map((contract) => (
-            <ContractCard key={contract.id} contract={contract} />
+          {contracts.filter((contract) => (statusFilter === "all" || contract.status === statusFilter) && (!query.trim() || `${contract.title} ${contract.contract_number ?? ""} ${contract.properties?.title ?? ""}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))).map((contract) => (
+            <ContractCard key={contract.id} contract={contract} onOpen={() => setSelectedContractId(contract.id)} />
           ))}
         </section>
       )}
@@ -160,6 +179,7 @@ function ContractForm({
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [parties, setParties] = useState<Array<{ party_type: ContractParty["party_type"]; name: string; document: string; email: string; phone: string }>>([]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -168,7 +188,6 @@ function ContractForm({
 
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
-    const partyName = String(form.get("party_name") ?? "");
     const input: ContractInput = {
       property_id: String(form.get("property_id") ?? ""),
       contract_number: String(form.get("contract_number") ?? ""),
@@ -181,22 +200,7 @@ function ContractForm({
       monthly_amount_cents: parseMoneyToCents(String(form.get("monthly_amount") ?? "")),
       deposit_cents: parseMoneyToCents(String(form.get("deposit") ?? "")),
       notes: String(form.get("notes") ?? ""),
-      parties: partyName
-        ? [
-            {
-              party_type: String(form.get("party_type") ?? "tenant") as
-                | "owner"
-                | "tenant"
-                | "buyer"
-                | "seller",
-              name: partyName,
-              document: String(form.get("party_document") ?? ""),
-              email: String(form.get("party_email") ?? ""),
-              phone: String(form.get("party_phone") ?? ""),
-              signature_required: true,
-            },
-          ]
-        : [],
+      parties: parties.filter((party) => party.name.trim()).map((party) => ({ ...party, signature_required: true })),
     };
 
     try {
@@ -237,10 +241,11 @@ function ContractForm({
           <span className="font-medium">Imóvel</span>
           <select
             name="property_id"
+            required
             className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
             defaultValue=""
           >
-            <option value="">Sem vínculo ainda</option>
+            <option value="" disabled>Selecione um imóvel</option>
             {properties.map((property) => (
               <option key={property.id} value={property.id}>
                 {property.code ? `${property.code} - ` : ""}
@@ -258,9 +263,6 @@ function ContractForm({
           >
             <option value="rental">Locação</option>
             <option value="sale">Venda</option>
-            <option value="management">Administração</option>
-            <option value="service">Serviço</option>
-            <option value="other">Outro</option>
           </select>
         </label>
         <Field label="Início" name="starts_at" type="date" />
@@ -268,23 +270,17 @@ function ContractForm({
         <Field label="Valor total" name="total_amount" inputMode="decimal" />
         <Field label="Valor mensal" name="monthly_amount" inputMode="decimal" />
         <Field label="Caução/garantia" name="deposit" inputMode="decimal" />
-        <label className="space-y-1 text-sm">
-          <span className="font-medium">Parte principal</span>
-          <select
-            name="party_type"
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-            defaultValue="tenant"
-          >
-            <option value="tenant">Inquilino</option>
-            <option value="owner">Proprietário</option>
-            <option value="buyer">Comprador</option>
-            <option value="seller">Vendedor</option>
-          </select>
-        </label>
-        <Field label="Nome da parte" name="party_name" />
-        <Field label="Documento da parte" name="party_document" />
-        <Field label="E-mail da parte" name="party_email" type="email" />
-        <Field label="Telefone da parte" name="party_phone" />
+      </div>
+
+      <div className="mt-4 rounded-md border border-border bg-background p-3">
+        <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold">Partes do contrato</p><p className="text-xs text-muted-foreground">Adicione proprietários, compradores, inquilinos, fiadores ou outras partes.</p></div><button type="button" onClick={() => setParties((current) => [...current, { party_type: "tenant", name: "", document: "", email: "", phone: "" }])} className="h-9 rounded-md border border-border px-3 text-xs font-semibold">Adicionar parte</button></div>
+        <div className="mt-3 space-y-3">{parties.map((party, index) => <div key={index} className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-5">
+          <select aria-label={`Tipo da parte ${index + 1}`} value={party.party_type} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, party_type: event.target.value as ContractParty["party_type"] } : item))} className="h-10 rounded-md border border-input bg-background px-2 text-sm"><option value="owner">Proprietário</option><option value="buyer">Comprador</option><option value="tenant">Inquilino</option><option value="seller">Vendedor</option><option value="guarantor">Fiador</option><option value="other">Outra parte</option></select>
+          <input aria-label={`Nome da parte ${index + 1}`} value={party.name} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} placeholder="Nome" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          <input aria-label={`Documento da parte ${index + 1}`} value={party.document} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, document: event.target.value } : item))} placeholder="CPF/CNPJ" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          <input aria-label={`E-mail da parte ${index + 1}`} value={party.email} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, email: event.target.value } : item))} placeholder="E-mail" type="email" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          <button type="button" onClick={() => setParties((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="h-10 rounded-md border border-destructive/40 px-3 text-sm text-destructive">Remover</button>
+        </div>)}</div>
       </div>
 
       <label className="mt-3 block space-y-1 text-sm">
@@ -313,7 +309,7 @@ function ContractForm({
   );
 }
 
-function ContractCard({ contract }: { contract: Contract }) {
+function ContractCard({ contract, onOpen }: { contract: Contract; onOpen: () => void }) {
   const [copied, setCopied] = useState(false);
   const tenantPortal = contract.contract_parties?.find(
     (party) => party.party_type === "tenant" && party.portal_enabled && party.portal_token,
@@ -435,7 +431,7 @@ function ContractCard({ contract }: { contract: Contract }) {
                   href={whatsappLink}
                   target="_blank"
                   rel="noreferrer"
-                  onClick={() => registerPortalShare("whatsapp", tenantPortal.phone || "")}
+                  onClick={() => registerPortalShare("whatsapp", tenantPortal?.phone || "")}
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent"
                 >
                   <MessageCircle className="h-3.5 w-3.5" />
@@ -445,7 +441,7 @@ function ContractCard({ contract }: { contract: Contract }) {
               {emailLink ? (
                 <a
                   href={emailLink}
-                  onClick={() => registerPortalShare("email", tenantPortal.email || "")}
+                  onClick={() => registerPortalShare("email", tenantPortal?.email || "")}
                   className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent"
                 >
                   <Mail className="h-3.5 w-3.5" />
@@ -460,8 +456,113 @@ function ContractCard({ contract }: { contract: Contract }) {
           </p>
         )}
       </div>
+      <button type="button" onClick={onOpen} className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-md border border-border px-3 text-sm font-semibold transition hover:bg-accent">
+        Abrir detalhe do contrato
+      </button>
     </article>
   );
+}
+
+function ContractDetail({ contractId, onClose }: { contractId: string; onClose: () => void }) {
+  const [contract, setContract] = useState<Contract | null>(null);
+  const [versions, setVersions] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [signatures, setSignatures] = useState<any[]>([]);
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [library, setLibrary] = useState<any[]>([]);
+  const [clauses, setClauses] = useState<any[]>([]);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftNotes, setDraftNotes] = useState("");
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const [showPreview, setShowPreview] = useState(false);
+  const initialClauses = useRef<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [signerName, setSignerName] = useState("");
+  const [signerRole, setSignerRole] = useState("tenant");
+  const [signerPartyId, setSignerPartyId] = useState("");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  async function refresh() {
+    const [c, v, e, s, a, l, ci] = await Promise.all([getContract(contractId), listContractVersions(contractId), listContractEvents(contractId), listContractSignatures(contractId), listContractAttachments(contractId), listContractClauses(contract?.contract_type), listContractClauseInstances(contractId)]);
+    setContract(c.contract); setDraftTitle(c.contract.title); setDraftNotes(c.contract.notes ?? ""); setVersions(v.versions); setEvents(e.events); setSignatures(s.signatures); setAttachments(a.attachments); setLibrary(l.clauses); setClauses(ci.clauses);
+    initialClauses.current = JSON.stringify(ci.clauses);
+  }
+  useEffect(() => { void refresh().catch((e) => setMessage(e instanceof Error ? e.message : "Falha ao carregar contrato.")); }, [contractId]);
+  useEffect(() => {
+    if (!clauses.length || initialClauses.current === null || JSON.stringify(clauses) === initialClauses.current) return;
+    setSaveState("saving");
+    const timer = window.setTimeout(async () => {
+      try { await Promise.all(clauses.map((clause) => updateContractClause(contractId, clause.id, { title: clause.title, content: clause.content, position: clause.position }))); initialClauses.current = JSON.stringify(clauses); setSaveState("saved"); }
+      catch (error) { setSaveState("error"); setMessage(error instanceof Error && (error as any).status === 409 ? "Conflito de edição: recarregue o contrato antes de continuar." : "Não foi possível salvar automaticamente."); }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [clauses, contractId]);
+  const initialDocument = useRef<string | null>(null);
+  useEffect(() => {
+    if (!contract || initialDocument.current === null) return;
+    const next = JSON.stringify({ title: draftTitle, notes: draftNotes });
+    if (next === initialDocument.current || ["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)) return;
+    setSaveState("saving");
+    const timer = window.setTimeout(async () => {
+      try { const response = await updateContract(contractId, { title: draftTitle, notes: draftNotes || null, expected_version: contract.current_version }); setContract(response.contract); initialDocument.current = JSON.stringify({ title: draftTitle, notes: draftNotes }); setSaveState("saved"); }
+      catch (error) { setSaveState("error"); setMessage(error instanceof Error && (error as any).status === 409 ? "Conflito de edição: recarregue o contrato antes de continuar." : "Não foi possível salvar o documento."); }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [draftTitle, draftNotes, contractId, contract?.id, contract?.current_version, contract?.status]);
+  if (contract && initialDocument.current === null) initialDocument.current = JSON.stringify({ title: contract.title, notes: contract.notes ?? "" });
+  if (!contract) return <section className="mb-4 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">Carregando detalhe...</section>;
+
+  async function generate() {
+    setBusy(true); setMessage(null);
+    try { await generateContractVersion(contractId); await refresh(); setMessage("Nova versão gerada com PDF privado."); }
+    catch (e) { setMessage(e instanceof Error ? e.message : "Não foi possível gerar a versão."); }
+    finally { setBusy(false); }
+  }
+  async function sign() {
+    const version = versions[0];
+    const canvas = canvasRef.current;
+    if (!version || !canvas || !signerName.trim()) { setMessage("Gere uma versão e informe o nome do signatário."); return; }
+    setBusy(true);
+    try { await createContractSignature(contractId, { version_id: version.id, party_id: signerPartyId || undefined, signer_name: signerName.trim(), signer_role: signerRole, signature_base64: canvas.toDataURL("image/png") }); await refresh(); setMessage("Assinatura eletrônica capturada e vinculada à versão."); }
+    catch (e) { setMessage(e instanceof Error ? e.message : "Não foi possível assinar."); }
+    finally { setBusy(false); }
+  }
+  async function attach(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]; if (!file) return;
+    setBusy(true);
+    try { await uploadContractAttachment(contractId, file); await refresh(); setMessage("Anexo enviado com acesso autenticado."); }
+    catch (e) { setMessage(e instanceof Error ? e.message : "Não foi possível enviar o anexo."); }
+    finally { setBusy(false); event.target.value = ""; }
+  }
+  async function addClause(clause: any) { setBusy(true); try { await addContractClause(contractId, { source_clause_id: clause.id, title: clause.title, content: clause.content }); await refresh(); } catch (e) { setMessage(e instanceof Error ? e.message : "Não foi possível adicionar a cláusula."); } finally { setBusy(false); } }
+  async function moveClause(clause: any, delta: number) { const index = clauses.findIndex((item) => item.id === clause.id); const target = clauses[index + delta]; if (!target) return; await updateContractClause(contractId, clause.id, { position: target.position }); await updateContractClause(contractId, target.id, { position: clause.position }); await refresh(); }
+  return <section className="mb-4 rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Detalhe do contrato</p><h2 className="mt-1 text-lg font-semibold">{contract.title}</h2><p className="text-sm text-muted-foreground">{contract.properties?.title ?? "Imóvel não informado"} · {statusLabels[contract.status]}</p></div><button type="button" onClick={onClose} className="h-9 rounded-md border border-border px-3 text-sm">Fechar</button></div>
+    {message ? <p className="mt-3 rounded-md bg-muted p-3 text-sm text-muted-foreground">{message}</p> : null}
+    <div className="mt-4 grid gap-3 md:grid-cols-2"><DetailBlock title="Partes" items={(contract.contract_parties ?? []).map((p) => `${p.party_type}: ${p.name}`)} empty="Nenhuma parte" /><DetailBlock title="Versões" items={versions.map((v) => `v${v.version_number ?? v.versionNumber} · ${v.status}`)} empty="Nenhuma versão" /><DetailBlock title="Assinaturas" items={signatures.map((s) => s.metadata?.signer_name ?? "Assinatura capturada")} empty="Nenhuma assinatura" /><DetailBlock title="Anexos" items={attachments.map((a) => `${a.filename} · ${a.mime_type}`)} empty="Nenhum anexo" /></div>
+    <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={() => setShowPreview((current) => !current)} className="h-9 rounded-md border border-border px-3 text-xs font-semibold">{showPreview ? "Voltar para edição" : "Pré-visualizar"}</button><span className="text-xs text-muted-foreground">{saveState === "saving" ? "Salvando..." : saveState === "error" ? "Erro ao salvar" : "Salvo"}</span></div>
+    {showPreview ? <ContractPreview contract={{ ...contract, title: draftTitle, notes: draftNotes }} clauses={clauses} /> : <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"><div className="rounded-md border border-border bg-background p-3"><p className="text-sm font-semibold">Biblioteca de cláusulas</p><p className="mt-1 text-xs text-muted-foreground">Cláusulas padrão e da empresa. O texto é copiado para o contrato.</p><div className="mt-2 space-y-2">{library.map((item) => <button key={item.id} type="button" disabled={busy} onClick={() => void addClause(item)} className="block w-full rounded border border-border p-2 text-left text-xs hover:bg-accent"><span className="font-semibold">{item.title}</span><span className="block text-muted-foreground">{item.category}</span></button>)}</div></div><div className="rounded-md border border-border bg-background p-3"><p className="text-sm font-semibold">Editor do contrato</p><p className="mt-1 text-xs text-muted-foreground">O documento inteiro é salvo automaticamente; a ordem é persistida em telas touch.</p><input aria-label="Título do contrato" value={draftTitle} disabled={["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onChange={(e) => setDraftTitle(e.target.value)} className="mt-2 h-9 w-full rounded border border-input bg-background px-2 text-sm" /><textarea aria-label="Texto livre do contrato" value={draftNotes} disabled={["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onChange={(e) => setDraftNotes(e.target.value)} rows={4} className="mt-2 w-full rounded border border-input bg-background p-2 text-sm" /> <div className="mt-2 space-y-2">{clauses.map((item, index) => <div key={item.id} className="rounded border border-border p-2"><div className="flex items-center justify-between gap-2"><input value={item.title} disabled={["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onChange={(e) => setClauses((current) => current.map((row) => row.id === item.id ? { ...row, title: e.target.value } : row))} className="h-8 min-w-0 flex-1 rounded border border-input bg-background px-2 text-xs" /><div className="flex gap-1"><button type="button" disabled={!index || ["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onClick={() => void moveClause(item, -1)} className="h-8 rounded border px-2 text-xs">↑</button><button type="button" disabled={index === clauses.length - 1 || ["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onClick={() => void moveClause(item, 1)} className="h-8 rounded border px-2 text-xs">↓</button><button type="button" disabled={["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onClick={() => void deleteContractClause(contractId, item.id).then(refresh)} className="h-8 rounded border border-destructive/40 px-2 text-xs text-destructive">×</button></div></div><textarea value={item.content} disabled={["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onChange={(e) => setClauses((current) => current.map((row) => row.id === item.id ? { ...row, content: e.target.value } : row))} rows={3} className="mt-2 w-full rounded border border-input bg-background p-2 text-xs" /></div>)}</div></div></div>}
+    <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={busy || ["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status)} onClick={() => void generate()} className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy ? "Processando..." : "Gerar nova versão / PDF"}</button><label className="inline-flex h-10 cursor-pointer items-center rounded-md border border-border px-3 text-sm font-semibold">Adicionar anexo<input type="file" className="hidden" onChange={(event) => void attach(event)} /></label><span className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">{events.length} eventos de auditoria</span></div>
+    {versions[0] && !["signed", "active", "cancelled", "terminated", "archived"].includes(contract.status) ? <div className="mt-4 rounded-md border border-border bg-background p-3"><p className="text-sm font-semibold">Assinatura eletrônica</p><div className="mt-2 grid gap-2 sm:grid-cols-3"><select aria-label="Parte signatária" value={signerPartyId} onChange={(e) => { const party = (contract.contract_parties ?? []).find((item) => item.id === e.target.value); setSignerPartyId(e.target.value); if (party) { setSignerName(party.name); setSignerRole(party.party_type); } }} className="h-10 rounded-md border border-input bg-background px-3 text-sm"><option value="">Selecione a parte</option>{(contract.contract_parties ?? []).filter((party) => party.signature_required).map((party) => <option key={party.id} value={party.id}>{party.name} · {party.party_type}</option>)}</select><input value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Nome do signatário" className="h-10 rounded-md border border-input bg-background px-3 text-sm" /><input value={signerRole} readOnly aria-label="Papel do signatário" className="h-10 rounded-md border border-input bg-background px-3 text-sm" /></div><canvas ref={canvasRef} width={520} height={140} className="mt-2 h-28 w-full touch-none rounded border border-dashed border-border bg-white" onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); const ctx = event.currentTarget.getContext("2d"); if (!ctx) return; ctx.strokeStyle = "#111827"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(event.nativeEvent.offsetX, event.nativeEvent.offsetY); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const ctx = event.currentTarget.getContext("2d"); if (!ctx) return; ctx.lineTo(event.nativeEvent.offsetX, event.nativeEvent.offsetY); ctx.stroke(); }} onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)} /><div className="mt-2 flex gap-2"><button type="button" onClick={() => { const c = canvasRef.current; c?.getContext("2d")?.clearRect(0, 0, c.width, c.height); }} className="h-9 rounded-md border border-border px-3 text-xs">Limpar</button><button type="button" disabled={busy} onClick={() => void sign()} className="h-9 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground">Confirmar assinatura</button></div></div> : null}
+  </section>;
+}
+
+function DetailBlock({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return <div className="rounded-md border border-border bg-background p-3"><p className="text-sm font-semibold">{title}</p>{items.length ? <ul className="mt-2 space-y-1 text-sm text-muted-foreground">{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="mt-2 text-sm text-muted-foreground">{empty}</p>}</div>;
+}
+
+function ContractPreview({ contract, clauses }: { contract: Contract; clauses: any[] }) {
+  const parties = contract.contract_parties ?? [];
+  const resolve = (content: string) => content.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (_match, key: string) => {
+    if (key === "property.code") return contract.properties?.code ?? "";
+    if (key === "property.address") return contract.properties?.title ?? "";
+    if (key === "owners" || key === "owner.name") return parties.filter((p) => p.party_type === "owner").map((p) => p.name).join(", ");
+    if (key === "tenants" || key === "tenant.name") return parties.filter((p) => p.party_type === "tenant").map((p) => p.name).join(", ");
+    if (key === "buyers" || key === "buyer.name") return parties.filter((p) => p.party_type === "buyer").map((p) => p.name).join(", ");
+    return `⚠ placeholder não permitido: {{${key}}}`;
+  });
+  return <article className="mt-4 rounded-md border border-primary/30 bg-background p-4"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Pré-visualização</p><h3 className="mt-2 text-lg font-semibold">{contract.title}</h3><p className="mt-1 text-sm text-muted-foreground">{contract.properties?.title ?? "Imóvel não informado"} · {contract.contract_type === "rental" ? "Locação" : "Venda"}</p><div className="mt-4 space-y-4">{clauses.map((clause) => <section key={clause.id}><h4 className="font-semibold">{clause.title}</h4><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{resolve(clause.content)}</p></section>)}</div><p className="mt-4 text-xs text-muted-foreground">Esta visualização não gera versão nem altera o histórico.</p></article>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
