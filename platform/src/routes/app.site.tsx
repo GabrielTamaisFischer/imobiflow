@@ -20,7 +20,12 @@ import { ModulePage } from "@/components/app/module-page";
 import { Button } from "@/components/ui/button";
 import { getModuleByKey } from "@/product/app-modules";
 import { listAllProperties, type PropertySummary } from "@/product/real-estate";
-import { defaultSiteTemplateKey, siteTemplates, type SiteTemplate, type SiteTemplateKey } from "@/product/site-templates";
+import {
+  defaultSiteTemplateKey,
+  siteTemplates,
+  type SiteTemplate,
+  type SiteTemplateKey,
+} from "@/product/site-templates";
 import {
   getSiteSettings,
   listSiteLeads,
@@ -67,7 +72,15 @@ function SitePage() {
   const [showcaseTab, setShowcaseTab] = useState<"models" | "my-sites">("models");
   const [favoriteTemplateKeys, setFavoriteTemplateKeys] = useState<SiteTemplateKey[]>([]);
   const [showImportPanel, setShowImportPanel] = useState(false);
-  const [importForm, setImportForm] = useState({ source: "local", name: "", slug: "", reference: "", previewUrl: "", fileName: "", githubToken: "" });
+  const [importForm, setImportForm] = useState({
+    source: "local",
+    name: "",
+    slug: "",
+    reference: "",
+    previewUrl: "",
+    fileName: "",
+    githubToken: "",
+  });
   const [selectedImportFiles, setSelectedImportFiles] = useState<File[]>([]);
   const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [leads, setLeads] = useState<SiteLead[]>([]);
@@ -129,9 +142,11 @@ function SitePage() {
           show_full_address: Boolean(siteResponse.site.settings_json?.show_full_address),
           show_prices: siteResponse.site.settings_json?.show_prices !== false,
           allow_lead_capture: siteResponse.site.settings_json?.allow_lead_capture !== false,
-          auto_publish_properties: siteResponse.site.settings_json?.auto_publish_properties !== false,
+          auto_publish_properties:
+            siteResponse.site.settings_json?.auto_publish_properties !== false,
           watermark_enabled: Boolean(siteResponse.site.settings_json?.watermark?.enabled),
-          watermark_position: siteResponse.site.settings_json?.watermark?.position ?? "bottom-right",
+          watermark_position:
+            siteResponse.site.settings_json?.watermark?.position ?? "bottom-right",
           watermark_opacity: siteResponse.site.settings_json?.watermark?.opacity ?? 60,
         });
         setFavoriteTemplateKeys(siteResponse.site.settings_json?.favorite_template_keys ?? []);
@@ -141,13 +156,16 @@ function SitePage() {
           brand_name: session.access.company?.name ?? "",
           slug: slugify(session.access.company?.name ?? "imobiliaria"),
           headline: "Encontre o imóvel ideal com atendimento consultivo.",
-          description: "Carteira atualizada de imóveis para venda e locação, com atendimento direto da equipe.",
+          description:
+            "Carteira atualizada de imóveis para venda e locação, com atendimento direto da equipe.",
           logo_url: "/site-templates/imoveis-logo.png",
           template_key: defaultSiteTemplateKey,
         }));
       }
     } catch (refreshError) {
-      setError(refreshError instanceof Error ? refreshError.message : "Não foi possível carregar o site.");
+      setError(
+        refreshError instanceof Error ? refreshError.message : "Não foi possível carregar o site.",
+      );
     }
   }
 
@@ -165,7 +183,10 @@ function SitePage() {
     () => properties.filter((property) => Boolean(property.published_at)),
     [properties],
   );
-  const activeTemplate = useMemo(() => siteTemplates.find((template) => template.key === form.template_key) ?? siteTemplates[0], [form.template_key]);
+  const activeTemplate = useMemo(
+    () => siteTemplates.find((template) => template.key === form.template_key) ?? siteTemplates[0],
+    [form.template_key],
+  );
   const primaryBuilderSite = builderSites[0] ?? null;
   const previewSlug = form.slug || slugify(form.brand_name) || "imoveis-premium-gold";
   // BUG-SITE-002 (correção): o site público só resolve de fato quando existe
@@ -179,7 +200,9 @@ function SitePage() {
     : site.status !== "published"
       ? "Clique em “Ativar site” para publicar e gerar o link público."
       : null;
-  const favoriteTemplates = siteTemplates.filter((template) => favoriteTemplateKeys.includes(template.key));
+  const favoriteTemplates = siteTemplates.filter((template) =>
+    favoriteTemplateKeys.includes(template.key),
+  );
 
   if (pathname !== "/app/site") {
     return <Outlet />;
@@ -195,6 +218,7 @@ function SitePage() {
 
   function buildSiteInput(nextForm = form, nextFavoriteTemplateKeys = favoriteTemplateKeys) {
     return {
+      expected_version: site?.version,
       slug: nextForm.slug,
       brand_name: nextForm.brand_name,
       headline: nextForm.headline,
@@ -262,7 +286,11 @@ function SitePage() {
       });
       setWatermarkLogo(response.watermark_logo);
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "Não foi possível enviar o logo da marca d'água.");
+      setError(
+        uploadError instanceof Error
+          ? uploadError.message
+          : "Não foi possível enviar o logo da marca d'água.",
+      );
     } finally {
       setIsUploadingWatermarkLogo(false);
     }
@@ -275,7 +303,11 @@ function SitePage() {
       await removeWatermarkLogo();
       setWatermarkLogo(null);
     } catch (removeError) {
-      setError(removeError instanceof Error ? removeError.message : "Não foi possível remover o logo da marca d'água.");
+      setError(
+        removeError instanceof Error
+          ? removeError.message
+          : "Não foi possível remover o logo da marca d'água.",
+      );
     } finally {
       setIsUploadingWatermarkLogo(false);
     }
@@ -286,9 +318,18 @@ function SitePage() {
     setIsBusy(true);
     setError(null);
     try {
-      setSite((site.status === "published" ? await unpublishSite() : await publishSite()).site);
+      setSite(
+        (site.status === "published"
+          ? await unpublishSite(site.version)
+          : await publishSite(site.version)
+        ).site,
+      );
     } catch (publicationError) {
-      setError(publicationError instanceof Error ? publicationError.message : "Não foi possível alterar publicação.");
+      setError(
+        publicationError instanceof Error
+          ? publicationError.message
+          : "Não foi possível alterar publicação.",
+      );
     } finally {
       setIsBusy(false);
     }
@@ -345,7 +386,11 @@ function SitePage() {
         openBuilderEditor(response.website.id);
       }
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Não foi possível criar o site em branco.");
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Não foi possível criar o site em branco.",
+      );
     } finally {
       setIsBusy(false);
     }
@@ -365,8 +410,12 @@ function SitePage() {
       const response = await listWebsiteBuilderWebsites();
       setBuilderSites(response.websites);
     } catch (deleteError) {
-      const message = deleteError instanceof Error ? deleteError.message : "Não foi possível apagar este site.";
-      if (!message.toLowerCase().includes("nao encontrado") && !message.toLowerCase().includes("não encontrado")) {
+      const message =
+        deleteError instanceof Error ? deleteError.message : "Não foi possível apagar este site.";
+      if (
+        !message.toLowerCase().includes("nao encontrado") &&
+        !message.toLowerCase().includes("não encontrado")
+      ) {
         setError(message);
       }
     } finally {
@@ -398,7 +447,10 @@ function SitePage() {
           imported_at: new Date().toISOString(),
         },
       });
-      if (importForm.source === "url" && (importForm.reference.trim() || importForm.previewUrl.trim())) {
+      if (
+        importForm.source === "url" &&
+        (importForm.reference.trim() || importForm.previewUrl.trim())
+      ) {
         await importLiveWebsiteIntoBuilder({
           websiteId: response.website.id,
           url: importForm.reference.trim() || importForm.previewUrl.trim(),
@@ -424,11 +476,23 @@ function SitePage() {
       const builderResponse = await listWebsiteBuilderWebsites();
       setBuilderSites(builderResponse.websites);
       setShowImportPanel(false);
-      setImportForm({ source: "local", name: "", slug: "", reference: "", previewUrl: "", fileName: "", githubToken: "" });
+      setImportForm({
+        source: "local",
+        name: "",
+        slug: "",
+        reference: "",
+        previewUrl: "",
+        fileName: "",
+        githubToken: "",
+      });
       setSelectedImportFiles([]);
       openBuilderEditor(response.website.id);
     } catch (importError) {
-      setError(importError instanceof Error ? importError.message : "Não foi possível preparar a importação do site.");
+      setError(
+        importError instanceof Error
+          ? importError.message
+          : "Não foi possível preparar a importação do site.",
+      );
     } finally {
       setIsBusy(false);
     }
@@ -445,10 +509,13 @@ function SitePage() {
       <section className="mb-4 overflow-hidden rounded-lg border border-border bg-card">
         <div className="grid gap-4 p-4 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Modelo ativo</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+              Modelo ativo
+            </p>
             <h2 className="mt-2 text-xl font-semibold">{activeTemplate.name}</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Este é o visual atualmente escolhido para o site público. Os imóveis cadastrados e liberados entram automaticamente na vitrine.
+              Este é o visual atualmente escolhido para o site público. Os imóveis cadastrados e
+              liberados entram automaticamente na vitrine.
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {publicUrl ? (
@@ -465,16 +532,35 @@ function SitePage() {
                 <Layers3 className="size-4" />
                 Editar site
               </Button>
-              <Button type="button" variant="outline" onClick={() => void handleCreateBlankBuilderSite(true)} disabled={isBusy}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleCreateBlankBuilderSite(true)}
+                disabled={isBusy}
+              >
                 <Sparkles className="size-4" />
                 Criar site do zero
               </Button>
-              <Button type="button" variant="outline" onClick={() => setShowImportPanel((current) => !current)} disabled={isBusy}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowImportPanel((current) => !current)}
+                disabled={isBusy}
+              >
                 <FolderUp className="size-4" />
                 Importar site existente
               </Button>
-              <Button type="button" variant={site?.status === "published" ? "outline" : "default"} onClick={toggleSitePublication} disabled={isBusy || !site}>
-                {site?.status === "published" ? <PowerOff className="size-4" /> : <Power className="size-4" />}
+              <Button
+                type="button"
+                variant={site?.status === "published" ? "outline" : "default"}
+                onClick={toggleSitePublication}
+                disabled={isBusy || !site}
+              >
+                {site?.status === "published" ? (
+                  <PowerOff className="size-4" />
+                ) : (
+                  <Power className="size-4" />
+                )}
                 {site?.status === "published" ? "Desativar site" : "Ativar site"}
               </Button>
             </div>
@@ -489,10 +575,16 @@ function SitePage() {
             <div>
               <h2 className="text-sm font-semibold">Importar site existente</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Importe uma pasta completa do projeto ou um repositório GitHub. O ImobiFlow lê rotas, componentes, CSS, dados e mídias para transformar tudo em estrutura editável.
+                Importe uma pasta completa do projeto ou um repositório GitHub. O ImobiFlow lê
+                rotas, componentes, CSS, dados e mídias para transformar tudo em estrutura editável.
               </p>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setShowImportPanel(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowImportPanel(false)}
+            >
               Fechar
             </Button>
           </div>
@@ -515,8 +607,16 @@ function SitePage() {
                 <option value="other">Outro formato</option>
               </select>
             </label>
-            <TextField label="Nome do site importado" value={importForm.name} onChange={(name) => setImportForm({ ...importForm, name })} />
-            <TextField label="Slug" value={importForm.slug} onChange={(slug) => setImportForm({ ...importForm, slug: slugify(slug) })} />
+            <TextField
+              label="Nome do site importado"
+              value={importForm.name}
+              onChange={(name) => setImportForm({ ...importForm, name })}
+            />
+            <TextField
+              label="Slug"
+              value={importForm.slug}
+              onChange={(slug) => setImportForm({ ...importForm, slug: slugify(slug) })}
+            />
             <TextField
               label="Link do GitHub, URL ou observação"
               value={importForm.reference}
@@ -529,13 +629,17 @@ function SitePage() {
             />
             {importForm.source === "github" ? (
               <label className="text-sm md:col-span-2">
-                <span className="mb-1 block font-medium">Token GitHub temporário para repositório privado</span>
+                <span className="mb-1 block font-medium">
+                  Token GitHub temporário para repositório privado
+                </span>
                 <input
                   className="h-10 w-full rounded-md border border-input bg-background px-3"
                   type="password"
                   value={importForm.githubToken}
                   placeholder="Opcional para repositórios públicos. Necessário para privados."
-                  onChange={(event) => setImportForm({ ...importForm, githubToken: event.target.value })}
+                  onChange={(event) =>
+                    setImportForm({ ...importForm, githubToken: event.target.value })
+                  }
                 />
                 <span className="mt-1 block text-xs text-muted-foreground">
                   O token é usado apenas nesta importação e não fica salvo no site.
@@ -544,36 +648,58 @@ function SitePage() {
             ) : null}
             {importForm.source === "url" ? (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 md:col-span-2">
-                Para ver o site real dentro do editor, cole acima a URL publicada do site. Exemplo: /site/magnificopaginainicial#topo
+                Para ver o site real dentro do editor, cole acima a URL publicada do site. Exemplo:
+                /site/magnificopaginainicial#topo
               </div>
             ) : null}
             {importForm.source !== "url" ? (
-            <label className="text-sm md:col-span-2">
-              <span className="mb-1 block font-medium">Pasta ou arquivos do site</span>
-              <input
-                className="w-full rounded-md border border-dashed border-input bg-background px-3 py-2 text-sm"
-                type="file"
-                multiple
-                accept={importForm.source === "local" ? undefined : ".zip,.xml,.html,.htm,.json,.tsx,.jsx,.ts,.js,.css"}
-                {...({ webkitdirectory: importForm.source === "local" ? "true" : undefined, directory: importForm.source === "local" ? "true" : undefined } as Record<string, string | undefined>)}
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? []);
-                  setSelectedImportFiles(files);
-                  setImportForm({
-                    ...importForm,
-                    fileName: files.length === 1 ? files[0].name : files.length > 1 ? `${files.length} arquivo(s) selecionado(s)` : "",
-                  });
-                }}
-              />
-              {importForm.fileName ? <span className="mt-1 block text-xs text-muted-foreground">Selecionado: {importForm.fileName}</span> : null}
-              <span className="mt-1 block text-xs text-muted-foreground">
-                Para importar uma pasta inteira, escolha “Pasta completa do site” e selecione a pasta raiz do projeto.
-              </span>
-            </label>
+              <label className="text-sm md:col-span-2">
+                <span className="mb-1 block font-medium">Pasta ou arquivos do site</span>
+                <input
+                  className="w-full rounded-md border border-dashed border-input bg-background px-3 py-2 text-sm"
+                  type="file"
+                  multiple
+                  accept={
+                    importForm.source === "local"
+                      ? undefined
+                      : ".zip,.xml,.html,.htm,.json,.tsx,.jsx,.ts,.js,.css"
+                  }
+                  {...({
+                    webkitdirectory: importForm.source === "local" ? "true" : undefined,
+                    directory: importForm.source === "local" ? "true" : undefined,
+                  } as Record<string, string | undefined>)}
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    setSelectedImportFiles(files);
+                    setImportForm({
+                      ...importForm,
+                      fileName:
+                        files.length === 1
+                          ? files[0].name
+                          : files.length > 1
+                            ? `${files.length} arquivo(s) selecionado(s)`
+                            : "",
+                    });
+                  }}
+                />
+                {importForm.fileName ? (
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Selecionado: {importForm.fileName}
+                  </span>
+                ) : null}
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Para importar uma pasta inteira, escolha “Pasta completa do site” e selecione a
+                  pasta raiz do projeto.
+                </span>
+              </label>
             ) : null}
             <div className="md:col-span-2">
               <Button type="submit" disabled={isBusy}>
-                {isBusy ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}
+                {isBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="size-4" />
+                )}
                 Criar projeto importado
               </Button>
             </div>
@@ -582,8 +708,16 @@ function SitePage() {
       ) : null}
 
       <section className="mb-4 grid gap-3 md:grid-cols-4">
-        <Metric icon={Globe2} label="Status" value={site?.status === "published" ? "Publicado" : site ? "Rascunho" : "Não criado"} />
-        <Metric icon={Home} label="Imóveis visíveis no site" value={visibleOnSiteProperties.length} />
+        <Metric
+          icon={Globe2}
+          label="Status"
+          value={site?.status === "published" ? "Publicado" : site ? "Rascunho" : "Não criado"}
+        />
+        <Metric
+          icon={Home}
+          label="Imóveis visíveis no site"
+          value={visibleOnSiteProperties.length}
+        />
         <Metric icon={ImageIcon} label="Imóveis cadastrados" value={properties.length} />
         <Metric icon={MessageCircle} label="Leads do site" value={leads.length} />
       </section>
@@ -593,70 +727,105 @@ function SitePage() {
           <div>
             <h2 className="text-sm font-semibold">Vitrine de modelos de site</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Escolha o visual que a imobiliária vai usar. Os imóveis publicados entram automaticamente no modelo ativo.
+              Escolha o visual que a imobiliária vai usar. Os imóveis publicados entram
+              automaticamente no modelo ativo.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant={showcaseTab === "models" ? "default" : "outline"} onClick={() => setShowcaseTab("models")}>
+            <Button
+              type="button"
+              size="sm"
+              variant={showcaseTab === "models" ? "default" : "outline"}
+              onClick={() => setShowcaseTab("models")}
+            >
               Modelos da vitrine
             </Button>
-            <Button type="button" size="sm" variant={showcaseTab === "my-sites" ? "default" : "outline"} onClick={() => setShowcaseTab("my-sites")}>
+            <Button
+              type="button"
+              size="sm"
+              variant={showcaseTab === "my-sites" ? "default" : "outline"}
+              onClick={() => setShowcaseTab("my-sites")}
+            >
               Meus sites
             </Button>
-            <span className="text-xs text-muted-foreground">{siteTemplates.length} modelo(s) disponível(is)</span>
+            <span className="text-xs text-muted-foreground">
+              {siteTemplates.length} modelo(s) disponível(is)
+            </span>
           </div>
         </div>
 
         {showcaseTab === "models" ? (
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
             {siteTemplates.map((template) => {
-            const isSelected = form.template_key === template.key;
-            const templatePreviewUrl = publicUrl;
-            const isFavorite = favoriteTemplateKeys.includes(template.key);
-            return (
-              <article
-                key={template.key}
-                className={
-                  isSelected
-                    ? "group overflow-hidden rounded-lg border border-primary bg-primary/5 p-4 ring-2 ring-primary/20"
-                    : "group overflow-hidden rounded-lg border border-border bg-background p-4 transition hover:border-primary"
-                }
-              >
-                <SiteTemplateLivePreview url={templatePreviewUrl} template={template} />
-                <div className="mt-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-base font-semibold">{template.name}</h3>
-                    {isSelected ? <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] text-primary-foreground">Selecionado</span> : null}
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">{template.subtitle}</p>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">{template.description}</p>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {template.recommended_for.map((label) => (
-                      <span key={label} className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-                        {label}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {templatePreviewUrl ? (
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <a href={templatePreviewUrl} target="_blank" rel="noreferrer">
-                          <ExternalLink className="size-4" />
-                          Preview
-                        </a>
+              const isSelected = form.template_key === template.key;
+              const templatePreviewUrl = publicUrl;
+              const isFavorite = favoriteTemplateKeys.includes(template.key);
+              return (
+                <article
+                  key={template.key}
+                  className={
+                    isSelected
+                      ? "group overflow-hidden rounded-lg border border-primary bg-primary/5 p-4 ring-2 ring-primary/20"
+                      : "group overflow-hidden rounded-lg border border-border bg-background p-4 transition hover:border-primary"
+                  }
+                >
+                  <SiteTemplateLivePreview url={templatePreviewUrl} template={template} />
+                  <div className="mt-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-base font-semibold">{template.name}</h3>
+                      {isSelected ? (
+                        <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] text-primary-foreground">
+                          Selecionado
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">{template.subtitle}</p>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      {template.description}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {template.recommended_for.map((label) => (
+                        <span
+                          key={label}
+                          className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {templatePreviewUrl ? (
+                        <Button type="button" variant="outline" size="sm" asChild>
+                          <a href={templatePreviewUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink className="size-4" />
+                            Preview
+                          </a>
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void toggleFavoriteTemplate(template.key)}
+                        disabled={isBusy}
+                      >
+                        <Heart
+                          className={isFavorite ? "size-4 fill-primary text-primary" : "size-4"}
+                        />
+                        {isFavorite ? "Favorito" : "Favoritar"}
                       </Button>
-                    ) : null}
-                    <Button type="button" variant="outline" size="sm" onClick={() => void toggleFavoriteTemplate(template.key)} disabled={isBusy}>
-                      <Heart className={isFavorite ? "size-4 fill-primary text-primary" : "size-4"} />
-                      {isFavorite ? "Favorito" : "Favoritar"}
-                    </Button>
-                    <Button type="button" size="sm" onClick={() => void handleUseTemplate(template.key)} disabled={isBusy}>
-                      Usar modelo
-                    </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void handleUseTemplate(template.key)}
+                        disabled={isBusy}
+                      >
+                        Usar modelo
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </article>
-            );
+                </article>
+              );
             })}
           </div>
         ) : (
@@ -683,12 +852,36 @@ function SitePage() {
         </div>
 
         <form onSubmit={handleSave} className="mt-4 grid gap-3 md:grid-cols-2">
-          <TextField label="Nome da imobiliária" value={form.brand_name} onChange={(brand_name) => setForm({ ...form, brand_name })} />
-          <TextField label="Slug público" value={form.slug} onChange={(slug) => setForm({ ...form, slug: slugify(slug) })} />
-          <TextField label="Headline" value={form.headline} onChange={(headline) => setForm({ ...form, headline })} />
-          <TextField label="WhatsApp" value={form.whatsapp} onChange={(whatsapp) => setForm({ ...form, whatsapp })} />
-          <TextField label="E-mail" value={form.email} onChange={(email) => setForm({ ...form, email })} />
-          <TextField label="Logo do site" value={form.logo_url} onChange={(logo_url) => setForm({ ...form, logo_url })} />
+          <TextField
+            label="Nome da imobiliária"
+            value={form.brand_name}
+            onChange={(brand_name) => setForm({ ...form, brand_name })}
+          />
+          <TextField
+            label="Slug público"
+            value={form.slug}
+            onChange={(slug) => setForm({ ...form, slug: slugify(slug) })}
+          />
+          <TextField
+            label="Headline"
+            value={form.headline}
+            onChange={(headline) => setForm({ ...form, headline })}
+          />
+          <TextField
+            label="WhatsApp"
+            value={form.whatsapp}
+            onChange={(whatsapp) => setForm({ ...form, whatsapp })}
+          />
+          <TextField
+            label="E-mail"
+            value={form.email}
+            onChange={(email) => setForm({ ...form, email })}
+          />
+          <TextField
+            label="Logo do site"
+            value={form.logo_url}
+            onChange={(logo_url) => setForm({ ...form, logo_url })}
+          />
           <label className="text-sm">
             <span className="mb-1 block font-medium">Cor principal</span>
             <input
@@ -708,15 +901,27 @@ function SitePage() {
           </label>
           <div className="flex flex-wrap gap-4 text-sm md:col-span-2">
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.show_prices} onChange={(event) => setForm({ ...form, show_prices: event.target.checked })} />
+              <input
+                type="checkbox"
+                checked={form.show_prices}
+                onChange={(event) => setForm({ ...form, show_prices: event.target.checked })}
+              />
               Exibir preços
             </label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.show_full_address} onChange={(event) => setForm({ ...form, show_full_address: event.target.checked })} />
+              <input
+                type="checkbox"
+                checked={form.show_full_address}
+                onChange={(event) => setForm({ ...form, show_full_address: event.target.checked })}
+              />
               Exibir endereço completo
             </label>
             <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.allow_lead_capture} onChange={(event) => setForm({ ...form, allow_lead_capture: event.target.checked })} />
+              <input
+                type="checkbox"
+                checked={form.allow_lead_capture}
+                onChange={(event) => setForm({ ...form, allow_lead_capture: event.target.checked })}
+              />
               Capturar leads
             </label>
           </div>
@@ -726,13 +931,15 @@ function SitePage() {
               publicação é sempre uma ação explícita (Salvar e publicar, ou
               Publicar no site / Despublicar na edição), nunca automática. */}
           <p className="md:col-span-2 text-xs text-muted-foreground">
-            Imóveis só aparecem no site depois de publicados explicitamente (botão “Salvar e publicar” no cadastro, ou “Publicar no site” na edição do imóvel).
+            Imóveis só aparecem no site depois de publicados explicitamente (botão “Salvar e
+            publicar” no cadastro, ou “Publicar no site” na edição do imóvel).
           </p>
           <div className="rounded-lg border border-border bg-background p-4 md:col-span-2">
             <p className="text-sm font-semibold">Marca d'água nas fotos públicas</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Aplica o logo da imobiliária sobre as fotos exibidas no site público. O arquivo original enviado no
-              cadastro do imóvel nunca é alterado — a marca d'água aparece só na versão publicada.
+              Aplica o logo da imobiliária sobre as fotos exibidas no site público. O arquivo
+              original enviado no cadastro do imóvel nunca é alterado — a marca d'água aparece só na
+              versão publicada.
             </p>
 
             <label className="mt-3 flex items-center gap-2 text-sm">
@@ -750,7 +957,12 @@ function SitePage() {
                 <select
                   className="h-10 w-full rounded-md border border-input bg-background px-3"
                   value={form.watermark_position}
-                  onChange={(event) => setForm({ ...form, watermark_position: event.target.value as WatermarkPosition })}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      watermark_position: event.target.value as WatermarkPosition,
+                    })
+                  }
                   disabled={!form.watermark_enabled}
                 >
                   {WATERMARK_POSITIONS.map((position) => (
@@ -761,7 +973,9 @@ function SitePage() {
                 </select>
               </label>
               <label className="text-sm">
-                <span className="mb-1 block font-medium">Opacidade ({form.watermark_opacity}%)</span>
+                <span className="mb-1 block font-medium">
+                  Opacidade ({form.watermark_opacity}%)
+                </span>
                 <input
                   className="h-10 w-full"
                   type="range"
@@ -769,7 +983,9 @@ function SitePage() {
                   max={100}
                   step={5}
                   value={form.watermark_opacity}
-                  onChange={(event) => setForm({ ...form, watermark_opacity: Number(event.target.value) })}
+                  onChange={(event) =>
+                    setForm({ ...form, watermark_opacity: Number(event.target.value) })
+                  }
                   disabled={!form.watermark_enabled}
                 />
               </label>
@@ -777,7 +993,11 @@ function SitePage() {
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
               {watermarkLogo ? (
-                <img src={watermarkLogo.url} alt="Logo usado na marca d'água" className="h-12 w-auto max-w-[160px] rounded border border-border bg-white object-contain p-1" />
+                <img
+                  src={watermarkLogo.url}
+                  alt="Logo usado na marca d'água"
+                  className="h-12 w-auto max-w-[160px] rounded border border-border bg-white object-contain p-1"
+                />
               ) : (
                 <span className="rounded border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
                   Nenhuma logo cadastrada para a marca d'água ainda.
@@ -796,22 +1016,39 @@ function SitePage() {
                     if (file) void handleWatermarkLogoUpload(file);
                   }}
                 />
-                <Button type="button" variant="outline" size="sm" disabled={isUploadingWatermarkLogo} asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isUploadingWatermarkLogo}
+                  asChild
+                >
                   <span
                     role="button"
                     tabIndex={0}
                     onClick={() => document.getElementById("watermark-logo-input")?.click()}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") document.getElementById("watermark-logo-input")?.click();
+                      if (event.key === "Enter" || event.key === " ")
+                        document.getElementById("watermark-logo-input")?.click();
                     }}
                   >
-                    {isUploadingWatermarkLogo ? <Loader2 className="size-4 animate-spin" /> : <UploadCloud className="size-4" />}
+                    {isUploadingWatermarkLogo ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <UploadCloud className="size-4" />
+                    )}
                     {watermarkLogo ? "Trocar logo" : "Enviar logo"}
                   </span>
                 </Button>
               </label>
               {watermarkLogo ? (
-                <Button type="button" variant="ghost" size="sm" onClick={() => void handleRemoveWatermarkLogo()} disabled={isUploadingWatermarkLogo}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleRemoveWatermarkLogo()}
+                  disabled={isUploadingWatermarkLogo}
+                >
                   <Trash2 className="size-4" />
                   Remover logo
                 </Button>
@@ -820,13 +1057,15 @@ function SitePage() {
 
             {shouldWarnMissingWatermarkLogo(form.watermark_enabled, watermarkLogo) ? (
               <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
-                A marca d'água está ativada, mas ainda não há logo cadastrada — enquanto isso, as fotos públicas continuam
-                sendo exibidas normalmente (sem marca d'água) até que uma logo seja enviada.
+                A marca d'água está ativada, mas ainda não há logo cadastrada — enquanto isso, as
+                fotos públicas continuam sendo exibidas normalmente (sem marca d'água) até que uma
+                logo seja enviada.
               </p>
             ) : null}
 
             <p className="mt-3 text-xs text-muted-foreground">
-              A configuração de posição/opacidade só é salva ao clicar em “Salvar site”. O envio/remoção da logo é imediato.
+              A configuração de posição/opacidade só é salva ao clicar em “Salvar site”. O
+              envio/remoção da logo é imediato.
             </p>
           </div>
 
@@ -838,12 +1077,19 @@ function SitePage() {
           </div>
         </form>
       </section>
-
     </ModulePage>
   );
 }
 
-function Metric({ icon: Icon, label, value }: { icon: typeof Globe2; label: string; value: string | number }) {
+function Metric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Globe2;
+  label: string;
+  value: string | number;
+}) {
   return (
     <article className="rounded-lg border border-border bg-card p-4">
       <Icon className="size-5 text-primary" />
@@ -875,7 +1121,8 @@ function MySitesShowcase({
       <div className="mt-4 rounded-lg border border-dashed border-border bg-background p-8 text-center">
         <h3 className="text-sm font-semibold">Nenhum site salvo ainda</h3>
         <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-          Sites criados do zero, importados e modelos favoritados aparecerão aqui para a imobiliária voltar a editar quando quiser.
+          Sites criados do zero, importados e modelos favoritados aparecerão aqui para a imobiliária
+          voltar a editar quando quiser.
         </p>
       </div>
     );
@@ -884,16 +1131,28 @@ function MySitesShowcase({
   return (
     <div className="mt-4 grid gap-4 xl:grid-cols-2">
       {builderSites.map((website) => {
-        const source = typeof website.settingsJson.import_source === "string" ? website.settingsJson.import_source : null;
+        const source =
+          typeof website.settingsJson.import_source === "string"
+            ? website.settingsJson.import_source
+            : null;
         const previewUrl = resolveBuilderWebsitePreviewUrl(website, onPreview(website));
         return (
-          <article key={website.id} className="overflow-hidden rounded-lg border border-border bg-background p-4">
+          <article
+            key={website.id}
+            className="overflow-hidden rounded-lg border border-border bg-background p-4"
+          >
             <SiteProjectPreview url={previewUrl} title={website.name} />
             <div className="mt-4">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-base font-semibold">{website.name}</h3>
-                {source ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">Importado</span> : null}
-                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">{website.status}</span>
+                {source ? (
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">
+                    Importado
+                  </span>
+                ) : null}
+                <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {website.status}
+                </span>
               </div>
               <p className="mt-2 text-sm text-muted-foreground">/{website.slug}</p>
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -918,7 +1177,12 @@ function MySitesShowcase({
                   <Layers3 className="size-4" />
                   Editar site
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => onDelete(website.id)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onDelete(website.id)}
+                >
                   <Trash2 className="size-4" />
                   Apagar
                 </Button>
@@ -929,12 +1193,17 @@ function MySitesShowcase({
       })}
 
       {favoriteTemplates.map((template) => (
-        <article key={template.key} className="overflow-hidden rounded-lg border border-border bg-background p-4">
+        <article
+          key={template.key}
+          className="overflow-hidden rounded-lg border border-border bg-background p-4"
+        >
           <SiteTemplateLivePreview url={publicUrl} template={template} compact />
           <div className="mt-4">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-semibold">{template.name}</h3>
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">Favorito</span>
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">
+                Favorito
+              </span>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">{template.subtitle}</p>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">{template.description}</p>
@@ -965,7 +1234,9 @@ function SiteProjectPreview({ url, title }: { url: string; title: string }) {
         <span className="size-2.5 rounded-full bg-red-400" />
         <span className="size-2.5 rounded-full bg-amber-300" />
         <span className="size-2.5 rounded-full bg-emerald-400" />
-        <span className="ml-2 truncate rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/65">Projeto - {title}</span>
+        <span className="ml-2 truncate rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/65">
+          Projeto - {title}
+        </span>
       </div>
       <div className="relative h-[320px] overflow-hidden bg-neutral-950 sm:h-[380px]">
         <iframe
@@ -976,13 +1247,27 @@ function SiteProjectPreview({ url, title }: { url: string; title: string }) {
           title={`Preview ${title}`}
           loading="lazy"
         />
-        <a className="absolute inset-0" href={url} target="_blank" rel="noreferrer" aria-label={`Abrir preview ${title}`} />
+        <a
+          className="absolute inset-0"
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Abrir preview ${title}`}
+        />
       </div>
     </div>
   );
 }
 
-function SiteTemplateLivePreview({ url, template, compact = false }: { url: string | null; template: SiteTemplate; compact?: boolean }) {
+function SiteTemplateLivePreview({
+  url,
+  template,
+  compact = false,
+}: {
+  url: string | null;
+  template: SiteTemplate;
+  compact?: boolean;
+}) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-neutral-950 shadow-sm">
       <div className="flex h-9 items-center gap-2 border-b border-white/10 bg-neutral-900 px-3">
@@ -990,14 +1275,26 @@ function SiteTemplateLivePreview({ url, template, compact = false }: { url: stri
         <span className="size-2.5 rounded-full bg-amber-300" />
         <span className="size-2.5 rounded-full bg-emerald-400" />
         <span className="ml-2 truncate rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/65">
-          {url ? `Preview real do site - ${template.name}` : `Preview indisponível - ${template.name}`}
+          {url
+            ? `Preview real do site - ${template.name}`
+            : `Preview indisponível - ${template.name}`}
         </span>
       </div>
-      <div className={compact ? "relative h-[300px] overflow-hidden bg-neutral-950 sm:h-[340px]" : "relative h-[360px] overflow-hidden bg-neutral-950 sm:h-[420px]"}>
+      <div
+        className={
+          compact
+            ? "relative h-[300px] overflow-hidden bg-neutral-950 sm:h-[340px]"
+            : "relative h-[360px] overflow-hidden bg-neutral-950 sm:h-[420px]"
+        }
+      >
         {url ? (
           <>
             <iframe
-              className={compact ? "h-[680px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]" : "h-[840px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"}
+              className={
+                compact
+                  ? "h-[680px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"
+                  : "h-[840px] w-[200%] origin-top-left scale-50 border-0 transition duration-300 group-hover:scale-[0.52]"
+              }
               sandbox={BUILDER_VISUAL_PREVIEW_SANDBOX}
               referrerPolicy="no-referrer"
               src={url}
@@ -1054,22 +1351,42 @@ type ImportedRouteFile = {
   path: string;
   slug: string;
   title: string;
-  pageType: "home" | "property" | "about" | "contact" | "landing" | "blog" | "custom" | "terms" | "privacy";
+  pageType:
+    | "home"
+    | "property"
+    | "about"
+    | "contact"
+    | "landing"
+    | "blog"
+    | "custom"
+    | "terms"
+    | "privacy";
   code: string;
   texts: string[];
 };
 
-async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, token }: GitHubRepositoryImportInput) {
+async function importGithubRepositoryIntoBuilder({
+  websiteId,
+  repositoryUrl,
+  token,
+}: GitHubRepositoryImportInput) {
   const repository = parseGithubRepository(repositoryUrl);
   if (!repository) {
-    throw new Error("Informe um link válido de repositório GitHub. Exemplo: https://github.com/usuario/repositorio");
+    throw new Error(
+      "Informe um link válido de repositório GitHub. Exemplo: https://github.com/usuario/repositorio",
+    );
   }
 
   const headers = githubHeaders(token);
-  const repoResponse = await fetch(`https://api.github.com/repos/${repository.owner}/${repository.repo}`, { headers });
+  const repoResponse = await fetch(
+    `https://api.github.com/repos/${repository.owner}/${repository.repo}`,
+    { headers },
+  );
   if (!repoResponse.ok) {
     if (repoResponse.status === 404) {
-      throw new Error("Repositório GitHub não encontrado ou privado. Para repositório privado, informe um token GitHub temporário.");
+      throw new Error(
+        "Repositório GitHub não encontrado ou privado. Para repositório privado, informe um token GitHub temporário.",
+      );
     }
     throw new Error("Não foi possível acessar este repositório GitHub.");
   }
@@ -1092,23 +1409,40 @@ async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, tok
   const routeFiles = files
     .filter((item) => /^src\/routes\/.+\.(tsx|jsx|ts|js)$/.test(item.path))
     .filter((item) => !item.path.includes("routeTree") && !item.path.endsWith("__root.tsx"))
-    .sort((left, right) => routeSortWeight(left.path) - routeSortWeight(right.path) || left.path.localeCompare(right.path))
+    .sort(
+      (left, right) =>
+        routeSortWeight(left.path) - routeSortWeight(right.path) ||
+        left.path.localeCompare(right.path),
+    )
     .slice(0, 14);
 
   if (routeFiles.length === 0) {
-    throw new Error("Não encontrei páginas em src/routes neste repositório. Nesta fase o importador reconhece projetos React e TanStack.");
+    throw new Error(
+      "Não encontrei páginas em src/routes neste repositório. Nesta fase o importador reconhece projetos React e TanStack.",
+    );
   }
 
-  const styleFile = files.find((item) => item.path === "src/styles.css" || item.path === "src/index.css" || item.path === "src/App.css");
-  const propertyFile = files.find((item) => item.path === "src/data/properties.ts" || item.path === "src/data/properties.tsx");
+  const styleFile = files.find(
+    (item) =>
+      item.path === "src/styles.css" ||
+      item.path === "src/index.css" ||
+      item.path === "src/App.css",
+  );
+  const propertyFile = files.find(
+    (item) => item.path === "src/data/properties.ts" || item.path === "src/data/properties.tsx",
+  );
   const assetFiles = files
     .filter((item) => /^(src\/assets|public)\//.test(item.path))
     .filter((item) => /\.(png|jpe?g|webp|gif|svg|mp4|webm)$/i.test(item.path))
     .slice(0, 30);
 
   const [styleCode, propertyCode, ...routeCodes] = await Promise.all([
-    styleFile ? fetchGithubTextFile(repository, branch, styleFile.path, headers) : Promise.resolve(""),
-    propertyFile ? fetchGithubTextFile(repository, branch, propertyFile.path, headers) : Promise.resolve(""),
+    styleFile
+      ? fetchGithubTextFile(repository, branch, styleFile.path, headers)
+      : Promise.resolve(""),
+    propertyFile
+      ? fetchGithubTextFile(repository, branch, propertyFile.path, headers)
+      : Promise.resolve(""),
     ...routeFiles.map((file) => fetchGithubTextFile(repository, branch, file.path, headers)),
   ]);
 
@@ -1139,7 +1473,11 @@ async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, tok
       imported_at: new Date().toISOString(),
       external_preview_url: externalPreviewUrl,
       imported_assets: rawAssetUrls,
-      imported_routes: importedRoutes.map((route) => ({ path: route.path, slug: route.slug, title: route.title })),
+      imported_routes: importedRoutes.map((route) => ({
+        path: route.path,
+        slug: route.slug,
+        title: route.title,
+      })),
       imported_property_model_detected: Boolean(propertyCode),
     },
   });
@@ -1159,11 +1497,15 @@ async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, tok
       settings_json: {
         sourceFile: route.path,
         routePath: route.slug === "home" ? "/" : `/${route.slug}`,
-        externalPreviewUrl: externalPreviewUrl ? joinPreviewPath(externalPreviewUrl, route.slug) : null,
+        externalPreviewUrl: externalPreviewUrl
+          ? joinPreviewPath(externalPreviewUrl, route.slug)
+          : null,
       },
     });
 
-    const firstAsset = rawAssetUrls.find((asset) => route.code.includes(asset.path.split("/").pop() ?? "")) ?? rawAssetUrls[index % Math.max(rawAssetUrls.length, 1)];
+    const firstAsset =
+      rawAssetUrls.find((asset) => route.code.includes(asset.path.split("/").pop() ?? "")) ??
+      rawAssetUrls[index % Math.max(rawAssetUrls.length, 1)];
     const sectionResponse = await createWebsiteBuilderSection(pageResponse.page.id, {
       name: route.title,
       section_type: route.pageType === "home" ? "imported_home" : `imported_${route.pageType}`,
@@ -1172,7 +1514,9 @@ async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, tok
         title: route.title,
         sourceFile: route.path,
         repository: repo.html_url ?? repositoryUrl,
-        externalPreviewUrl: externalPreviewUrl ? joinPreviewPath(externalPreviewUrl, route.slug) : null,
+        externalPreviewUrl: externalPreviewUrl
+          ? joinPreviewPath(externalPreviewUrl, route.slug)
+          : null,
         backgroundUrl: firstAsset?.url,
       },
       style_json: {
@@ -1235,7 +1579,12 @@ async function importGithubRepositoryIntoBuilder({ websiteId, repositoryUrl, tok
         name: asset.path.split("/").pop() ?? `Asset ${index + 1}`,
         component_type: asset.url.match(/\.(mp4|webm)$/i) ? "video" : "image",
         sort_order: index,
-        props_json: { imageUrl: asset.url, videoUrl: asset.url, alt: asset.path, sourcePath: asset.path },
+        props_json: {
+          imageUrl: asset.url,
+          videoUrl: asset.url,
+          alt: asset.path,
+          sourcePath: asset.path,
+        },
       });
     }
   }
@@ -1282,7 +1631,11 @@ function encodeURIComponentPath(filePath: string) {
   return filePath.split("/").map(encodeURIComponent).join("/");
 }
 
-function rawGithubUrl(repository: { owner: string; repo: string }, branch: string, filePath: string) {
+function rawGithubUrl(
+  repository: { owner: string; repo: string },
+  branch: string,
+  filePath: string,
+) {
   return `https://raw.githubusercontent.com/${repository.owner}/${repository.repo}/${encodeURIComponent(branch)}/${filePath
     .split("/")
     .map(encodeURIComponent)
@@ -1328,7 +1681,8 @@ function pageTypeFromRoutePath(filePath: string): ImportedRouteFile["pageType"] 
 }
 
 function titleFromRouteCode(filePath: string, code: string) {
-  const metaTitle = code.match(/\{\s*title:\s*"([^"]+)"/)?.[1] || code.match(/\{\s*title:\s*'([^']+)'/)?.[1];
+  const metaTitle =
+    code.match(/\{\s*title:\s*"([^"]+)"/)?.[1] || code.match(/\{\s*title:\s*'([^']+)'/)?.[1];
   if (metaTitle) return metaTitle.split("·")[0].trim();
   const h1 = code.match(/<h1[^>]*>([^\n<]+)/)?.[1]?.trim();
   if (h1) return stripJsxText(h1);
@@ -1348,7 +1702,10 @@ function extractVisibleTexts(code: string) {
 }
 
 function stripJsxText(value: string) {
-  return value.replace(/\s+/g, " ").replace(/&middot;/g, "·").trim();
+  return value
+    .replace(/\s+/g, " ")
+    .replace(/&middot;/g, "·")
+    .trim();
 }
 
 function inferThemeFromCss(css: string) {
@@ -1378,7 +1735,10 @@ function joinPreviewPath(baseUrl: string, slug: string) {
 }
 
 function resolveBuilderWebsitePreviewUrl(website: WebsiteBuilderWebsite, fallback: string) {
-  const external = typeof website.settingsJson.external_preview_url === "string" ? website.settingsJson.external_preview_url : "";
+  const external =
+    typeof website.settingsJson.external_preview_url === "string"
+      ? website.settingsJson.external_preview_url
+      : "";
   if (!external) return fallback;
   return external;
 }
@@ -1389,7 +1749,7 @@ function titleCase(value: string) {
 
 function openBuilderEditor(websiteId: string) {
   if (typeof window !== "undefined") {
-    window.location.assign(`/app/site/builder/editor/${websiteId}`);
+    window.location.assign("/app/site/builder");
   }
 }
 

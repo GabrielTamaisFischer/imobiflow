@@ -15,7 +15,13 @@ const previewWatermarkLogoKey = "imobiflow.preview.watermark_logo";
 // tarefa). Mantido em sincronia manual com WATERMARK_POSITIONS do backend
 // (platform/backend/src/services/storage/types.ts) — pacotes separados, sem
 // import cruzado entre front/back neste monorepo.
-export const WATERMARK_POSITIONS = ["bottom-right", "bottom-left", "top-right", "top-left", "center"] as const;
+export const WATERMARK_POSITIONS = [
+  "bottom-right",
+  "bottom-left",
+  "top-right",
+  "top-left",
+  "center",
+] as const;
 export type WatermarkPosition = (typeof WATERMARK_POSITIONS)[number];
 
 export type WatermarkSettings = {
@@ -105,8 +111,37 @@ export type CompanySiteInput = {
   seo_json?: Record<string, unknown>;
 };
 
+export type CompanySiteTemplate = {
+  key: string;
+  name: string;
+  description: string;
+  theme: Record<string, unknown>;
+  sections: Array<{
+    id: string;
+    type: string;
+    enabled: boolean;
+    order: number;
+    props: Record<string, unknown>;
+  }>;
+};
+
+export async function listCompanySiteTemplates() {
+  return apiRequest<{ templates: CompanySiteTemplate[] }>("/site/templates", {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function applyCompanySiteTemplate(templateKey: string, expectedVersion?: number) {
+  return apiRequest<{ site: CompanySite }>("/site/template", {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+    body: JSON.stringify({ template_key: templateKey, expected_version: expectedVersion }),
+  });
+}
+
 export async function getSiteSettings() {
-  if (isPreviewSites()) return { site: readPreviewSite(), watermark_logo: readPreviewWatermarkLogo() };
+  if (isPreviewSites())
+    return { site: readPreviewSite(), watermark_logo: readPreviewWatermarkLogo() };
 
   return apiRequest<{ site: CompanySite | null; watermark_logo: WatermarkLogo }>("/site/settings", {
     token: getStoredToken() ?? undefined,
@@ -166,11 +201,16 @@ export async function saveSiteSettings(input: CompanySiteInput) {
   });
 }
 
-export async function publishSite() {
+export async function publishSite(expectedVersion?: number) {
   if (isPreviewSites()) {
     const site = readPreviewSite();
     if (!site) throw new Error("Salve as configurações do site antes de publicar.");
-    const updated = { ...site, status: "published" as const, published_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const updated = {
+      ...site,
+      status: "published" as const,
+      published_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
     writePreviewSite(updated);
     return { site: updated };
   }
@@ -178,10 +218,11 @@ export async function publishSite() {
   return apiRequest<{ site: CompanySite }>("/site/publish", {
     method: "POST",
     token: getStoredToken() ?? undefined,
+    body: JSON.stringify({ expected_version: expectedVersion }),
   });
 }
 
-export async function unpublishSite() {
+export async function unpublishSite(expectedVersion?: number) {
   if (isPreviewSites()) {
     const site = readPreviewSite();
     if (!site) throw new Error("Site não encontrado.");
@@ -193,6 +234,7 @@ export async function unpublishSite() {
   return apiRequest<{ site: CompanySite }>("/site/unpublish", {
     method: "POST",
     token: getStoredToken() ?? undefined,
+    body: JSON.stringify({ expected_version: expectedVersion }),
   });
 }
 
@@ -202,13 +244,12 @@ export async function publishSiteProperty(propertyId: string) {
     return { property: pickPublicationProperty(property) };
   }
 
-  return apiRequest<{ property: Pick<Property, "id" | "code" | "title" | "status" | "published_at"> }>(
-    `/site/properties/${propertyId}/publish`,
-    {
-      method: "POST",
-      token: getStoredToken() ?? undefined,
-    },
-  );
+  return apiRequest<{
+    property: Pick<Property, "id" | "code" | "title" | "status" | "published_at">;
+  }>(`/site/properties/${propertyId}/publish`, {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+  });
 }
 
 // Diretriz Mestre do MVP, Seção 7: só CALCULA se um deeplink de WhatsApp pode
@@ -254,13 +295,12 @@ export async function unpublishSiteProperty(propertyId: string) {
     return { property: pickPublicationProperty(property) };
   }
 
-  return apiRequest<{ property: Pick<Property, "id" | "code" | "title" | "status" | "published_at"> }>(
-    `/site/properties/${propertyId}/unpublish`,
-    {
-      method: "POST",
-      token: getStoredToken() ?? undefined,
-    },
-  );
+  return apiRequest<{
+    property: Pick<Property, "id" | "code" | "title" | "status" | "published_at">;
+  }>(`/site/properties/${propertyId}/unpublish`, {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+  });
 }
 
 export async function listSiteLeads() {
@@ -285,7 +325,11 @@ export async function getPublicSite(slug: string) {
 export async function getPublicSiteProperties(slug: string) {
   if (hasPreviewPublicSite(slug)) {
     const response = getPreviewPublicSite(slug);
-    return { site: response.site, company: response.company, properties: response.properties ?? [] };
+    return {
+      site: response.site,
+      company: response.company,
+      properties: response.properties ?? [],
+    };
   }
 
   try {
@@ -295,7 +339,11 @@ export async function getPublicSiteProperties(slug: string) {
   } catch (error) {
     if (!isPreviewSites()) throw error;
     const response = getFallbackPublicSite(slug, error);
-    return { site: response.site, company: response.company, properties: response.properties ?? [] };
+    return {
+      site: response.site,
+      company: response.company,
+      properties: response.properties ?? [],
+    };
   }
 }
 
@@ -311,7 +359,9 @@ export async function getPublicSiteProperty(slug: string, propertySlug: string) 
   if (hasPreviewPublicSite(slug)) return loadFromList();
 
   try {
-    return await apiRequest<PublicPropertyResponse>(`/public/sites/${slug}/properties/${propertySlug}`);
+    return await apiRequest<PublicPropertyResponse>(
+      `/public/sites/${slug}/properties/${propertySlug}`,
+    );
   } catch (error) {
     if (!isPreviewSites()) throw error;
     return loadFromList();
@@ -328,13 +378,12 @@ export async function createPublicSiteLead(
   }
 
   try {
-    return await apiRequest<{ lead: { id: string; name: string; email: string | null; phone: string | null } }>(
-      `/public/sites/${slug}/leads`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
+    return await apiRequest<{
+      lead: { id: string; name: string; email: string | null; phone: string | null };
+    }>(`/public/sites/${slug}/leads`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   } catch (error) {
     if (!hasPreviewPublicSite(slug) && !isPreviewSites()) throw error;
     const lead = createPreviewSiteLead(slug, input);
@@ -370,7 +419,9 @@ function readPreviewWatermarkLogo(): WatermarkLogo {
   if (typeof window === "undefined") return null;
 
   try {
-    return JSON.parse(window.localStorage.getItem(previewWatermarkLogoKey) ?? "null") as WatermarkLogo;
+    return JSON.parse(
+      window.localStorage.getItem(previewWatermarkLogoKey) ?? "null",
+    ) as WatermarkLogo;
   } catch {
     return null;
   }
@@ -407,16 +458,37 @@ function upsertPreviewSite(input: CompanySiteInput) {
     logo_url: input.logo_url || current?.logo_url || null,
     primary_color: input.primary_color || current?.primary_color || "#2563eb",
     settings_json: {
-      show_full_address: input.settings_json?.show_full_address ?? current?.settings_json?.show_full_address ?? false,
+      show_full_address:
+        input.settings_json?.show_full_address ??
+        current?.settings_json?.show_full_address ??
+        false,
       show_prices: input.settings_json?.show_prices ?? current?.settings_json?.show_prices ?? true,
-      allow_lead_capture: input.settings_json?.allow_lead_capture ?? current?.settings_json?.allow_lead_capture ?? true,
+      allow_lead_capture:
+        input.settings_json?.allow_lead_capture ??
+        current?.settings_json?.allow_lead_capture ??
+        true,
       auto_publish_properties:
-        input.settings_json?.auto_publish_properties ?? current?.settings_json?.auto_publish_properties ?? true,
-      template_key: input.settings_json?.template_key ?? current?.settings_json?.template_key ?? defaultSiteTemplateKey,
-      featured_property_ids: input.settings_json?.featured_property_ids ?? current?.settings_json?.featured_property_ids ?? [],
-      favorite_template_keys: input.settings_json?.favorite_template_keys ?? current?.settings_json?.favorite_template_keys ?? [],
+        input.settings_json?.auto_publish_properties ??
+        current?.settings_json?.auto_publish_properties ??
+        true,
+      template_key:
+        input.settings_json?.template_key ??
+        current?.settings_json?.template_key ??
+        defaultSiteTemplateKey,
+      featured_property_ids:
+        input.settings_json?.featured_property_ids ??
+        current?.settings_json?.featured_property_ids ??
+        [],
+      favorite_template_keys:
+        input.settings_json?.favorite_template_keys ??
+        current?.settings_json?.favorite_template_keys ??
+        [],
       watermark: input.settings_json?.watermark ??
-        current?.settings_json?.watermark ?? { enabled: false, position: "bottom-right", opacity: 60 },
+        current?.settings_json?.watermark ?? {
+          enabled: false,
+          position: "bottom-right",
+          opacity: 60,
+        },
     },
     seo_json: input.seo_json ?? current?.seo_json ?? {},
     published_at: current?.published_at ?? null,
@@ -450,7 +522,7 @@ function updatePreviewPropertyPublication(propertyId: string, isPublished: boole
   const now = new Date().toISOString();
   const updated: Property = {
     ...property,
-    published_at: isPublished ? property.published_at ?? now : null,
+    published_at: isPublished ? (property.published_at ?? now) : null,
     publication_settings_json: {
       ...property.publication_settings_json,
       site_enabled: isPublished,
@@ -478,7 +550,10 @@ function getPreviewPublicSite(slug: string): PublicSiteResponse {
 
   const autoPublish = site.settings_json.auto_publish_properties !== false;
   const properties = readPreviewProperties()
-    .filter((property) => property.status !== "archived" && (autoPublish || Boolean(property.published_at)))
+    .filter(
+      (property) =>
+        property.status !== "archived" && (autoPublish || Boolean(property.published_at)),
+    )
     .sort((a, b) => {
       const aFeatured = site.settings_json.featured_property_ids?.includes(a.id) ? 0 : 1;
       const bFeatured = site.settings_json.featured_property_ids?.includes(b.id) ? 0 : 1;
@@ -532,7 +607,9 @@ function getFallbackPublicSite(slug: string, error?: unknown): PublicSiteRespons
 
   const properties = readPreviewProperties()
     .filter((property) => property.status !== "archived")
-    .sort((a, b) => (b.published_at ?? b.updated_at ?? "").localeCompare(a.published_at ?? a.updated_at ?? ""));
+    .sort((a, b) =>
+      (b.published_at ?? b.updated_at ?? "").localeCompare(a.published_at ?? a.updated_at ?? ""),
+    );
 
   return {
     site: publicSiteView(site),
@@ -572,7 +649,9 @@ function readPreviewSiteLeads() {
 }
 
 function writePreviewSiteLeads(leads: SiteLead[]) {
-  safeSetPreviewItem(previewSiteLeadsKey, JSON.stringify(leads.slice(0, 200)), () => JSON.stringify(leads.slice(0, 50)));
+  safeSetPreviewItem(previewSiteLeadsKey, JSON.stringify(leads.slice(0, 200)), () =>
+    JSON.stringify(leads.slice(0, 50)),
+  );
 }
 
 function createPreviewSiteLead(
@@ -588,9 +667,18 @@ function createPreviewSiteLead(
         email: input.email,
         phone: input.phone,
         source: "site",
-        interest_type: property?.operation === "sale" ? "sale" : property?.operation === "rent" ? "rent" : "both",
+        interest_type:
+          property?.operation === "sale"
+            ? "sale"
+            : property?.operation === "rent"
+              ? "rent"
+              : "both",
         property_reference: property?.code ?? property?.title ?? undefined,
-        notes: [input.message, site?.brand_name ? `Site: ${site.brand_name}` : null, property?.title ? `Imóvel: ${property.title}` : null]
+        notes: [
+          input.message,
+          site?.brand_name ? `Site: ${site.brand_name}` : null,
+          property?.title ? `Imóvel: ${property.title}` : null,
+        ]
           .filter(Boolean)
           .join("\n"),
       })
@@ -611,7 +699,11 @@ function createPreviewSiteLead(
   if (crmLead) {
     void crmLead.then((response) => {
       const current = readPreviewSiteLeads();
-      writePreviewSiteLeads(current.map((item) => (item.id === lead.id ? { ...item, lead_id: response.lead.id } : item)));
+      writePreviewSiteLeads(
+        current.map((item) =>
+          item.id === lead.id ? { ...item, lead_id: response.lead.id } : item,
+        ),
+      );
     });
   }
 
@@ -620,13 +712,15 @@ function createPreviewSiteLead(
 }
 
 function sanitizeSlug(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "imobiflow-preview";
+  return (
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "imobiflow-preview"
+  );
 }
 
 function isUuid(value: string) {

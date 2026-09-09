@@ -305,6 +305,17 @@ sitesRouter.put("/settings", requireSiteManage, async (req: RequestWithAccess, r
     const userId = req.access!.appUser.id;
     const input = siteSchema.parse(req.body);
     const validatedConfig = parseCompanySiteConfig(input.settings_json);
+    if (Array.isArray(validatedConfig.featured_property_ids) && validatedConfig.featured_property_ids.length > 0) {
+      const visibleProperties = await prisma().property.count({
+        where: { companyId, id: { in: validatedConfig.featured_property_ids } },
+      });
+      if (visibleProperties !== validatedConfig.featured_property_ids.length) {
+        throw Object.assign(new Error("Imóvel em destaque não pertence a esta empresa."), {
+          statusCode: 422,
+          code: "FEATURED_PROPERTY_TENANT_MISMATCH",
+        });
+      }
+    }
     const existing = await prisma().companySite.findFirst({ where: { companyId } });
 
     // P0 multiempresa: o schema ja garante slug globalmente unico

@@ -24,6 +24,7 @@ import {
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
+import { CompanySiteBuilder } from "@/components/app/company-site-builder";
 import { Button } from "@/components/ui/button";
 import { getModuleByKey } from "@/product/app-modules";
 import { getConfiguredApiUrl } from "@/product/api";
@@ -76,7 +77,7 @@ import {
 } from "@/product/website-builder";
 
 export const Route = createFileRoute("/app/site/builder")({
-  component: WebsiteBuilderPage,
+  component: CompanySiteBuilder,
 });
 
 function WebsiteBuilderPage() {
