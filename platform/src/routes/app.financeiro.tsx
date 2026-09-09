@@ -49,6 +49,7 @@ import {
   type RentalChargeInput,
 } from "@/product/finance";
 import { getModuleByKey } from "@/product/app-modules";
+import { CanonicalFinancePage } from "@/product/finance-page-f9b";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/financeiro")({
@@ -86,7 +87,7 @@ const ownerTransferStatusLabels = {
   cancelled: "Cancelado",
 };
 
-function FinancePage() {
+function LegacyFinancePage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("finance");
   const [entries, setEntries] = useState<FinancialEntry[]>([]);
@@ -293,6 +294,25 @@ function FinancePage() {
           ) : null}
         </div>
       )}
+    </ModulePage>
+  );
+}
+
+function FinancePage() {
+  const { session, isLoading } = useSessionGuard();
+  const module = getModuleByKey("finance");
+
+  if (isLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        Validando acesso...
+      </main>
+    );
+  }
+
+  return (
+    <ModulePage session={session} module={module}>
+      <CanonicalFinancePage session={session} />
     </ModulePage>
   );
 }

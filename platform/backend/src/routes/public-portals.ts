@@ -10,6 +10,7 @@ import {
 } from "../services/mysql-real-estate.js";
 import { getStorageProviderForName } from "../services/storage/index.js";
 import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
+import { listFinancialEntriesForPortal } from "../services/mysql-finance.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
 
 export const publicPortalsRouter = Router();
@@ -66,37 +67,42 @@ async function logPortalAccess(input: {
   }
 }
 
-/**
- * Dados financeiros (repasses/cobranças) do proprietário ainda vivem no
- * Supabase legado nesta fase (Financeiro não foi migrado na Fase A). Em vez
- * de derrubar o portal inteiro quando o Supabase não está configurado
- * (ambiente local R$0, sem projeto Supabase), essas seções degradam para
- * lista vazia — o núcleo do portal (dados do proprietário + imóveis, que já
- * são Prisma/MySQL) continua funcional e correto.
- */
 async function loadOwnerFinancials(companyId: string, ownerId: string) {
   try {
-    const [transfersResponse, chargesResponse] = await Promise.all([
-      supabaseAdmin
-        .from("owner_transfers")
-        .select("id, charge_id, contract_id, property_id, gross_amount_cents, deductions_cents, net_amount_cents, status, due_date, paid_at, payment_method, receipt_url, receipt_reference, notes, created_at, contracts(id, title, contract_number), properties(id, code, title)")
-        .eq("company_id", companyId)
-        .eq("owner_id", ownerId)
-        .order("due_date", { ascending: false, nullsFirst: false })
-        .limit(24),
-      supabaseAdmin
-        .from("financial_charges")
-        .select("id, contract_id, property_id, payment_method, gross_amount_cents, commission_amount_cents, fee_amount_cents, net_owner_amount_cents, due_date, paid_at, status, contracts(id, title, contract_number), properties(id, code, title)")
-        .eq("company_id", companyId)
-        .eq("owner_id", ownerId)
-        .order("due_date", { ascending: false })
-        .limit(24),
-    ]);
-
-    if (transfersResponse.error) throw transfersResponse.error;
-    if (chargesResponse.error) throw chargesResponse.error;
-
-    return { transfers: transfersResponse.data ?? [], charges: chargesResponse.data ?? [] };
+    const entries = await listFinancialEntriesForPortal({ companyId, ownerId });
+    const toCents = (amount: string) => Math.round(Number(amount) * 100);
+    const status = (value: string) => value === "paid" ? "paid" : value === "cancelled" ? "cancelled" : "pending";
+    const base = (entry: (typeof entries)[number]) => ({
+      id: entry.id,
+      contract_id: entry.contract_id ?? "",
+      property_id: entry.property_id,
+      due_date: entry.due_date ?? "",
+      paid_at: entry.paid_at,
+      status: status(entry.status),
+      payment_method: entry.payment?.payment_method ?? "manual",
+      notes: entry.payment?.notes ?? entry.description,
+      created_at: entry.created_at,
+      contracts: entry.contract ? { id: entry.contract.id, title: entry.contract.title, contract_number: null } : null,
+      properties: entry.property ? { id: entry.property.id, code: entry.property.code, title: entry.property.title } : null,
+    });
+    return {
+      transfers: entries.filter((entry) => entry.type === "payable" && entry.category === "owner_payout").map((entry) => ({
+        ...base(entry),
+        charge_id: null,
+        gross_amount_cents: toCents(entry.amount),
+        deductions_cents: 0,
+        net_amount_cents: toCents(entry.amount),
+        receipt_url: null,
+        receipt_reference: null,
+      })),
+      charges: entries.filter((entry) => entry.type === "receivable" && entry.category === "rent").map((entry) => ({
+        ...base(entry),
+        gross_amount_cents: toCents(entry.amount),
+        commission_amount_cents: 0,
+        fee_amount_cents: 0,
+        net_owner_amount_cents: toCents(entry.amount),
+      })),
+    };
   } catch {
     return { transfers: [], charges: [] };
   }

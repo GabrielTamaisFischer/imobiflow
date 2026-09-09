@@ -100,7 +100,7 @@ describe("F8B portal UI contract", () => {
         }),
       ],
       inspections: [],
-      payments: { available: false, next_due_dates: [] },
+      payments: { available: true, next_due_dates: [], entries: [] },
       actions: { sign_contract: true, download_document: true, view_inspection: false },
     } as unknown as PortalAggregate;
     expect(portalHistory(aggregate)).toHaveLength(1);

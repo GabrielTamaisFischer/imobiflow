@@ -231,12 +231,12 @@ export async function cancelFinancialEntry(companyId: string, userId: string, id
   return { entry: serializeFinancialEntry(row) };
 }
 
-export async function listFinancialEntriesForPortal(input: { companyId: string; ownerId?: string; tenantPartyId?: string; contractIds?: string[] }) {
+export async function listFinancialEntriesForPortal(input: { companyId: string; ownerId?: string; tenantPartyId?: string; contractIds?: string[] }, prisma = db()): Promise<Array<ReturnType<typeof serializeFinancialEntry>>> {
   const where: any = { companyId: input.companyId };
   if (input.ownerId) where.ownerId = input.ownerId;
   if (input.tenantPartyId) where.tenantPartyId = input.tenantPartyId;
   if (input.contractIds) where.contractId = { in: input.contractIds };
-  const rows = await db().financialEntry.findMany({ where, include, orderBy: { dueDate: "asc" }, take: 250 });
+  const rows = await prisma.financialEntry.findMany({ where, include, orderBy: { dueDate: "asc" }, take: 250 });
   return rows.map(serializeFinancialEntry);
 }
 

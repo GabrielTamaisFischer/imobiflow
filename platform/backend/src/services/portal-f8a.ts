@@ -1,5 +1,7 @@
 /** F8A — privacy-safe aggregates for authenticated tenant and buyer portals. */
 
+import { listFinancialEntriesForPortal } from "./mysql-finance.js";
+
 export type PortalPartyType = "tenant" | "buyer";
 type PortalDb = any;
 
@@ -120,13 +122,39 @@ export async function loadTenantPortal(db: PortalDb, party: { id: string; compan
   const contracts = await db.contract.findMany({ where: { companyId, parties: { some: { id: party.id, companyId, partyType: "tenant" } } }, select: contractSelect, orderBy: { updatedAt: "desc" } });
   const documents = await loadArtifacts(db, companyId, contracts);
   const inspections = await loadInspections(db, companyId, contracts);
+  const payments = await listFinancialEntriesForPortal({
+    companyId,
+    tenantPartyId: party.id,
+    contractIds: contracts.map((contract: any) => contract.id),
+  }, db);
   return {
     portal: "tenant",
     identity: { name: party.name, email: party.email, party_type: "tenant" },
     properties: propertyList(contracts),
     contracts: contracts.map((row: any) => contractDto(row, "tenant", partyIds, documents)),
     inspections,
-    payments: { available: false, reason: "financeiro_f9", next_due_dates: [] },
+    payments: {
+      available: true,
+      next_due_dates: payments
+        .filter((entry) => entry.type === "receivable" && ["pending", "overdue"].includes(entry.status) && entry.due_date)
+        .map((entry) => entry.due_date as string),
+      entries: payments
+        .filter((entry) => entry.type === "receivable")
+        .map((entry) => ({
+          id: entry.id,
+          contract_id: entry.contract_id,
+          property_id: entry.property_id,
+          amount: entry.amount,
+          currency: entry.currency,
+          description: entry.description,
+          due_date: entry.due_date,
+          competence_date: entry.competence_date,
+          paid_at: entry.paid_at,
+          status: entry.status,
+          property: entry.property,
+          contract: entry.contract,
+        })),
+    },
     actions: { sign_contract: contracts.some((row: any) => row.parties.some((party: any) => partyIds.has(party.id) && party.partyType === "tenant" && party.signatureRequired && party.signatureStatus !== "signed")), download_document: documents.length > 0, view_inspection: inspections.length > 0 },
   };
 }

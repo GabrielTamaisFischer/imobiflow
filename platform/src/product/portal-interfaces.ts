@@ -85,7 +85,25 @@ export type TenantPortalAggregate = {
   properties: PortalProperty[];
   contracts: PortalContract[];
   inspections: PortalInspection[];
-  payments: { available: boolean; reason?: string; next_due_dates: string[] };
+  payments: {
+    available: boolean;
+    reason?: string;
+    next_due_dates: string[];
+    entries?: Array<{
+      id: string;
+      contract_id: string | null;
+      property_id: string | null;
+      amount: string;
+      currency: string;
+      description: string;
+      due_date: string | null;
+      competence_date: string | null;
+      paid_at: string | null;
+      status: string;
+      property: PortalProperty | null;
+      contract: { id: string; title: string; status: string } | null;
+    }>;
+  };
   actions: { sign_contract: boolean; download_document: boolean; view_inspection: boolean };
 };
 export type BuyerPortalAggregate = {

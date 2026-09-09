@@ -643,14 +643,40 @@ function PaymentsPanel({ payments }: { payments: TenantPortalAggregate["payments
   return (
     <Panel title="Pagamentos e vencimentos">
       {payments.available ? (
-        <div className="text-sm">
-          Próximos vencimentos: {payments.next_due_dates.join(", ") || "Nenhum"}
-        </div>
+        payments.entries?.length ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Próximos vencimentos: {payments.next_due_dates.join(", ") || "Nenhum"}
+            </p>
+            {payments.entries.map((entry) => (
+              <article key={entry.id} className="rounded-md border border-border bg-background p-3 text-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="font-semibold">{entry.description}</p>
+                    <p className="text-xs text-muted-foreground">{entry.property?.title ?? "Imóvel não informado"}</p>
+                  </div>
+                  <strong>{formatMoney(entry.amount, entry.currency)}</strong>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {paymentStatusLabel(entry.status)} · Vencimento: {formatDate(entry.due_date)}
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState message="Nenhum pagamento ou vencimento disponível." />
+        )
       ) : (
         <EmptyState message="Informações financeiras serão disponibilizadas quando o módulo financeiro estiver habilitado." />
       )}
     </Panel>
   );
+}
+function paymentStatusLabel(status: string) {
+  return ({ pending: "Pendente", overdue: "Vencido", paid: "Pago", cancelled: "Cancelado" } as Record<string, string>)[status] ?? status;
+}
+function formatMoney(value: string, currency: string) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency }).format(Number(value));
 }
 function HistoryPanel({
   history,

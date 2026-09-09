@@ -41,11 +41,21 @@ describe("F8A — portais externos tenant/buyer", () => {
       contract: { findMany: async (args: any) => { calls.push(args); return [contract]; } },
       storedFile: { findMany: async () => [] },
       inspection: { findMany: async () => [] },
+      financialEntry: { findMany: async () => [{
+        id: "entry-a", companyId: "company-a", type: "receivable", category: "rent", amount: "1250.00", currency: "BRL",
+        description: "Aluguel setembro", dueDate: new Date("2026-09-10T00:00:00Z"), competenceDate: null, paidAt: null,
+        status: "pending", propertyId: "property-a", contractId: contract.id, ownerId: null, tenantPartyId: tenant.id,
+        version: 1, metadataJson: {}, createdAt: new Date("2026-09-01T00:00:00Z"), updatedAt: new Date("2026-09-01T00:00:00Z"),
+        property: contract.property, contract: { id: contract.id, title: contract.title, status: contract.status }, owner: null,
+        tenantParty: { id: tenant.id, name: tenant.name }, payment: null,
+      }] },
     };
     const result = await loadTenantPortal(db, tenant);
     expect(calls[0].where).toMatchObject({ companyId: "company-a", parties: { some: { id: tenant.id, companyId: "company-a", partyType: "tenant" } } });
     expect(result?.contracts[0].party.map((party: any) => party.id)).toEqual([tenant.id]);
     expect(result?.contracts[0].party.map((party: any) => party.name)).not.toContain("Other Tenant");
+    expect(result?.payments.available).toBe(true);
+    expect(result?.payments.entries?.[0].amount).toBe("1250.00");
   });
 
   it("buyer limita commercial context aos leads referenciados nos próprios contratos", async () => {
