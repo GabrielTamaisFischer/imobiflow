@@ -2,7 +2,13 @@ import { apiRequest } from "./api";
 import { getStoredToken } from "./auth";
 
 export type FinancialType = "receivable" | "payable";
-export type FinancialCategory = "rent" | "owner_payout" | "commission" | "expense" | "revenue" | "other";
+export type FinancialCategory =
+  | "rent"
+  | "owner_payout"
+  | "commission"
+  | "expense"
+  | "revenue"
+  | "other";
 export type FinancialStatus = "pending" | "paid" | "overdue" | "cancelled";
 
 export type CanonicalFinancialEntry = {
@@ -28,7 +34,13 @@ export type CanonicalFinancialEntry = {
   contract: { id: string; title: string; status: string } | null;
   owner: { id: string; name: string } | null;
   tenant: { id: string; name: string } | null;
-  payment: { id: string; amount: string; paid_at: string; payment_method: string | null; notes: string | null } | null;
+  payment: {
+    id: string;
+    amount: string;
+    paid_at: string;
+    payment_method: string | null;
+    notes: string | null;
+  } | null;
   created_at: string;
   updated_at: string;
 };
@@ -61,7 +73,9 @@ export type FinancialInput = {
   metadata?: Record<string, unknown>;
 };
 
-export type FinancialPatch = Partial<Omit<FinancialInput, "id" | "type">> & { expected_version: number };
+export type FinancialPatch = Partial<Omit<FinancialInput, "id" | "type">> & {
+  expected_version: number;
+};
 
 const token = () => getStoredToken() ?? undefined;
 const idempotencyKey = (scope: string) => {
@@ -73,32 +87,52 @@ export async function listCanonicalFinancialEntries(filters: FinancialFilters = 
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) if (value) search.set(key, value);
   const query = search.toString() ? `?${search.toString()}` : "";
-  return apiRequest<{ entries: CanonicalFinancialEntry[]; overdue_count: number }>(`/real-estate/finance${query}`, { token: token() });
+  return apiRequest<{ entries: CanonicalFinancialEntry[]; overdue_count: number }>(
+    `/real-estate/finance${query}`,
+    { token: token() },
+  );
 }
 
 export async function getCanonicalFinancialEntry(id: string) {
-  return apiRequest<{ entry: CanonicalFinancialEntry }>(`/real-estate/finance/${encodeURIComponent(id)}`, { token: token() });
+  return apiRequest<{ entry: CanonicalFinancialEntry }>(
+    `/real-estate/finance/${encodeURIComponent(id)}`,
+    { token: token() },
+  );
 }
 
 export async function createCanonicalFinancialEntry(input: FinancialInput) {
-  return apiRequest<{ entry: CanonicalFinancialEntry; replayed?: boolean }>("/real-estate/finance", {
-    method: "POST",
-    headers: { "Idempotency-Key": idempotencyKey("finance-create") },
-    body: JSON.stringify(input),
-    token: token(),
-  });
+  return apiRequest<{ entry: CanonicalFinancialEntry; replayed?: boolean }>(
+    "/real-estate/finance",
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey("finance-create") },
+      body: JSON.stringify(input),
+      token: token(),
+    },
+  );
 }
 
 export async function updateCanonicalFinancialEntry(id: string, input: FinancialPatch) {
-  return apiRequest<{ entry: CanonicalFinancialEntry }>(`/real-estate/finance/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-    token: token(),
-  });
+  return apiRequest<{ entry: CanonicalFinancialEntry }>(
+    `/real-estate/finance/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      token: token(),
+    },
+  );
 }
 
-export async function payCanonicalFinancialEntry(id: string, input: { amount?: string; paid_at?: string; payment_method?: string; notes?: string } = {}) {
-  return apiRequest<{ entry: CanonicalFinancialEntry; payment: unknown; replayed?: boolean; already_paid?: boolean }>(`/real-estate/finance/${encodeURIComponent(id)}/pay`, {
+export async function payCanonicalFinancialEntry(
+  id: string,
+  input: { amount?: string; paid_at?: string; payment_method?: string; notes?: string } = {},
+) {
+  return apiRequest<{
+    entry: CanonicalFinancialEntry;
+    payment: unknown;
+    replayed?: boolean;
+    already_paid?: boolean;
+  }>(`/real-estate/finance/${encodeURIComponent(id)}/pay`, {
     method: "POST",
     headers: { "Idempotency-Key": idempotencyKey(`finance-pay:${id}`) },
     body: JSON.stringify(input),
@@ -107,15 +141,25 @@ export async function payCanonicalFinancialEntry(id: string, input: { amount?: s
 }
 
 export async function cancelCanonicalFinancialEntry(id: string, reason?: string) {
-  return apiRequest<{ entry: CanonicalFinancialEntry }>(`/real-estate/finance/${encodeURIComponent(id)}/cancel`, {
-    method: "POST",
-    body: JSON.stringify({ reason }),
-    token: token(),
-  });
+  return apiRequest<{ entry: CanonicalFinancialEntry }>(
+    `/real-estate/finance/${encodeURIComponent(id)}/cancel`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+      token: token(),
+    },
+  );
 }
 
 export function categoryLabel(category: FinancialCategory) {
-  return { rent: "Aluguel", owner_payout: "Repasse", commission: "Comissão", expense: "Despesa", revenue: "Receita", other: "Outro" }[category];
+  return {
+    rent: "Aluguel",
+    owner_payout: "Repasse",
+    commission: "Comissão",
+    expense: "Despesa",
+    revenue: "Receita",
+    other: "Outro",
+  }[category];
 }
 
 export function statusLabel(status: FinancialStatus) {
@@ -131,10 +175,17 @@ export function formatFinancialAmount(amount: string | number, currency = "BRL")
 }
 
 export function financialDashboard(entries: CanonicalFinancialEntry[]) {
-  const sum = (predicate: (entry: CanonicalFinancialEntry) => boolean) => entries.filter(predicate).reduce((total, entry) => total + Number(entry.amount), 0);
+  const sum = (predicate: (entry: CanonicalFinancialEntry) => boolean) =>
+    entries.filter(predicate).reduce((total, entry) => total + Number(entry.amount), 0);
   return {
-    receivable: sum((entry) => entry.type === "receivable" && entry.status !== "paid" && entry.status !== "cancelled"),
-    payable: sum((entry) => entry.type === "payable" && entry.status !== "paid" && entry.status !== "cancelled"),
+    receivable: sum(
+      (entry) =>
+        entry.type === "receivable" && entry.status !== "paid" && entry.status !== "cancelled",
+    ),
+    payable: sum(
+      (entry) =>
+        entry.type === "payable" && entry.status !== "paid" && entry.status !== "cancelled",
+    ),
     received: sum((entry) => entry.type === "receivable" && entry.status === "paid"),
     paid: sum((entry) => entry.type === "payable" && entry.status === "paid"),
     overdue: sum((entry) => entry.status === "overdue"),
