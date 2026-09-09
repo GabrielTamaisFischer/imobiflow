@@ -53,6 +53,9 @@ model Company {
   contractEvents  ContractEvent[]
   contractClauses ContractClause[]
   contractClauseInstances ContractClauseInstance[]
+  financialEntries FinancialEntry[]
+  financialPayments FinancialPayment[]
+  financialEvents FinancialEntryEvent[]
 
   @@index([status])
   @@map("companies")
@@ -101,6 +104,9 @@ model AppUser {
   inspectionEvents InspectionEvent[] @relation("InspectionEventActor")
   createdContracts Contract[] @relation("ContractCreator")
   contractEvents ContractEvent[] @relation("ContractEventActor")
+  financialEntriesCreated FinancialEntry[] @relation("FinancialEntryCreator")
+  financialPaymentsCreated FinancialPayment[] @relation("FinancialPaymentCreator")
+  financialEventsActor FinancialEntryEvent[] @relation("FinancialEntryEventActor")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -370,6 +376,7 @@ model PropertyOwner {
   updatedAt           DateTime     @updatedAt @map("updated_at")
   company             Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   properties          Property[]
+  financialEntries    FinancialEntry[]
 
   @@index([companyId, status])
   @@index([companyId, document])
@@ -443,6 +450,7 @@ model Property {
   accessGrants            PropertyAccess[]
   inspections             Inspection[]
   contracts               Contract[]
+  financialEntries        FinancialEntry[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -1040,6 +1048,7 @@ model Contract {
   versions          ContractVersion[]
   events            ContractEvent[]
   clauses           ContractClauseInstance[]
+  financialEntries  FinancialEntry[]
 
   @@index([companyId, status, createdAt])
   @@index([companyId, propertyId, status])
@@ -1066,11 +1075,86 @@ model ContractParty {
   updatedAt        DateTime @updatedAt @map("updated_at")
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   contract         Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  financialEntries  FinancialEntry[]
 
   @@index([companyId, contractId])
   @@index([companyId, partyType])
   @@index([companyId, partyType, portalEnabled])
   @@map("contract_parties_mysql")
+}
+
+model FinancialEntry {
+  id             String   @id @default(uuid()) @db.Char(36)
+  companyId      String   @map("company_id") @db.Char(36)
+  type           String   @db.VarChar(20)
+  category       String   @db.VarChar(40)
+  amount         Decimal  @db.Decimal(15, 2)
+  currency       String   @default("BRL") @db.VarChar(3)
+  description    String   @db.VarChar(240)
+  dueDate        DateTime? @map("due_date") @db.Date
+  competenceDate DateTime? @map("competence_date") @db.Date
+  paidAt         DateTime? @map("paid_at")
+  status         String   @default("pending") @db.VarChar(20)
+  propertyId     String?  @map("property_id") @db.Char(36)
+  contractId     String?  @map("contract_id") @db.Char(36)
+  ownerId        String?  @map("owner_id") @db.Char(36)
+  tenantPartyId  String?  @map("tenant_party_id") @db.Char(36)
+  createdBy      String?  @map("created_by") @db.Char(36)
+  version        Int      @default(1)
+  metadataJson   Json     @map("metadata_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property       Property?      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  contract       Contract?      @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  owner          PropertyOwner? @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  tenantParty    ContractParty? @relation(fields: [tenantPartyId], references: [id], onDelete: Restrict)
+  creator        AppUser?       @relation("FinancialEntryCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  payment        FinancialPayment?
+  events         FinancialEntryEvent[]
+
+  @@index([companyId, type, status, dueDate])
+  @@index([companyId, category, createdAt])
+  @@index([companyId, propertyId])
+  @@index([companyId, contractId])
+  @@index([companyId, ownerId])
+  @@index([companyId, tenantPartyId])
+  @@map("financial_entries_mysql")
+}
+
+model FinancialPayment {
+  id             String   @id @default(uuid()) @db.Char(36)
+  companyId      String   @map("company_id") @db.Char(36)
+  entryId        String   @unique @map("entry_id") @db.Char(36)
+  amount         Decimal  @db.Decimal(15, 2)
+  paidAt         DateTime @map("paid_at")
+  paymentMethod  String?  @map("payment_method") @db.VarChar(40)
+  notes          String?  @db.Text
+  createdBy      String?  @map("created_by") @db.Char(36)
+  createdAt      DateTime @default(now()) @map("created_at")
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entry          FinancialEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  creator        AppUser?       @relation("FinancialPaymentCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, paidAt])
+  @@map("financial_payments_mysql")
+}
+
+model FinancialEntryEvent {
+  id           String   @id @default(uuid()) @db.Char(36)
+  companyId    String   @map("company_id") @db.Char(36)
+  entryId      String   @map("entry_id") @db.Char(36)
+  actorId      String?  @map("actor_id") @db.Char(36)
+  eventType    String   @map("event_type") @db.VarChar(80)
+  metadataJson Json     @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entry        FinancialEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  actor        AppUser?       @relation("FinancialEntryEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, entryId, createdAt])
+  @@index([companyId, eventType, createdAt])
+  @@map("financial_entry_events_mysql")
 }
 
 model ContractVersion {

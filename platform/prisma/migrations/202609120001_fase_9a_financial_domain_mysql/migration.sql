@@ -1,0 +1,71 @@
+-- F9A: canonical operational finance ledger for Prisma/MySQL/TiDB.
+-- Additive only; the legacy Supabase finance routes remain isolated.
+CREATE TABLE `financial_entries_mysql` (
+  `id` CHAR(36) NOT NULL,
+  `company_id` CHAR(36) NOT NULL,
+  `type` VARCHAR(20) NOT NULL,
+  `category` VARCHAR(40) NOT NULL,
+  `amount` DECIMAL(15,2) NOT NULL,
+  `currency` VARCHAR(3) NOT NULL DEFAULT 'BRL',
+  `description` VARCHAR(240) NOT NULL,
+  `due_date` DATE NULL,
+  `competence_date` DATE NULL,
+  `paid_at` DATETIME(3) NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+  `property_id` CHAR(36) NULL,
+  `contract_id` CHAR(36) NULL,
+  `owner_id` CHAR(36) NULL,
+  `tenant_party_id` CHAR(36) NULL,
+  `created_by` CHAR(36) NULL,
+  `version` INT NOT NULL DEFAULT 1,
+  `metadata_json` JSON NOT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updated_at` DATETIME(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  INDEX `financial_entries_mysql_company_type_status_due_idx` (`company_id`, `type`, `status`, `due_date`),
+  INDEX `financial_entries_mysql_company_category_created_idx` (`company_id`, `category`, `created_at`),
+  INDEX `financial_entries_mysql_company_property_idx` (`company_id`, `property_id`),
+  INDEX `financial_entries_mysql_company_contract_idx` (`company_id`, `contract_id`),
+  INDEX `financial_entries_mysql_company_owner_idx` (`company_id`, `owner_id`),
+  INDEX `financial_entries_mysql_company_tenant_idx` (`company_id`, `tenant_party_id`),
+  CONSTRAINT `financial_entries_mysql_company_fk` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `financial_entries_mysql_property_fk` FOREIGN KEY (`property_id`) REFERENCES `properties` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `financial_entries_mysql_contract_fk` FOREIGN KEY (`contract_id`) REFERENCES `contracts_mysql` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `financial_entries_mysql_owner_fk` FOREIGN KEY (`owner_id`) REFERENCES `property_owners` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `financial_entries_mysql_tenant_fk` FOREIGN KEY (`tenant_party_id`) REFERENCES `contract_parties_mysql` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `financial_entries_mysql_creator_fk` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE `financial_payments_mysql` (
+  `id` CHAR(36) NOT NULL,
+  `company_id` CHAR(36) NOT NULL,
+  `entry_id` CHAR(36) NOT NULL,
+  `amount` DECIMAL(15,2) NOT NULL,
+  `paid_at` DATETIME(3) NOT NULL,
+  `payment_method` VARCHAR(40) NULL,
+  `notes` TEXT NULL,
+  `created_by` CHAR(36) NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `financial_payments_mysql_entry_id_key` (`entry_id`),
+  INDEX `financial_payments_mysql_company_paid_at_idx` (`company_id`, `paid_at`),
+  CONSTRAINT `financial_payments_mysql_company_fk` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `financial_payments_mysql_entry_fk` FOREIGN KEY (`entry_id`) REFERENCES `financial_entries_mysql` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `financial_payments_mysql_creator_fk` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE `financial_entry_events_mysql` (
+  `id` CHAR(36) NOT NULL,
+  `company_id` CHAR(36) NOT NULL,
+  `entry_id` CHAR(36) NOT NULL,
+  `actor_id` CHAR(36) NULL,
+  `event_type` VARCHAR(80) NOT NULL,
+  `metadata_json` JSON NOT NULL,
+  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  INDEX `financial_entry_events_mysql_company_entry_created_idx` (`company_id`, `entry_id`, `created_at`),
+  INDEX `financial_entry_events_mysql_company_type_created_idx` (`company_id`, `event_type`, `created_at`),
+  CONSTRAINT `financial_entry_events_mysql_company_fk` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `financial_entry_events_mysql_entry_fk` FOREIGN KEY (`entry_id`) REFERENCES `financial_entries_mysql` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `financial_entry_events_mysql_actor_fk` FOREIGN KEY (`actor_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
