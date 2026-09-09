@@ -101,6 +101,7 @@ export function CompanySiteBuilder() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasConflict, setHasConflict] = useState(false);
 
   const sections = useMemo(() => config.sections ?? [], [config.sections]);
   const selected = useMemo(
@@ -111,6 +112,7 @@ export function CompanySiteBuilder() {
   async function load() {
     setBusy(true);
     setError(null);
+    setHasConflict(false);
     try {
       const [siteResponse, templateResponse, propertyResponse] = await Promise.all([
         getSiteSettings(),
@@ -175,6 +177,7 @@ export function CompanySiteBuilder() {
     if (!site) return null;
     setBusy(true);
     setError(null);
+    setHasConflict(false);
     setMessage(null);
     try {
       const response = await saveSiteSettings({
@@ -198,9 +201,11 @@ export function CompanySiteBuilder() {
       return response.site;
     } catch (saveError) {
       const text = saveError instanceof Error ? saveError.message : "Não foi possível salvar.";
+      const conflict = text.includes("409") || text.toLowerCase().includes("alterado");
+      setHasConflict(conflict);
       setError(
-        text.includes("409") || text.toLowerCase().includes("alterado")
-          ? "Conflito de versão: recarregue antes de salvar."
+        conflict
+          ? "Conflito de versão: a configuração foi alterada. Recarregue a versão atual antes de salvar novamente."
           : text,
       );
       return null;
@@ -282,7 +287,12 @@ export function CompanySiteBuilder() {
           role="alert"
           className="mb-4 rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
         >
-          {error}
+          <div>{error}</div>
+          {hasConflict ? (
+            <Button className="mt-2" variant="outline" onClick={() => void load()} disabled={busy}>
+              Recarregar versão atual
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {message ? (
