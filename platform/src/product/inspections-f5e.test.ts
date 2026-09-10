@@ -11,7 +11,8 @@ describe("F5E — evidências de vistoria", () => {
     expect(client).toContain("uploadMysqlInspectionEvidence");
     expect(client).toContain("content_base64");
     expect(client).toContain('"Idempotency-Key"');
-    expect(client).toContain("OFFLINE_EVIDENCE_UNSUPPORTED");
+    expect(client).toContain("queueOfflineInspectionEvidence");
+    expect(client).toContain("syncMysqlInspectionOfflineEvidenceQueue");
   });
 
   it("renderiza galeria e CTA apenas enquanto a vistoria é editável", async () => {
@@ -26,11 +27,13 @@ describe("F5E — evidências de vistoria", () => {
     expect(detail).toContain("itemId={item.id}");
   });
 
-  it("mantém evidências online-first e sem persistência local de blobs", async () => {
+  it("persiste fotos offline em IndexedDB e mostra o estado de sincronização", async () => {
     const panel = await source("../components/app/inspection-evidence-panel.tsx");
     const client = await source("./inspections.ts");
     expect(panel).not.toContain("localStorage");
-    expect(panel).not.toContain("indexedDB");
-    expect(client).toContain("Upload de evidência exige conexão");
+    expect(client).toContain("queueOfflineInspectionEvidence");
+    expect(client).toContain("offline_pending");
+    expect(panel).toContain("Salva no dispositivo");
+    expect(panel).toContain("Falha na sincronização");
   });
 });

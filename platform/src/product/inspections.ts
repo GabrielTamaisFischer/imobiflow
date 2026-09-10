@@ -6,10 +6,16 @@ import {
   getInspectionOfflineScope,
   isOfflineRuntime,
   queueInspectionMutation,
+  queueOfflineInspectionEvidence,
+  listOfflineInspectionEvidence,
+  updateOfflineInspectionEvidence,
+  removeOfflineInspectionEvidence,
+  syncOfflineInspectionEvidenceQueue,
   readInspectionSnapshot,
   saveInspectionSnapshot,
   type OfflineMutation,
   type OfflineSyncSender,
+  type OfflineInspectionEvidence,
   syncInspectionOfflineQueue,
 } from "./inspection-offline";
 
@@ -33,6 +39,38 @@ function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
 function isOfflineError(error: unknown) { return isOfflineRuntime() || (error instanceof TypeError && /fetch|network/i.test(error.message)) || (error instanceof Error && /failed to fetch|network|offline|conectar/i.test(error.message)); }
 function offlineHeaders(key?: string) { return key ? idempotencyKey(key) : undefined; }
 function localNow() { return new Date().toISOString(); }
+const MAX_INSPECTION_EVIDENCE_BYTES = 8 * 1024 * 1024;
+const INSPECTION_EVIDENCE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+export async function validateInspectionEvidenceFile(file: Blob & { name?: string }) {
+  const name = file.name ?? "evidence";
+  const mimeType = file.type.toLowerCase().trim();
+  const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
+  const extensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
+  if (!INSPECTION_EVIDENCE_MIME_TYPES.has(mimeType) || !extensions.has(extension)) throw Object.assign(new Error("Tipo de foto não permitido para evidência."), { code: "INVALID_UPLOAD", status: 415 });
+  if (file.size <= 0 || file.size > MAX_INSPECTION_EVIDENCE_BYTES) throw Object.assign(new Error("A foto deve ter até 8MB."), { code: "INVALID_UPLOAD", status: 413 });
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const validMagic = mimeType === "image/jpeg"
+    ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    : mimeType === "image/png"
+      ? bytes.slice(0, 8).every((value, index) => value === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
+      : bytes.slice(0, 4).every((value, index) => value === [0x52, 0x49, 0x46, 0x46][index]) && new TextDecoder().decode(bytes.slice(8, 12)) === "WEBP";
+  if (!validMagic) throw Object.assign(new Error("O conteúdo da foto não corresponde ao tipo informado."), { code: "INVALID_UPLOAD", status: 415 });
+}
+
+async function blobToDataUrl(blob: Blob) {
+  if (typeof FileReader !== "undefined") {
+    return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error ?? new Error("Não foi possível ler o arquivo.")); reader.readAsDataURL(blob); });
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `data:${blob.type};base64,${btoa(binary)}`;
+}
+
+function offlineEvidenceView(row: OfflineInspectionEvidence): MysqlInspectionEvidence & { offline_pending: true; offline_status: OfflineInspectionEvidence["status"]; local_blob: Blob } {
+  return { id: row.localId, inspection_id: row.inspectionId, room_id: row.roomId, item_id: row.itemId, file_name: row.fileName, mime_type: row.mimeType, file_size: row.sizeBytes, width: null, height: null, caption: row.caption, position: row.position, created_at: row.createdAt, signed_url: typeof URL !== "undefined" && URL.createObjectURL ? URL.createObjectURL(row.blob) : null, offline_pending: true, offline_status: row.status, local_blob: row.blob };
+}
 
 async function offlineSnapshot(id: string) {
   return readInspectionSnapshot(id);
@@ -144,14 +182,42 @@ export async function deleteMysqlItem(inspectionId: string, roomId: string, item
 }
 
 export async function listMysqlInspectionEvidence(inspectionId: string) {
-  return apiRequest<{ evidence: MysqlInspectionEvidence[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { token: mysqlToken() });
+  try {
+    return await apiRequest<{ evidence: MysqlInspectionEvidence[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { token: mysqlToken() });
+  } catch (error) {
+    if (!isOfflineError(error)) throw error;
+    return { evidence: [] as MysqlInspectionEvidence[], offline: true };
+  }
 }
 
-export async function uploadMysqlInspectionEvidence(inspectionId: string, input: { id?: string; room_id?: string | null; item_id?: string | null; file: File; caption?: string | null; position?: number }) {
-  if (isOfflineRuntime()) throw Object.assign(new Error("Upload de evidência exige conexão."), { code: "OFFLINE_EVIDENCE_UNSUPPORTED" });
-  const contentBase64 = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error ?? new Error("Não foi possível ler o arquivo.")); reader.readAsDataURL(input.file); });
+export async function uploadMysqlInspectionEvidence(inspectionId: string, input: { id?: string; room_id?: string | null; item_id?: string | null; file: File; caption?: string | null; position?: number }, options: { offline?: boolean } = {}) {
+  await validateInspectionEvidenceFile(input.file);
   const id = input.id ?? crypto.randomUUID();
-  return apiRequest<{ evidence: MysqlInspectionEvidence; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify({ id, room_id: input.room_id ?? null, item_id: input.item_id ?? null, file_name: input.file.name, mime_type: input.file.type, size_bytes: input.file.size, content_base64: contentBase64, caption: input.caption ?? null, position: input.position ?? 0 }), token: mysqlToken() });
+  const scope = getInspectionOfflineScope();
+  const queue = async (status: "pending" | "failed" = "pending", lastError?: string) => {
+    if (!scope) {
+      throw Object.assign(new Error("Sessão indisponível para persistência offline."), {
+        code: "OFFLINE_SCOPE_UNAVAILABLE",
+        status: 401,
+      });
+    }
+    const row = await queueOfflineInspectionEvidence({ localId: id, companyId: scope?.companyId ?? "", userId: scope?.userId ?? "", inspectionId, roomId: input.room_id ?? null, itemId: input.item_id ?? null, fileName: input.file.name, mimeType: input.file.type, sizeBytes: input.file.size, blob: input.file.slice(0, input.file.size, input.file.type), caption: input.caption ?? null, position: input.position ?? 0 });
+    if (status === "failed") {
+      const failed = await updateOfflineInspectionEvidence(id, { status, lastError });
+      return { evidence: offlineEvidenceView(failed ?? row), offline: true as const };
+    }
+    return { evidence: offlineEvidenceView(row), offline: true as const };
+  };
+  if (options.offline !== false && isOfflineRuntime()) return queue();
+  try {
+    const contentBase64 = await blobToDataUrl(input.file);
+    return await apiRequest<{ evidence: MysqlInspectionEvidence; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify({ id, room_id: input.room_id ?? null, item_id: input.item_id ?? null, file_name: input.file.name, mime_type: input.file.type, size_bytes: input.file.size, content_base64: contentBase64, caption: input.caption ?? null, position: input.position ?? 0 }), token: mysqlToken() });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status === 422) return queue("failed", error instanceof Error ? error.message : "Arquivo rejeitado pelo servidor.");
+    if (options.offline === false || (!isOfflineError(error) && !(status && status >= 500))) throw error;
+    return queue();
+  }
 }
 
 export async function patchMysqlInspectionEvidence(inspectionId: string, evidenceId: string, input: { expected_version: number; caption?: string | null; position?: number }) {
@@ -198,6 +264,27 @@ export async function syncMysqlInspectionOfflineQueue(inspectionId?: string) {
     return (await getMysqlInspection(mutation.inspectionId)).inspection;
   };
   return syncInspectionOfflineQueue(sender, inspectionId);
+}
+
+export async function syncMysqlInspectionOfflineEvidenceQueue(inspectionId?: string) {
+  const sender = async (row: OfflineInspectionEvidence) => {
+    const file = typeof File !== "undefined" ? new File([row.blob], row.fileName, { type: row.mimeType }) : Object.assign(row.blob, { name: row.fileName }) as File;
+    const result = await uploadMysqlInspectionEvidence(row.inspectionId, { id: row.localId, room_id: row.roomId, item_id: row.itemId, file, caption: row.caption, position: row.position }, { offline: false });
+    return { remoteEvidenceId: result.evidence.id };
+  };
+  return syncOfflineInspectionEvidenceQueue(sender, inspectionId);
+}
+
+export async function listMysqlOfflineInspectionEvidence(inspectionId: string) {
+  return (await listOfflineInspectionEvidence(inspectionId)).filter((row) => row.status !== "synced").map(offlineEvidenceView);
+}
+
+export async function removeMysqlOfflineInspectionEvidence(localId: string) {
+  await removeOfflineInspectionEvidence(localId);
+}
+
+export async function updateMysqlOfflineInspectionEvidence(localId: string, update: { position?: number; caption?: string | null }) {
+  return updateOfflineInspectionEvidence(localId, update);
 }
 
 const previewInspectionsKey = "imobiflow.preview.inspections";
