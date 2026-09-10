@@ -322,7 +322,11 @@ realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: Re
 
 realEstateRouter.post("/owners", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
-    const owner = await createMysqlOwner(req.access!.company.id, req.access!.appUser.id, ownerSchema.parse(req.body));
+    const companyId = req.access!.company.id;
+    const owner = await createMysqlOwner(companyId, req.access!.appUser.id, ownerSchema.parse(req.body));
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "owner.created", "property_owner", owner.id, {
+      owner_type: owner.owner_type,
+    });
     res.status(201).json({ owner });
   } catch (error) {
     next(error);
@@ -331,7 +335,12 @@ realEstateRouter.post("/owners", requirePermission("owners.manage"), async (req:
 
 realEstateRouter.patch("/owners/:id", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
-    const owner = await updateMysqlOwner(req.access!.company.id, String(req.params.id), ownerUpdateSchema.parse(req.body));
+    const companyId = req.access!.company.id;
+    const input = ownerUpdateSchema.parse(req.body);
+    const owner = await updateMysqlOwner(companyId, String(req.params.id), input);
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "owner.updated", "property_owner", owner.id, {
+      updated_fields: Object.keys(input),
+    });
     res.json({ owner });
   } catch (error) {
     next(error);
@@ -340,7 +349,9 @@ realEstateRouter.patch("/owners/:id", requirePermission("owners.manage"), async 
 
 realEstateRouter.delete("/owners/:id", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
-    const owner = await archiveMysqlOwner(req.access!.company.id, String(req.params.id));
+    const companyId = req.access!.company.id;
+    const owner = await archiveMysqlOwner(companyId, String(req.params.id));
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "owner.archived", "property_owner", owner.id, {});
     res.json({ owner });
   } catch (error) {
     next(error);
@@ -594,13 +605,19 @@ realEstateRouter.get("/properties/:id", requirePermission("properties.view"), cr
 realEstateRouter.post("/properties", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = propertySchema.parse(req.body);
+    const companyId = req.access!.company.id;
     const property = await createMysqlProperty(
-      req.access!.company.id,
+      companyId,
       req.access!.appUser.id,
       resolveScope(req.access!, "properties.manage") === "company"
         ? input
         : { ...input, responsible_user_id: req.access!.appUser.id },
     );
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "property.created", "property", property.id, {
+      status: property.status,
+      property_type: property.property_type,
+      operation: property.operation,
+    });
     res.status(201).json({ property });
   } catch (error) {
     next(error);
@@ -610,11 +627,16 @@ realEstateRouter.post("/properties", requirePermission("properties.manage"), asy
 realEstateRouter.patch("/properties/:id", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
+    const companyId = req.access!.company.id;
+    const input = propertyUpdateSchema.parse(req.body);
     const property = await updateMysqlProperty(
-      req.access!.company.id,
+      companyId,
       String(req.params.id),
-      propertyUpdateSchema.parse(req.body),
+      input,
     );
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "property.updated", "property", property.id, {
+      updated_fields: Object.keys(input),
+    });
     res.json({ property });
   } catch (error) {
     next(error);
@@ -624,7 +646,9 @@ realEstateRouter.patch("/properties/:id", requirePermission("properties.manage")
 realEstateRouter.delete("/properties/:id", requirePermission("properties.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     await assertPropertyAccess(req.access!, String(req.params.id), "properties.manage", "EDIT");
-    const property = await archiveMysqlProperty(req.access!.company.id, String(req.params.id));
+    const companyId = req.access!.company.id;
+    const property = await archiveMysqlProperty(companyId, String(req.params.id));
+    await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "property.archived", "property", property.id, {});
     res.json({ property });
   } catch (error) {
     next(error);
