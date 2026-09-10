@@ -118,7 +118,21 @@ export type BuyerPortalAggregate = {
     property_reference: string | null;
     properties: PortalProperty[];
   }>;
-  proposals: { available: boolean; reason?: string };
+  proposals: {
+    available: boolean;
+    items: Array<{
+      id: string;
+      property: PortalProperty | null;
+      amount: string;
+      currency: string;
+      status: string;
+      terms_public: string | null;
+      expires_at: string | null;
+      version: number;
+      created_at: string | null;
+      updated_at: string | null;
+    }>;
+  };
   appointments: Array<{
     id: string;
     property: PortalProperty | null;
@@ -200,6 +214,12 @@ export function portalStatusLabel(status: string) {
     confirmed: "Confirmado",
     completed: "Concluído",
     cancelled_by_user: "Cancelado",
+    submitted: "Enviada",
+    under_review: "Em análise",
+    accepted: "Aceita",
+    rejected: "Recusada",
+    withdrawn: "Retirada",
+    expired: "Expirada",
   };
   return labels[status] ?? status.replaceAll("_", " ");
 }

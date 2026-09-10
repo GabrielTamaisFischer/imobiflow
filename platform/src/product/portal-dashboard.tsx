@@ -614,10 +614,39 @@ function BuyerPanel({ aggregate }: { aggregate: BuyerPortalAggregate }) {
           ) : (
             <EmptyState message="Nenhuma visita agendada." />
           )}
-          <div className="border-t border-border pt-3 text-sm text-muted-foreground">
-            {aggregate.proposals.available
-              ? "Propostas disponíveis no contexto autorizado."
-              : "Propostas estruturadas ainda não disponíveis nesta versão."}
+          <div className="border-t border-border pt-3">
+            <h3 className="text-sm font-semibold">Propostas</h3>
+            {aggregate.proposals.items.length ? (
+              <div className="mt-3 space-y-2">
+                {aggregate.proposals.items.map((proposal) => (
+                  <article
+                    key={proposal.id}
+                    className="rounded-lg border border-border p-3"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <strong>{proposal.property?.title ?? "Imóvel"}</strong>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {formatMoney(proposal.amount, proposal.currency)}{" "}
+                          · {formatDate(proposal.created_at)}
+                        </p>
+                      </div>
+                      <StatusBadge status={proposal.status} />
+                    </div>
+                    {proposal.expires_at ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Validade: {formatDate(proposal.expires_at)}
+                      </p>
+                    ) : null}
+                    {proposal.terms_public ? (
+                      <p className="mt-2 text-sm text-muted-foreground">{proposal.terms_public}</p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <EmptyState message="Nenhuma proposta disponível para este portal." />
+            )}
           </div>
         </div>
       </Panel>

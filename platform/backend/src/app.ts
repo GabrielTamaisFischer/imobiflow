@@ -29,6 +29,7 @@ import { publicSitesRouter } from "./routes/public-sites.js";
 import { realEstateRouter } from "./routes/real-estate.js";
 import { mysqlPortalRouter } from "./routes/portal-mysql.js";
 import { mysqlFinanceRouter } from "./routes/finance-mysql.js";
+import { mysqlProposalsRouter } from "./routes/proposals-mysql.js";
 import { rentalsRouter } from "./routes/rentals.js";
 import { sitesRouter } from "./routes/sites.js";
 import { testLabRouter } from "./routes/test-lab.js";
@@ -138,6 +139,7 @@ export function createApp() {
   // F9A: canonical Prisma/MySQL operational finance. The legacy `/finance`
   // router remains isolated for compatibility and is not the source of truth.
   app.use("/real-estate/finance", mysqlFinanceRouter);
+  app.use("/real-estate/proposals", mysqlProposalsRouter);
   app.use("/real-estate", realEstateRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);

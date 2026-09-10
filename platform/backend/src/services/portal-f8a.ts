@@ -22,6 +22,21 @@ function publicProperty(property: any) {
   return { id: property.id, code: property.code, title: property.title, city: property.city ?? null, state: property.state ?? null };
 }
 
+function publicProposal(row: any) {
+  return {
+    id: row.id,
+    property: publicProperty(row.property),
+    amount: String(row.amount),
+    currency: row.currency,
+    status: row.status,
+    terms_public: row.termsPublic ?? null,
+    expires_at: iso(row.expiresAt),
+    version: row.version,
+    created_at: iso(row.createdAt),
+    updated_at: iso(row.updatedAt),
+  };
+}
+
 export function portalDocumentDto(file: any, contractId: string, versionId: string | null = null, partyType: PortalPartyType = "tenant") {
   return {
     id: file.id,
@@ -168,13 +183,14 @@ export async function loadBuyerPortal(db: PortalDb, party: { id: string; company
   const leads = leadIds.length ? await db.lead.findMany({ where: { companyId, id: { in: leadIds }, status: { not: "lost" } }, select: { id: true, name: true, email: true, status: true, propertyReference: true, stage: { select: { id: true, name: true, position: true } }, siteLeads: { where: { companyId }, select: { property: { select: { id: true, code: true, title: true, city: true, state: true } } } } }, orderBy: { updatedAt: "desc" } }) : [];
   const appointmentLeadIds = leads.map((lead: any) => lead.id);
   const appointments = appointmentLeadIds.length ? await db.appointment.findMany({ where: { companyId, leadId: { in: appointmentLeadIds } }, select: { id: true, leadId: true, property: { select: { id: true, code: true, title: true, city: true, state: true } }, startsAt: true, endsAt: true, status: true, appointmentType: true, assignee: { select: { name: true } } }, orderBy: { startsAt: "asc" } }) : [];
+  const proposals = leadIds.length ? await db.proposal.findMany({ where: { companyId, leadId: { in: leadIds } }, select: { id: true, property: { select: { id: true, code: true, title: true, city: true, state: true } }, amount: true, currency: true, status: true, termsPublic: true, expiresAt: true, version: true, createdAt: true, updatedAt: true }, orderBy: { updatedAt: "desc" } }) : [];
   const documents = await loadArtifacts(db, companyId, contracts);
   return {
     portal: "buyer",
     identity: { name: party.name, email: party.email, party_type: "buyer" },
     properties: propertyList(contracts).concat(leads.flatMap((lead: any) => (lead.siteLeads ?? []).map((siteLead: any) => publicProperty(siteLead.property)).filter(Boolean))),
     commercial: leads.map((lead: any) => ({ id: lead.id, name: lead.name, status: lead.status, stage: lead.stage ? { id: lead.stage.id, name: lead.stage.name, position: lead.stage.position } : null, property_reference: lead.propertyReference ?? null, properties: (lead.siteLeads ?? []).map((siteLead: any) => publicProperty(siteLead.property)).filter(Boolean) })),
-    proposals: { available: false, reason: "proposal_domain_futuro" },
+    proposals: { available: proposals.length > 0, items: proposals.map(publicProposal) },
     appointments: appointments.map((appointment: any) => ({ id: appointment.id, lead_id: appointment.leadId, property: publicProperty(appointment.property), starts_at: iso(appointment.startsAt), ends_at: iso(appointment.endsAt), status: appointment.status, type: appointment.appointmentType, broker_name: appointment.assignee?.name ?? null })),
     contracts: contracts.map((row: any) => contractDto(row, "buyer", partyIds, documents)),
     actions: { sign_contract: contracts.some((row: any) => row.parties.some((party: any) => partyIds.has(party.id) && party.partyType === "buyer" && party.signatureRequired && party.signatureStatus !== "signed")), download_document: documents.length > 0 },

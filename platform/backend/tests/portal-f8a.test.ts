@@ -64,6 +64,7 @@ describe("F8A — portais externos tenant/buyer", () => {
       contract: { findMany: async (args: any) => { calls.push(["contract", args]); return [contract]; } },
       lead: { findMany: async (args: any) => { calls.push(["lead", args]); return [{ id: "lead-a", name: "Buyer A", email: buyer.email, status: "open", propertyReference: null, stage: { id: "stage-a", name: "Novo", position: 0 }, siteLeads: [] }]; } },
       appointment: { findMany: async (args: any) => { calls.push(["appointment", args]); return []; } },
+      proposal: { findMany: async (args: any) => { calls.push(["proposal", args]); return []; } },
       storedFile: { findMany: async () => [] },
       inspection: { findMany: async () => [] },
     };
@@ -72,6 +73,25 @@ describe("F8A — portais externos tenant/buyer", () => {
     expect(calls[1][1].where).toMatchObject({ companyId: "company-a", id: { in: ["lead-a"] } });
     expect(result?.commercial[0].id).toBe("lead-a");
     expect(result?.contracts[0].party.map((party: any) => party.id)).toEqual([buyer.id]);
+  });
+
+  it("buyer recebe apenas campos públicos de propostas ligadas ao próprio lead", async () => {
+    const db = {
+      contract: { findMany: async () => [contract] },
+      lead: { findMany: async () => [{ id: "lead-a", name: "Buyer A", email: buyer.email, status: "open", propertyReference: null, stage: { id: "stage-a", name: "Novo", position: 0 }, siteLeads: [] }] },
+      appointment: { findMany: async () => [] },
+      proposal: { findMany: async () => [{
+        id: "proposal-a", companyId: "company-a", leadId: "lead-a", amount: "250000.00", currency: "BRL", status: "submitted",
+        termsPublic: "Entrada em 30 dias", expiresAt: null, version: 1, createdAt: new Date("2026-09-14T00:00:00Z"), updatedAt: new Date("2026-09-14T00:00:00Z"),
+        property: { id: "property-a", code: "QA-A", title: "Imóvel A", city: "São Paulo", state: "SP" }, internalNotes: "não deve vazar",
+      }] },
+      storedFile: { findMany: async () => [] },
+      inspection: { findMany: async () => [] },
+    };
+    const result = await loadBuyerPortal(db, buyer);
+    expect(result?.proposals.available).toBe(true);
+    expect(result?.proposals.items[0]).toMatchObject({ id: "proposal-a", amount: "250000.00", terms_public: "Entrada em 30 dias" });
+    expect(result?.proposals.items[0]).not.toHaveProperty("internal_notes");
   });
 
   it("buyer sem contrato não recebe agregado", async () => {

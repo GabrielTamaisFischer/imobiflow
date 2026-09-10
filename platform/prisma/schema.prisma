@@ -56,6 +56,8 @@ model Company {
   financialEntries FinancialEntry[]
   financialPayments FinancialPayment[]
   financialEvents FinancialEntryEvent[]
+  proposals       Proposal[]
+  proposalEvents  ProposalEvent[]
 
   @@index([status])
   @@map("companies")
@@ -107,6 +109,8 @@ model AppUser {
   financialEntriesCreated FinancialEntry[] @relation("FinancialEntryCreator")
   financialPaymentsCreated FinancialPayment[] @relation("FinancialPaymentCreator")
   financialEventsActor FinancialEntryEvent[] @relation("FinancialEntryEventActor")
+  createdProposals    Proposal[] @relation("ProposalCreator")
+  proposalEvents      ProposalEvent[]
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -451,6 +455,7 @@ model Property {
   inspections             Inspection[]
   contracts               Contract[]
   financialEntries        FinancialEntry[]
+  proposals               Proposal[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -685,6 +690,49 @@ model IdempotencyKey {
   @@map("idempotency_keys")
 }
 
+model Proposal {
+  id             String         @id @default(uuid()) @db.Char(36)
+  companyId      String         @map("company_id") @db.Char(36)
+  propertyId     String         @map("property_id") @db.Char(36)
+  leadId         String         @map("lead_id") @db.Char(36)
+  createdBy      String?        @map("created_by") @db.Char(36)
+  amount         Decimal        @db.Decimal(15, 2)
+  currency       String         @default("BRL") @db.VarChar(3)
+  status         String         @default("draft") @db.VarChar(30)
+  termsPublic    String?        @map("terms_public") @db.Text
+  internalNotes  String?        @map("internal_notes") @db.Text
+  expiresAt      DateTime?      @map("expires_at")
+  version        Int            @default(1)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+  company        Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  property       Property       @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Restrict)
+  creator        AppUser?       @relation("ProposalCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  events         ProposalEvent[]
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, propertyId, status])
+  @@index([companyId, leadId, status])
+  @@map("proposals_mysql")
+}
+
+model ProposalEvent {
+  id           String   @id @default(uuid()) @db.Char(36)
+  companyId    String   @map("company_id") @db.Char(36)
+  proposalId   String   @map("proposal_id") @db.Char(36)
+  actorId      String?  @map("actor_id") @db.Char(36)
+  eventType    String   @map("event_type") @db.VarChar(80)
+  metadataJson Json?    @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  proposal     Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  actor        AppUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, proposalId, createdAt])
+  @@map("proposal_events_mysql")
+}
+
 model ImportJob {
   id                String      @id @default(uuid()) @db.Char(36)
   companyId         String      @map("company_id") @db.Char(36)
@@ -818,6 +866,7 @@ model Lead {
   accessGrants      LeadAccess[]
   contracts         Contract[]
   appointments      Appointment[]
+  proposals         Proposal[]
 
   @@index([companyId, source, createdAt])
   @@index([companyId, stageId, status, createdAt])

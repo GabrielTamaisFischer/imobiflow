@@ -124,10 +124,25 @@ describe("F8B portal UI contract", () => {
   it("15. contrato pode refletir assinatura concluída", () => {
     expect(contract({ signature: { pending: false, status: [] } }).signature.pending).toBe(false);
   });
-  it("16. proposta indisponível é estado explícito", () => {
-    const value = { available: false, reason: "proposal_domain_futuro" };
-    expect(value.available).toBe(false);
-    expect(value.reason).toBeTruthy();
+  it("16. propostas expõem somente o contexto comercial público", () => {
+    const value = {
+      available: true,
+      items: [{
+        id: "proposal-a",
+        property: { id: "p1", code: "QA-001", title: "Imóvel QA", city: "São Paulo", state: "SP" },
+        amount: "250000.00",
+        currency: "BRL",
+        status: "submitted",
+        terms_public: "Entrada em 30 dias",
+        expires_at: null,
+        version: 1,
+        created_at: "2026-09-14T00:00:00.000Z",
+        updated_at: "2026-09-14T00:00:00.000Z",
+      }],
+    };
+    expect(value.items[0].amount).toBe("250000.00");
+    expect(value.items[0]).not.toHaveProperty("internal_notes");
+    expect(value.items[0]).not.toHaveProperty("commission");
   });
   it("17. financeiro indisponível não inventa valores", () => {
     const value = { available: false, next_due_dates: [] };
