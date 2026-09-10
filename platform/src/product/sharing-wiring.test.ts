@@ -120,8 +120,9 @@ describe("Fase 2.2D — estados de carregamento, erro e acessibilidade do diálo
 
   it("hides grant/edit/revoke controls entirely when the viewer cannot manage sharing", async () => {
     const componentSource = await source("../components/app/resource-share-dialog.tsx");
-    expect(componentSource).toContain("{canManage ? (\n              <AddPersonSection");
-    expect(componentSource).toContain("{canManage ? (\n          <button\n            type=\"button\"\n            onClick={() => setIsEditing");
+    const normalizedSource = componentSource.replace(/\r\n/g, "\n");
+    expect(normalizedSource).toMatch(/\{canManage \? \(\s*<AddPersonSection/);
+    expect(normalizedSource).toMatch(/\{canManage \? \(\s*<button\s+type=\"button\"\s+onClick=\{\(\) => setIsEditing/);
   });
 
   it("never exposes raw permission values (VIEW/EDIT/...) as visible text, only permissionLabels", async () => {

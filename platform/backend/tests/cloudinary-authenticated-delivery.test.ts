@@ -119,16 +119,30 @@ describe("[F4E fast-follow] delivery access para owner_document no Cloudinary", 
     expect(receivedOptions.type).toBeUndefined();
   });
 
-  it("#3 documentos de proprietário e artefatos privados de vistoria exigem delivery authenticated", () => {
-    const privateInspectionPurposes = new Set([
-      "owner_document",
-      "inspection_evidence",
-      "inspection_report",
-      "inspection_comparison",
-    ]);
+  it("#3 purposes privados exigem delivery authenticated e os públicos permanecem public", () => {
+    const expectedDelivery: Record<
+      (typeof STORED_FILE_PURPOSES)[number],
+      "public" | "authenticated"
+    > = {
+      property_media: "public",
+      contract_document: "authenticated",
+      signed_contract: "authenticated",
+      inspection_evidence: "authenticated",
+      inspection_report: "authenticated",
+      inspection_comparison: "authenticated",
+      owner_document: "authenticated",
+      tenant_document: "public",
+      buyer_document: "public",
+      financial_document: "public",
+      signature_evidence: "authenticated",
+      inspection_signature: "authenticated",
+      contract_attachment: "authenticated",
+      contract_signature: "authenticated",
+      company_logo: "public",
+    };
+
     for (const purpose of STORED_FILE_PURPOSES) {
-      const expected = privateInspectionPurposes.has(purpose) ? "authenticated" : "public";
-      expect(deliveryAccessForPurpose(purpose)).toBe(expected);
+      expect(deliveryAccessForPurpose(purpose)).toBe(expectedDelivery[purpose]);
     }
   });
 
