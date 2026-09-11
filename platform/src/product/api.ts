@@ -25,6 +25,7 @@ export const API_SETUP_MESSAGE =
 export type ApiError = {
   error: string;
   message: string;
+  field_errors?: Record<string, string>;
   subscription?: {
     status?: string;
   };

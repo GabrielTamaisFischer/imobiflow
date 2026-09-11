@@ -101,6 +101,55 @@ export function resolveSubmitIntent(
   return pendingIntent ?? "save";
 }
 
+type PropertyValidationDetails = {
+  field: string | null;
+  message: string;
+  step: number;
+};
+
+const propertyValidationFieldMap: Record<string, { field: string; step: number }> = {
+  owner_id: { field: "owner_search", step: 0 },
+  document: { field: "owner_document", step: 0 },
+  owner_type: { field: "owner_owner_type", step: 0 },
+  name: { field: "owner_name", step: 0 },
+  email: { field: "owner_email", step: 0 },
+  phone: { field: "owner_phone", step: 0 },
+  state: { field: "property_state", step: 1 },
+  zip_code: { field: "property_zip_code", step: 1 },
+  property_type: { field: "property_type", step: 3 },
+  operation: { field: "operation", step: 3 },
+  bedrooms: { field: "bedrooms", step: 3 },
+  suites: { field: "suites", step: 3 },
+  sale_price_cents: { field: "sale_price", step: 5 },
+  rent_price_cents: { field: "rent_price", step: 5 },
+  description: { field: "description", step: 8 },
+};
+
+export function getPropertyValidationDetails(error: unknown, ownerRequest = false): PropertyValidationDetails {
+  const payload = (error as { payload?: { field_errors?: Record<string, string> } } | null)?.payload;
+  const first = Object.entries(payload?.field_errors ?? {})[0];
+  if (!first) {
+    return { field: null, message: error instanceof Error ? error.message : "Não foi possível salvar o imóvel.", step: 0 };
+  }
+
+  const [path, message] = first;
+  const mapped = propertyValidationFieldMap[path] ?? { field: path, step: 0 };
+  return {
+    field: ownerRequest ? `owner_${path}` : mapped.field,
+    message,
+    step: ownerRequest ? 0 : mapped.step,
+  };
+}
+
+function focusPropertyValidationField(field: string | null) {
+  if (!field || typeof document === "undefined") return;
+  const element = document.querySelector(`[name="${field}"]`) as HTMLElement | null;
+  if (!element) return;
+  element.focus();
+  element.classList.add("ring-2", "ring-destructive");
+  window.setTimeout(() => element.classList.remove("ring-2", "ring-destructive"), 3000);
+}
+
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
   // AJUSTE-FUNCIONAL-03 (2026-09-11): permite abrir o dossiê (somente
@@ -831,7 +880,16 @@ export function PropertyWizard({
 
       if (canCreateOwner && !ownerId && text(form, "owner_name")) {
         const ownerInput = ownerInputFromForm(form, "owner_");
-        const ownerResponse = await createOwner(ownerInput);
+        let ownerResponse: Awaited<ReturnType<typeof createOwner>>;
+        try {
+          ownerResponse = await createOwner(ownerInput);
+        } catch (ownerError) {
+          const details = getPropertyValidationDetails(ownerError, true);
+          setStepIndex(details.step);
+          setError(details.message);
+          focusPropertyValidationField(details.field);
+          return;
+        }
         ownerId = ownerResponse.owner.id;
         createdOwner = ownerResponse.owner;
       }
@@ -926,7 +984,10 @@ export function PropertyWizard({
       setVideoFiles([]);
       setTourFiles([]);
     } catch (propertyError) {
-      setError(propertyError instanceof Error ? propertyError.message : "Não foi possível salvar.");
+      const details = getPropertyValidationDetails(propertyError);
+      setStepIndex(details.step);
+      setError(details.message);
+      focusPropertyValidationField(details.field);
     } finally {
       setIsSaving(false);
     }

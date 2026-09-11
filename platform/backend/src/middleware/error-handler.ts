@@ -28,6 +28,12 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
           ? error.statusCode
           : 500;
 
+  const fieldErrors = isValidationError
+    ? Object.fromEntries(
+        error.issues.map((issue) => [issue.path.join(".") || "_form", issue.message]),
+      )
+    : undefined;
+
   if (status === 500) {
     console.error({ name: error?.name, code: error?.code, message: error?.message });
   }
@@ -53,5 +59,6 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
             : isPayloadTooLarge
               ? "Arquivo muito grande para upload direto (limite pratico de ~10MB). Use um video menor ou informe um link externo (YouTube, Vimeo etc.) no campo de video."
               : (error.message ?? "Solicitacao invalida."),
+    ...(fieldErrors && Object.keys(fieldErrors).length > 0 ? { field_errors: fieldErrors } : {}),
   });
 };

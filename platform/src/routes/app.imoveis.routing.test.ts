@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parsePropertiesSearch, resolveSubmitIntent } from "./app.imoveis";
+import { getPropertyValidationDetails, parsePropertiesSearch, resolveSubmitIntent } from "./app.imoveis";
 
 const propertyRouteSource = readFileSync(new URL("./app.imoveis.tsx", import.meta.url), "utf8");
 
@@ -82,5 +82,32 @@ describe("PropertyWizard — ações explícitas e mídia do imóvel", () => {
     expect(propertyRouteSource).toContain("reorderPropertyMedia(property.id");
     expect(propertyRouteSource).toContain("setPropertyMediaCover(property.id, mediaId)");
     expect(propertyRouteSource).toContain("<PropertyMediaUpload");
+  });
+
+  it("mapeia erro de proprietário para o campo e etapa corretos", () => {
+    const details = getPropertyValidationDetails(
+      Object.assign(new Error("Dados invalidos."), {
+        payload: { field_errors: { document: "CPF/CNPJ inválido para o tipo de pessoa." } },
+      }),
+      true,
+    );
+    expect(details).toEqual({
+      field: "owner_document",
+      message: "CPF/CNPJ inválido para o tipo de pessoa.",
+      step: 0,
+    });
+  });
+
+  it("mapeia erro de imóvel para a primeira etapa do campo rejeitado", () => {
+    const details = getPropertyValidationDetails(
+      Object.assign(new Error("Dados invalidos."), {
+        payload: { field_errors: { suites: "Suítes não podem exceder dormitórios." } },
+      }),
+    );
+    expect(details).toEqual({
+      field: "suites",
+      message: "Suítes não podem exceder dormitórios.",
+      step: 3,
+    });
   });
 });
