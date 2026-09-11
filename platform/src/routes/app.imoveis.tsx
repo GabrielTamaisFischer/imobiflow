@@ -1895,38 +1895,194 @@ function PropertyReportModal({
     window.setTimeout(() => popup.print(), 500);
   }
 
+  // AJUSTE-FUNCIONAL-03 (2026-09-11): o dossiê renderizava um único bloco de
+  // texto plano (`report`, de buildPropertyReport) dentro de um <pre> —
+  // exatamente o "parece que colei num bloco de notas" reportado pelo
+  // usuário. `report`/buildPropertyReport continuam existindo só para os
+  // botões Baixar/Compartilhar/PDF (onde texto plano faz sentido); a tela em
+  // si agora é montada campo a campo, 13 seções organizadas, somente
+  // leitura (nenhum input/select/upload/delete/reorder aqui — toda edição
+  // acontece exclusivamente pelo wizard via "Editar anúncio").
+  const capture = (property.capture_json ?? {}) as Record<string, unknown>;
+  const primary = (property.primary_details_json ?? {}) as Record<string, unknown>;
+  const measurements = (property.measurements_json ?? {}) as Record<string, unknown>;
+  const commercial = (property.commercial_terms_json ?? {}) as Record<string, unknown>;
+  const commercialRule = commercial.rule as Record<string, unknown> | undefined;
+  const publication = (property.publication_settings_json ?? {}) as Record<string, unknown>;
+  const location = [property.street, property.number, property.complement, property.neighborhood, property.city, property.state]
+    .filter(Boolean)
+    .join(", ");
+  const amenityEntries = Object.entries(property.amenity_groups_json ?? {}).filter(
+    ([, values]) => Array.isArray(values) && values.length,
+  ) as Array<[string, string[]]>;
+  const complementaryEntries = [
+    ...Object.entries(capture),
+    ...Object.entries(primary),
+    ...Object.entries(measurements),
+  ].filter(([, value]) => value !== null && value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0));
+  // Mídias: só o que já é seguro para o usuário final ver na página pública
+  // (url http(s) real, media_type, caption) — nunca storage_path/publicId/
+  // provider/UUID técnico, que nunca chegam a este componente porque a API
+  // de imóveis já não os devolve.
+  const photos = (property.property_media ?? []).filter((media) => media.media_type === "photo");
+  const tours = (property.property_media ?? []).filter((media) => media.media_type === "tour");
+  const videosMedia = (property.property_media ?? []).filter((media) => media.media_type === "video");
+  const youtubeLinks = (property.videos_json ?? []).map((item) => String(item.url ?? "")).filter(Boolean);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-medium uppercase text-muted-foreground">Visualização completa do imóvel</p>
+            <p className="text-xs font-medium uppercase text-muted-foreground">Visualização completa do imóvel (somente leitura)</p>
             <h2 className="text-lg font-semibold">{property.title}</h2>
           </div>
           <button type="button" onClick={onClose} className="rounded-md border border-border px-3 py-1 text-sm">
             Fechar
           </button>
         </div>
-        <pre className="whitespace-pre-wrap rounded-md bg-muted p-4 text-sm leading-relaxed text-foreground">{report}</pre>
-        <div className="mt-4">
-          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Mídias do imóvel</p>
-          {property.property_media?.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {property.property_media.map((media) => (
-                media.media_type === "video" ? (
-                  <video key={media.id} src={media.url} controls className="h-44 w-full rounded-md bg-black object-cover" />
-                ) : (
-                  <img key={media.id} src={media.url} alt={media.caption ?? property.title} className="h-44 w-full rounded-md object-cover" />
-                )
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-md border border-dashed border-border bg-muted p-4 text-sm text-muted-foreground">
-              Nenhuma imagem ou vídeo vinculado a este imóvel ainda.
-            </div>
-          )}
+
+        <div className="space-y-4">
+          <DossierSection title="1. Identificação">
+            <DossierField label="Código" value={property.code} />
+            <DossierField label="Título" value={property.title} />
+            <DossierField label="Tipo" value={propertyTypeOptions.find(([value]) => value === property.property_type)?.[1] ?? property.property_type} />
+            <DossierField label="Finalidade" value={operationOptions.find(([value]) => value === property.operation)?.[1] ?? property.operation} />
+          </DossierSection>
+
+          <DossierSection title="2. Situação e publicação">
+            <DossierField label="Status" value={statusLabels[property.status]} />
+            <DossierField label="Publicado" value={property.published_at ? `Sim, desde ${new Date(property.published_at).toLocaleDateString("pt-BR")}` : "Não"} />
+            <DossierField label="Destaque no site" value={publication.site_featured ? "Sim" : "Não"} />
+          </DossierSection>
+
+          <DossierSection title="3. Dados comerciais">
+            <DossierField label="Regra comercial" value={formatCommercialRule(commercialRule)} />
+            <DossierField label="Aceita permuta" value={primary.accepts_exchange === "yes" ? "Sim" : "Não"} />
+            <DossierField label="Aceita financiamento" value={primary.accepts_financing === "yes" ? "Sim" : "Não"} />
+          </DossierSection>
+
+          <DossierSection title="4. Endereço completo">
+            <DossierField label="Endereço" value={location} span />
+            <DossierField label="CEP" value={property.zip_code} />
+            <DossierField label="Condomínio" value={property.condominium_name} />
+            <DossierField label="Vias próximas" value={property.nearby_highways?.length ? property.nearby_highways.join(", ") : null} span />
+          </DossierSection>
+
+          <DossierSection title="5. Valores">
+            <DossierField label="Venda" value={formatCurrency(property.sale_price_cents)} />
+            <DossierField label="Locação" value={formatCurrency(property.rent_price_cents)} />
+            <DossierField label="Condomínio" value={formatCurrency(property.condominium_fee_cents)} />
+            <DossierField label="IPTU" value={formatCurrency(property.iptu_cents)} />
+            <DossierField label="Temporada" value={formatCurrency(Number(commercial.season_price_cents ?? 0) || null)} />
+          </DossierSection>
+
+          <DossierSection title="6. Características">
+            <DossierField label="Dormitórios" value={property.bedrooms} />
+            <DossierField label="Suítes" value={property.suites} />
+            <DossierField label="Banheiros" value={property.bathrooms} />
+            <DossierField label="Vagas" value={property.parking_spaces} />
+            <DossierField label="Área útil" value={property.private_area ? `${property.private_area} m²` : null} />
+            <DossierField label="Área total" value={property.total_area ? `${property.total_area} m²` : null} />
+          </DossierSection>
+
+          <DossierSection title="7. Amenidades">
+            {amenityEntries.length ? (
+              <div className="md:col-span-2 xl:col-span-3 space-y-2">
+                {amenityEntries.map(([group, values]) => (
+                  <p key={group} className="text-sm"><span className="font-medium">{humanizeKey(group)}:</span> {values.join(", ")}</p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground md:col-span-2 xl:col-span-3">Nenhuma amenidade marcada.</p>
+            )}
+          </DossierSection>
+
+          <DossierSection title="8. Descrição">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed md:col-span-2 xl:col-span-3">{property.description || "Sem descrição cadastrada."}</p>
+          </DossierSection>
+
+          <DossierSection title="9. Proprietário">
+            <DossierField label="Nome" value={property.property_owners?.name} />
+            <DossierField label="Telefone" value={property.property_owners?.phone} />
+            <DossierField label="E-mail" value={property.property_owners?.email} />
+          </DossierSection>
+
+          <DossierSection title="10. Corretor/responsável">
+            <DossierField label="Responsável" value={property.responsible_user?.name ?? property.responsible_user_name} />
+          </DossierSection>
+
+          <DossierSection title="11. Informações complementares">
+            {complementaryEntries.length ? (
+              complementaryEntries.map(([key, value]) => (
+                <DossierField key={key} label={humanizeKey(key)} value={Array.isArray(value) ? value.join(", ") : String(value)} />
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground md:col-span-2 xl:col-span-3">Nenhuma informação complementar preenchida.</p>
+            )}
+          </DossierSection>
+
+          <DossierSection title="12. Liberações">
+            <DossierField label="Liberado no site" value={publication.site_enabled ? "Sim" : "Não"} />
+            <p className="text-xs text-muted-foreground md:col-span-2 xl:col-span-3">
+              ZAP, OLX, Viva Real, Facebook e Instagram ainda não têm publicação automática configurada nesta empresa.
+            </p>
+          </DossierSection>
+
+          <section>
+            <h3 className="mb-3 text-sm font-semibold uppercase text-muted-foreground">13. Mídias</h3>
+            {photos.length || tours.length || videosMedia.length || youtubeLinks.length ? (
+              <div className="space-y-4">
+                {photos.length ? (
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Fotos ({photos.length})</p>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {photos.map((media) => (
+                        <img key={media.id} src={media.url} alt={media.caption || property.title} className="h-44 w-full rounded-md object-cover" />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {tours.length ? (
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Tour 360 / panorama ({tours.length})</p>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {tours.map((media) => (
+                        <img key={media.id} src={media.url} alt={media.caption || "Tour 360"} className="h-44 w-full rounded-md object-cover" />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {videosMedia.length ? (
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Vídeos ({videosMedia.length})</p>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {videosMedia.map((media) => (
+                        <video key={media.id} src={media.url} controls className="h-44 w-full rounded-md bg-black object-cover" />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {youtubeLinks.length ? (
+                  <div>
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Links externos (YouTube/Vimeo/tour)</p>
+                    <div className="space-y-2">
+                      {youtubeLinks.map((url) => (
+                        <a key={url} href={url} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline">{url}</a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-border bg-muted p-4 text-sm text-muted-foreground">
+                Nenhuma imagem ou vídeo vinculado a este imóvel ainda.
+              </div>
+            )}
+          </section>
         </div>
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+
+        <div className="mt-6 flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:justify-end">
           <button type="button" onClick={generatePdf} className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-medium hover:bg-accent">
             <FileText className="h-4 w-4" />
             Gerar PDF
@@ -1941,6 +2097,24 @@ function PropertyReportModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DossierSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-3 text-sm font-semibold uppercase text-muted-foreground">{title}</h3>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{children}</div>
+    </section>
+  );
+}
+
+function DossierField({ label, value, span }: { label: string; value: string | number | null | undefined; span?: boolean }) {
+  return (
+    <div className={span ? "sm:col-span-2 xl:col-span-3" : undefined}>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-sm font-medium">{value === null || value === undefined || value === "" ? "Não informado" : value}</p>
     </div>
   );
 }

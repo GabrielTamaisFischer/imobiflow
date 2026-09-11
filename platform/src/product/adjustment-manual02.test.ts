@@ -105,4 +105,58 @@ describe("AJUSTE-FUNCIONAL-03 — gaps funcionais da Ficha do proprietário corr
     expect(dashboard).toContain('Novo agendamento');
     expect(dashboard).toContain('to="/app/agenda"');
   });
+
+  // AJUSTE-FUNCIONAL-03 (2026-09-11, continuação): a Visualização Completa
+  // (dossiê) renderizava um <pre>{report}</pre> — um único bloco de texto
+  // plano — exatamente o "parece que colei num bloco de notas" reportado
+  // pelo usuário. Reescrito como 13 seções organizadas, campo a campo,
+  // somente leitura (sem input/select/upload/delete/reorder), com mídias
+  // sempre por último e nunca expondo storage_path/publicId/provider.
+  it("substitui o dossiê em texto único por 13 seções organizadas, somente leitura", async () => {
+    const properties = await source("../routes/app.imoveis.tsx");
+    expect(properties).not.toContain('<pre className="whitespace-pre-wrap rounded-md bg-muted p-4 text-sm leading-relaxed text-foreground">{report}</pre>');
+    for (const section of [
+      "1. Identificação",
+      "2. Situação e publicação",
+      "3. Dados comerciais",
+      "4. Endereço completo",
+      "5. Valores",
+      "6. Características",
+      "7. Amenidades",
+      "8. Descrição",
+      "9. Proprietário",
+      "10. Corretor/responsável",
+      "11. Informações complementares",
+      "12. Liberações",
+      "13. Mídias",
+    ]) {
+      expect(properties).toContain(section);
+    }
+    // read-only real: nenhum controle de mutação de mídia dentro do
+    // DossierSection/PropertyReportModal — PropertyMediaManager/Upload só
+    // aparecem no PropertyWizard (mode edit), nunca aqui.
+    const dossierStart = properties.indexOf("function PropertyReportModal(");
+    const dossierEnd = properties.indexOf("function DossierField(");
+    const dossierBody = properties.slice(dossierStart, dossierEnd);
+    expect(dossierBody).not.toContain("PropertyMediaManager");
+    expect(dossierBody).not.toContain("PropertyMediaUpload");
+    expect(dossierBody).not.toContain("<input");
+    expect(dossierBody).not.toContain("<select");
+  });
+
+  it("mídias do dossiê nunca expõem storage_path/publicId/UUID técnico — só galeria real, com mídia sempre por último", async () => {
+    const properties = await source("../routes/app.imoveis.tsx");
+    const dossierStart = properties.indexOf("function PropertyReportModal(");
+    const dossierEnd = properties.indexOf("function DossierField(");
+    const dossierBody = properties.slice(dossierStart, dossierEnd);
+    // Regex específica em cima de acesso a propriedade (media.storage_path,
+    // media.publicId, media.public_id) — não uma busca genérica de string,
+    // que também bateria no próprio comentário explicando esta regra.
+    expect(dossierBody).not.toMatch(/media\.(storage_path|publicId|public_id)/i);
+    expect(dossierBody).toContain("13. Mídias");
+    // mídias precisa ser a última seção renderizada
+    const lastSectionIndex = dossierBody.lastIndexOf("<DossierSection");
+    const mediaSectionIndex = dossierBody.indexOf("13. Mídias");
+    expect(mediaSectionIndex).toBeGreaterThan(lastSectionIndex);
+  });
 });
