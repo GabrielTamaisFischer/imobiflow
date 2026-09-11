@@ -5,21 +5,53 @@ async function source(path: string) {
   return readFile(new URL(path, import.meta.url), "utf8");
 }
 
-describe("AJUSTE-MANUAL-01 — fluxo canônico de imóveis", () => {
-  it("mantém a edição no wizard completo e oferece as operações canônicas de mídia", async () => {
+describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
+  it("usa literalmente o mesmo PropertyWizard para criar e editar", async () => {
     const route = await source("../routes/app.imoveis.tsx");
-    expect(route).toContain("function EditPropertyDialog");
-    expect(route).toContain("10. Imagens e mídia do imóvel");
+    expect(route).toContain("function PropertyWizard({");
+    expect(route).toContain('mode: "create" | "edit"');
+    expect(route).toContain('mode="create"');
+    expect(route).toContain('mode="edit"');
+    expect(route).not.toContain("function EditPropertyDialog");
+    expect(route).toContain("populatePropertyWizardForm(formRef.current, property)");
+    expect(route).toContain("Mídias não alteradas são preservadas");
+    for (const step of [
+      "Proprietário",
+      "Localização",
+      "Captação",
+      "Dados primários",
+      "Metragens",
+      "Valores",
+      "Detalhes adicionais",
+      "Vídeo",
+      "Descrição",
+      "Imagens",
+      "Liberações",
+      "Revisão final",
+    ]) {
+      expect(route).toContain(`"${step}"`);
+    }
+  });
+
+  it("preserva campos existentes e integra a etapa única de mídia em create/edit", async () => {
+    const route = await source("../routes/app.imoveis.tsx");
+    expect(route).toContain("10. Imagens");
     expect(route).toContain("<PropertyMediaManager");
     expect(route).toContain("<PropertyMediaUpload");
     expect(route).toContain("onMediaChanged={setEditableMedia}");
-    expect(route).toContain("Mídias não alteradas são preservadas");
+    expect(route).toContain("property.features_json");
+    expect(route).toContain("features_json:");
+    expect(route).toContain("initialItems={isEdit && property");
+    expect(route).toContain("const [customItems, setCustomItems] = useState<string[]>(() => initialItems.filter");
+    expect(route).toContain('property?.description ?? ""');
+    expect(route).toContain("currentUserId={currentUser?.id}");
+    expect(route).toContain("canCreateOwner={canCreateOwner}");
   });
 
   it("mantém a ficha visual somente leitura e não expõe chaves internas de storage", async () => {
     const route = await source("../routes/app.imoveis.tsx");
     const reportStart = route.indexOf("function PropertyReportModal");
-    const reportEnd = route.indexOf("function EditPropertyDialog");
+    const reportEnd = route.indexOf("function populatePropertyWizardForm");
     const report = route.slice(reportStart, reportEnd);
     expect(report).not.toContain("<PropertyMediaManager");
     expect(report).not.toContain("<PropertyMediaUpload");

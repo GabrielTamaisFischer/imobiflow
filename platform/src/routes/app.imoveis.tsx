@@ -18,7 +18,7 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
-import { type FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
@@ -373,7 +373,8 @@ function PropertiesPage() {
       ) : null}
 
       {showForm ? (
-        <PropertyForm
+        <PropertyWizard
+          mode="create"
           owners={owners}
           appUsers={appUsers}
           currentUserId={session?.access.appUser?.id}
@@ -538,35 +539,47 @@ function FilterSelect({
   );
 }
 
-function PropertyForm({
+function PropertyWizard({
+  mode,
+  property,
   owners,
   appUsers,
   currentUserId,
   canCreateOwner,
   onCancel,
   onCreated,
+  onUpdated,
+  siteSlug,
+  onPublicationChanged,
 }: {
+  mode: "create" | "edit";
+  property?: Property;
   owners: PropertyOwner[];
   appUsers: AppUserSummary[];
   currentUserId?: string;
   canCreateOwner: boolean;
   onCancel: () => void;
-  onCreated: (property: Property, owner?: PropertyOwner, notice?: string) => void;
+  onCreated?: (property: Property, owner?: PropertyOwner, notice?: string) => void;
+  onUpdated?: (property: Property) => void;
+  siteSlug?: string | null;
+  onPublicationChanged?: (property: Property) => void;
 }) {
+  const isEdit = mode === "edit";
+  const formRef = useRef<HTMLFormElement>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedOwnerId, setSelectedOwnerId] = useState("");
+  const [selectedOwnerId, setSelectedOwnerId] = useState(property?.owner_id ?? "");
   // Item 6 do escopo: o corretor responsável precisa ser SELECIONÁVEL já no
   // cadastro (antes só existia essa opção na edição — ver EditSection
   // "1. Proprietário, código e status"). Mantém currentUserId como padrão
   // (comportamento anterior) mas permite trocar antes de salvar.
-  const [selectedResponsibleUserId, setSelectedResponsibleUserId] = useState(currentUserId ?? "");
+  const [selectedResponsibleUserId, setSelectedResponsibleUserId] = useState(property?.responsible_user_id ?? currentUserId ?? "");
   const [ownerSearch, setOwnerSearch] = useState("");
   const [propertyCepStatus, setPropertyCepStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(property?.description ?? "");
   const [templateIndex, setTemplateIndex] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
-  const [formOperation, setFormOperation] = useState<Property["operation"]>("sale");
+  const [formOperation, setFormOperation] = useState<Property["operation"]>(property?.operation ?? "sale");
   const [pricePreview, setPricePreview] = useState<CommercialPriceCalculation>(() => calculateCommercialPrices(new FormData()));
   const [formReadiness, setFormReadiness] = useState<ReadinessItem[]>(() =>
     buildFormPublicationChecklist(new FormData(), "", ""),
@@ -575,8 +588,19 @@ function PropertyForm({
   const [galleryFiles, setGalleryFiles] = useState<File[]>([]);
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
   const [tourFiles, setTourFiles] = useState<File[]>([]);
+  const [editableMedia, setEditableMedia] = useState<NonNullable<Property["property_media"]>>(property?.property_media ?? []);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publicationError, setPublicationError] = useState<string | null>(null);
+  const [publicationNotice, setPublicationNotice] = useState<string | null>(null);
   const currentStep = propertyFormSteps[stepIndex] ?? propertyFormSteps[0];
   const progress = Math.round((formReadiness.filter((item) => item.ready).length / formReadiness.length) * 100);
+
+  useEffect(() => {
+    if (!isEdit || !property || !formRef.current) return;
+    populatePropertyWizardForm(formRef.current, property);
+    setFormOperation(property.operation);
+    setFormReadiness(buildFormPublicationChecklist(new FormData(formRef.current), property.description ?? "", property.owner_id ?? "", Boolean(property.property_media?.some((media) => media.is_cover))));
+  }, [isEdit, property]);
 
   const selectedOwner = useMemo(
     () => owners.find((owner) => owner.id === selectedOwnerId),
@@ -673,6 +697,28 @@ function PropertyForm({
     setFormReadiness(buildFormPublicationChecklist(new FormData(form), description, selectedOwnerId, Boolean(file)));
   }
 
+  async function handlePublishToggle(nextEnabled: boolean) {
+    if (!isEdit || !property) return;
+    setIsPublishing(true);
+    setPublicationError(null);
+    setPublicationNotice(null);
+    try {
+      const response = nextEnabled ? await publishSiteProperty(property.id) : await unpublishSiteProperty(property.id);
+      const updated: Property = {
+        ...property,
+        status: response.property.status,
+        published_at: response.property.published_at,
+        publication_settings_json: { ...property.publication_settings_json, site_enabled: nextEnabled },
+      };
+      onPublicationChanged?.(updated);
+      setPublicationNotice(nextEnabled ? "Imóvel publicado no site." : "Imóvel despublicado do site.");
+    } catch (publishError) {
+      setPublicationError(publishError instanceof Error ? publishError.message : "Não foi possível atualizar a publicação deste imóvel.");
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // Item 12 do escopo: 3 ações explícitas no cadastro — SALVAR RASCUNHO
@@ -738,11 +784,20 @@ function PropertyForm({
         measurements_json: buildMeasurementsJson(form),
         commercial_terms_json: buildCommercialTermsJson(form, priceCalculation),
         amenity_groups_json: buildAmenityGroupsJson(form),
-        features_json: Object.fromEntries(getChecked(form, "features").map((item) => [item, true])),
+        features_json:
+          isEdit && property
+            ? property.features_json
+            : Object.fromEntries(getChecked(form, "features").map((item) => [item, true])),
         videos_json: splitLines(text(form, "videos")).map((url) => ({ type: "link", url })),
         publication_settings_json: buildPublicationSettingsJson(form),
         description_template_key: `template_${templateIndex}`,
       };
+
+      if (isEdit && property) {
+        const response = await updateProperty(property.id, propertyInput);
+        onUpdated?.({ ...response.property, property_media: editableMedia });
+        return;
+      }
 
       const response = await createProperty(propertyInput);
       const uploadedMedia = await uploadSelectedPropertyMedia(response.property.id, {
@@ -774,7 +829,7 @@ function PropertyForm({
         notice = "Imóvel salvo como rascunho. Ele não aparece no site até ser publicado.";
       }
 
-      onCreated({ ...refreshed.property, property_media: uploadedMedia.length ? uploadedMedia : refreshed.property.property_media }, createdOwner, notice);
+      onCreated?.({ ...refreshed.property, property_media: uploadedMedia.length ? uploadedMedia : refreshed.property.property_media }, createdOwner, notice);
       formElement.reset();
       setDescription("");
       setMainPhoto(null);
@@ -790,6 +845,7 @@ function PropertyForm({
 
   return (
     <form
+      ref={formRef}
       onSubmit={handleSubmit}
       onChange={(event) => {
         const form = new FormData(event.currentTarget);
@@ -797,11 +853,11 @@ function PropertyForm({
         setFormOperation(normalizeOperation(text(form, "operation")));
         setPricePreview(calculateCommercialPrices(form));
       }}
-      className="mb-4 rounded-lg border border-border bg-card p-4"
+      className={isEdit ? "max-h-[90vh] w-full max-w-5xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl" : "mb-4 rounded-lg border border-border bg-card p-4"}
     >
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold">Cadastro completo de imóvel</h2>
+          <h2 className="text-base font-semibold">{isEdit ? "Editar anúncio" : "Cadastro completo de imóvel"}</h2>
           <p className="text-sm text-muted-foreground">
             O imóvel nasce vazio e só recebe dados reais informados pela imobiliária.
           </p>
@@ -1014,7 +1070,12 @@ function PropertyForm({
 
       <FormSection step={6} activeStep={stepIndex} title="7. Detalhes adicionais" description="Infraestrutura, lazer, piso, serviços, estrutura rural e culturas.">
         {Object.entries(featureGroups).map(([group, items]) => (
-          <FeatureGroup key={group} group={group} items={items} />
+          <FeatureGroup
+            key={group}
+            group={group}
+            items={items}
+            initialItems={isEdit && property ? (property.amenity_groups_json?.[group] as string[] | undefined) : undefined}
+          />
         ))}
       </FormSection>
 
@@ -1058,6 +1119,18 @@ function PropertyForm({
       </FormSection>
 
       <FormSection step={9} activeStep={stepIndex} title="10. Imagens" description="Adicione foto principal, galeria e imagem panorâmica para tour 360.">
+        {isEdit && property ? (
+          <div className="md:col-span-2 xl:col-span-4">
+            <p className="mb-2 text-sm text-muted-foreground">O mesmo passo de mídia é usado no cadastro e na edição. Mídias não alteradas são preservadas.</p>
+            <PropertyMediaManager property={{ ...property, property_media: editableMedia }} onMediaChanged={setEditableMedia} />
+            <PropertyMediaUpload
+              property={{ ...property, property_media: editableMedia }}
+              onUploaded={(media) => setEditableMedia((current) => [media, ...current])}
+              isFirstMedia={!editableMedia.length}
+            />
+          </div>
+        ) : null}
+        {!isEdit ? <>
         <FilePicker
           label="Foto principal*"
           description="Capa do anúncio, card do imóvel, site e portais."
@@ -1088,6 +1161,7 @@ function PropertyForm({
         <div className="rounded-md border border-dashed border-border bg-background p-3 text-sm text-muted-foreground md:col-span-2 xl:col-span-4">
           Os arquivos ficam selecionados durante o cadastro e são enviados automaticamente depois que o imóvel é salvo com um ID real.
         </div>
+        </> : null}
       </FormSection>
 
       <FormSection step={10} activeStep={stepIndex} title="11. Liberações" description="Controle onde o imóvel poderá aparecer depois de aprovado.">
@@ -1102,6 +1176,22 @@ function PropertyForm({
         <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground md:col-span-2">
           Banner indisponível neste template. A imagem principal do imóvel nunca substituirá o hero institucional.
         </div>
+        {isEdit && property ? (
+          <div className="md:col-span-2 xl:col-span-4">
+            <PropertyPublicationSummary property={property} />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={isPublishing || Boolean(property.published_at)} onClick={() => void handlePublishToggle(true)} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white disabled:opacity-60">
+                {isPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />} Publicar no site
+              </button>
+              <button type="button" disabled={isPublishing || !property.published_at} onClick={() => void handlePublishToggle(false)} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold disabled:opacity-60">
+                Despublicar
+              </button>
+              {property.published_at && siteSlug ? <a href={getPropertyDetailUrl(siteSlug, property)} target="_blank" rel="noopener noreferrer" className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold underline">Ver página pública</a> : null}
+            </div>
+            {publicationError ? <p className="mt-2 text-xs text-destructive">{publicationError}</p> : null}
+            {publicationNotice ? <p className="mt-2 text-xs text-emerald-700">{publicationNotice}</p> : null}
+          </div>
+        ) : null}
       </FormSection>
 
       <FormSection step={11} activeStep={stepIndex} title="12. Revisão final" description="Confira os pontos mínimos antes de salvar como rascunho ou preparar publicação.">
@@ -1144,9 +1234,9 @@ function PropertyForm({
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Salvar rascunho
+            {isEdit ? "Salvar alterações" : "Salvar rascunho"}
           </button>
-          <button
+          {!isEdit ? <button
             type="submit"
             name="intent"
             value="save"
@@ -1155,8 +1245,8 @@ function PropertyForm({
           >
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             Salvar
-          </button>
-          <button
+          </button> : null}
+          {!isEdit ? <button
             type="submit"
             name="intent"
             value="publish"
@@ -1166,6 +1256,7 @@ function PropertyForm({
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
             Salvar e publicar
           </button>
+          : null}
         </div>
       </div>
     </form>
@@ -1384,8 +1475,8 @@ function FilePicker({
   );
 }
 
-function FeatureGroup({ group, items }: { group: string; items: string[] }) {
-  const [customItems, setCustomItems] = useState<string[]>([]);
+function FeatureGroup({ group, items, initialItems = [] }: { group: string; items: string[]; initialItems?: string[] }) {
+  const [customItems, setCustomItems] = useState<string[]>(() => initialItems.filter((item) => !items.includes(item)));
   const [draft, setDraft] = useState("");
   const [allSelected, setAllSelected] = useState(false);
   const allItems = [...items, ...customItems];
@@ -1416,7 +1507,7 @@ function FeatureGroup({ group, items }: { group: string; items: string[] }) {
             name={`amenity_${group}`}
             value={item}
             label={item}
-            defaultChecked={allSelected || customItems.includes(item)}
+            defaultChecked={allSelected || initialItems.includes(item)}
           />
         ))}
       </div>
@@ -1468,6 +1559,7 @@ function PropertyCard({
   const [detailProperty, setDetailProperty] = useState<Property | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const canCreateOwner = canManage(currentUser, "owners.manage");
   const ownerId = property.responsible_user?.id ?? null;
   const canManageSharing = canManageResourceSharing(currentUser, "properties.manage", ownerId);
   const ownershipBadge = getOwnershipBadge({
@@ -1636,13 +1728,16 @@ function PropertyCard({
         />
       ) : null}
       {isEditOpen && detailProperty ? (
-        <EditPropertyDialog
+        <PropertyWizard
+          mode="edit"
           property={detailProperty}
           owners={owners}
           siteSlug={siteSlug}
           appUsers={appUsers}
-          onClose={() => setIsEditOpen(false)}
-          onSaved={(updated) => {
+          currentUserId={currentUser?.id}
+          canCreateOwner={canCreateOwner}
+          onCancel={() => setIsEditOpen(false)}
+          onUpdated={(updated) => {
             setDetailProperty(updated);
             onPropertyUpdated(updated);
             setIsEditOpen(false);
@@ -1804,338 +1899,88 @@ function PropertyReportModal({
   );
 }
 
-function EditPropertyDialog({
-  property,
-  owners,
-  siteSlug,
-  appUsers,
-  onClose,
-  onSaved,
-  onPublicationChanged,
-}: {
-  property: Property;
-  owners: PropertyOwner[];
-  siteSlug: string | null;
-  appUsers: AppUserSummary[];
-  onClose: () => void;
-  onSaved: (property: Property) => void;
-  onPublicationChanged: (property: Property) => void;
-}) {
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [publicationError, setPublicationError] = useState<string | null>(null);
-  const [publicationNotice, setPublicationNotice] = useState<string | null>(null);
+function populatePropertyWizardForm(form: HTMLFormElement, property: Property) {
   const capture = property.capture_json ?? {};
   const primary = property.primary_details_json ?? {};
   const measurements = property.measurements_json ?? {};
-  const commercialRule = (property.commercial_terms_json?.rule ?? {}) as Record<string, unknown>;
+  const commercial = property.commercial_terms_json ?? {};
+  const rule = (commercial.rule ?? {}) as Record<string, unknown>;
   const publication = property.publication_settings_json ?? {};
-  const videoLinks = property.videos_json?.map((item) => String(item.url ?? "")).filter(Boolean).join("\n") ?? "";
-  const featuresJson = JSON.stringify(property.features_json ?? {}, null, 2);
-  const amenityGroupsJson = JSON.stringify(property.amenity_groups_json ?? {}, null, 2);
-  const [editableMedia, setEditableMedia] = useState<NonNullable<Property["property_media"]>>(property.property_media ?? []);
-  const mediaProperty = { ...property, property_media: editableMedia };
-
-  async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsSaving(true);
-    setError(null);
-    const form = new FormData(event.currentTarget);
-
-    try {
-      const priceCalculation = calculateCommercialPrices(form);
-      const response = await updateProperty(property.id, {
-        owner_id: text(form, "owner_id"),
-        responsible_user_id: text(form, "responsible_user_id") || undefined,
-        code: text(form, "code"),
-        title: text(form, "title"),
-        description: text(form, "description"),
-        property_type: normalizePropertyType(text(form, "property_type")),
-        operation: normalizeOperation(text(form, "operation")),
-        status: text(form, "status") as PropertyInput["status"],
-        street: text(form, "property_street"),
-        number: text(form, "property_number"),
-        complement: text(form, "property_complement"),
-        neighborhood: text(form, "property_neighborhood"),
-        city: text(form, "property_city"),
-        state: text(form, "property_state"),
-        country: text(form, "property_country") || "Brasil",
-        zip_code: text(form, "property_zip_code"),
-        latitude: parseDecimal(form.get("latitude")),
-        longitude: parseDecimal(form.get("longitude")),
-        condominium_name: text(form, "condominium_name"),
-        nearby_highways: splitLines(text(form, "nearby_highways")),
-        bedrooms: parseInteger(form.get("bedrooms")),
-        bathrooms: parseInteger(form.get("bathrooms")),
-        suites: parseInteger(form.get("suites")),
-        parking_spaces: parseInteger(form.get("parking_spaces")),
-        private_area: parseDecimal(form.get("private_area")),
-        total_area: parseDecimal(form.get("total_area")),
-        sale_price_cents: priceCalculation.sale_price_cents,
-        rent_price_cents: priceCalculation.rent_price_cents,
-        condominium_fee_cents: parseMoneyToCents(text(form, "condominium_fee")),
-        iptu_cents: parseMoneyToCents(text(form, "iptu")),
-        capture_json: buildCaptureJson(form),
-        primary_details_json: buildPrimaryDetailsJson(form),
-        measurements_json: buildMeasurementsJson(form),
-        commercial_terms_json: buildCommercialTermsJson(form, priceCalculation),
-        features_json: parseBooleanRecord(text(form, "features_json"), property.features_json ?? {}),
-        amenity_groups_json: parseStringArrayRecord(text(form, "amenity_groups_json"), property.amenity_groups_json ?? {}),
-        videos_json: splitLines(text(form, "videos")).map((url) => ({ type: "link", url })),
-        publication_settings_json: buildPublicationSettingsJson(form),
-      });
-      onSaved({ ...response.property, property_media: editableMedia });
-    } catch (editError) {
-      setError(editError instanceof Error ? editError.message : "Não foi possível editar o anúncio.");
-    } finally {
-      setIsSaving(false);
-    }
+  const values: Record<string, string> = {
+    code: property.code ?? "",
+    title: property.title,
+    property_zip_code: property.zip_code ?? "",
+    property_street: property.street ?? "",
+    property_number: property.number ?? "",
+    property_complement: property.complement ?? "",
+    property_neighborhood: property.neighborhood ?? "",
+    property_city: property.city ?? "",
+    property_state: property.state ?? "",
+    property_country: property.country ?? "Brasil",
+    latitude: property.latitude == null ? "" : String(property.latitude).replace(".", ","),
+    longitude: property.longitude == null ? "" : String(property.longitude).replace(".", ","),
+    condominium_name: property.condominium_name ?? "",
+    nearby_highways: property.nearby_highways.join("\n"),
+    captor_name: String(capture.captor_name ?? ""),
+    key_location: String(capture.key_location ?? ""),
+    doorman_name: String(capture.doorman_name ?? ""),
+    doorman_phone: String(capture.doorman_phone ?? ""),
+    sign_installed_at: String(capture.sign_installed_at ?? ""),
+    sign_removed_at: String(capture.sign_removed_at ?? ""),
+    exclusive_until: String(capture.exclusive_until ?? ""),
+    multi_property_fraction: String(primary.multi_property_fraction ?? ""),
+    bedrooms: property.bedrooms == null ? "" : String(property.bedrooms),
+    suites: property.suites == null ? "" : String(property.suites),
+    living_rooms: String(primary.living_rooms ?? ""),
+    bathrooms: property.bathrooms == null ? "" : String(property.bathrooms),
+    parking_spaces: property.parking_spaces == null ? "" : String(property.parking_spaces),
+    uncovered_parking_spaces: String(primary.uncovered_parking_spaces ?? ""),
+    front_customer_parking: String(primary.front_customer_parking ?? ""),
+    additional_parking: String(primary.additional_parking ?? ""),
+    total_docks: String(primary.total_docks ?? ""),
+    covered_docks: String(primary.covered_docks ?? ""),
+    elevated_docks: String(primary.elevated_docks ?? ""),
+    level_docks: String(primary.level_docks ?? ""),
+    ramps: String(primary.ramps ?? ""),
+    floor_resistance: String(primary.floor_resistance ?? ""),
+    topography: String(primary.topography ?? ""),
+    ceiling_height: String(measurements.ceiling_height ?? ""),
+    total_area: property.total_area == null ? "" : String(property.total_area).replace(".", ","),
+    private_area: property.private_area == null ? "" : String(property.private_area).replace(".", ","),
+    sale_price: formatMoneyInput(Number(rule.original_sale_price_cents ?? property.sale_price_cents ?? 0) || null),
+    rent_price: formatMoneyInput(Number(rule.original_rent_price_cents ?? property.rent_price_cents ?? 0) || null),
+    season_price: formatMoneyInput(Number(commercial.season_price_cents ?? 0) || null),
+    condominium_fee: formatMoneyInput(property.condominium_fee_cents),
+    iptu: formatMoneyInput(property.iptu_cents),
+    condominium_payment_notes: String(commercial.condominium_payment_notes ?? ""),
+    rent_notes: String(commercial.rent_notes ?? ""),
+    season_notes: String(commercial.season_notes ?? ""),
+    commercial_rule_value: String(rule.value ?? ""),
+    videos: property.videos_json.map((item) => String(item.url ?? "")).filter(Boolean).join("\n"),
+    site_enabled: publication.site_enabled ? "yes" : "no",
+    site_featured: publication.site_featured ? "yes" : "no",
+    status: property.status,
+    property_type: property.property_type,
+    operation: property.operation,
+    has_sign: capture.has_sign ? "yes" : "no",
+    exclusive: capture.exclusive ? "yes" : "no",
+    accepts_exchange: String(primary.accepts_exchange ?? "no"),
+    accepts_financing: String(primary.accepts_financing ?? "no"),
+    iptu_period: String(commercial.iptu_period ?? "monthly"),
+    commercial_rule_type: String(rule.type ?? "none"),
+    commercial_rule_mode: String(rule.mode ?? "add"),
+  };
+  for (const [name, value] of Object.entries(values)) {
+    const element = form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+    if (element && element.type !== "checkbox") element.value = value;
   }
-
-  // B1 (Fase B): publicar/despublicar é uma ação explícita e dedicada, que
-  // chama diretamente POST /site/properties/:id/publish|unpublish (a mesma
-  // rota já corrigida na Fase A para nunca alterar o status comercial do
-  // imóvel como efeito colateral). A UI não recalcula a regra de
-  // publicabilidade — apenas reflete o que syncMysqlPropertyPublication
-  // decidiu no backend.
-  async function handlePublishToggle(nextEnabled: boolean) {
-    setIsPublishing(true);
-    setPublicationError(null);
-    setPublicationNotice(null);
-    try {
-      const response = nextEnabled ? await publishSiteProperty(property.id) : await unpublishSiteProperty(property.id);
-      const updated: Property = {
-        ...property,
-        status: response.property.status,
-        published_at: response.property.published_at,
-        publication_settings_json: {
-          ...property.publication_settings_json,
-          site_enabled: nextEnabled,
-        },
-      };
-      onPublicationChanged(updated);
-      setPublicationNotice(nextEnabled ? "Imóvel publicado no site." : "Imóvel despublicado do site.");
-    } catch (publishError) {
-      setPublicationError(
-        publishError instanceof Error ? publishError.message : "Não foi possível atualizar a publicação deste imóvel.",
-      );
-    } finally {
-      setIsPublishing(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <form
-        // B1 (Fase B): o formulário usa campos não controlados (defaultValue),
-        // então publicar/despublicar pela ação dedicada (que não passa por
-        // aqui) não atualiza sozinho o <select> "Liberado no site?" já
-        // montado — key força remontar o formulário quando published_at
-        // muda, para o campo nunca ficar mostrando "Sim" desatualizado logo
-        // após "Despublicar" (o que faria "Salvar edição" reativar a
-        // publicação como efeito colateral surpresa, o oposto do que B1 pede).
-        key={String(property.published_at)}
-        onSubmit={handleEditSubmit}
-        className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl"
-      >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-medium uppercase text-muted-foreground">Editar anúncio</p>
-            <h2 className="text-lg font-semibold">{property.title}</h2>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-md border border-border px-3 py-1 text-sm">
-            Cancelar
-          </button>
-        </div>
-        <div className="space-y-4">
-          <EditSection title="1. Proprietário, código e status">
-            <label className="space-y-1 text-sm">
-              <span className="font-medium">Proprietário</span>
-              <select name="owner_id" defaultValue={property.owner_id ?? ""} className={fieldClass}>
-                <option value="">Sem proprietário</option>
-                {owners.map((owner) => (
-                  <option key={owner.id} value={owner.id}>{owner.name}</option>
-                ))}
-              </select>
-            </label>
-            {appUsers.length ? (
-              <label className="space-y-1 text-sm">
-                <span className="font-medium">Corretor responsável</span>
-                <select
-                  name="responsible_user_id"
-                  defaultValue={property.responsible_user_id ?? property.responsible_user?.id ?? ""}
-                  className={fieldClass}
-                >
-                  <option value="">Sem responsável definido</option>
-                  {appUsers.map((user) => (
-                    <option key={user.id} value={user.id}>{user.name}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <Field label="Código" name="code" defaultValue={property.code ?? ""} />
-            <Field label="Título" name="title" defaultValue={property.title} required />
-            <SelectField label="Status" name="status" defaultValue={property.status} options={[
-              ["draft", "Rascunho"],
-              ["available", "Disponível"],
-              ["reserved", "Reservado"],
-              ["sold", "Vendido"],
-              ["rented", "Alugado"],
-              ["inactive", "Inativo"],
-              ["archived", "Arquivado"],
-            ]} />
-          </EditSection>
-
-          <EditSection title="2. Localização">
-            <Field label="CEP" name="property_zip_code" defaultValue={property.zip_code ?? ""} format="cep" inputMode="numeric" onInput={(event) => void fillCepAddressForForm(event.currentTarget, "property")} onBlur={(event) => void fillCepAddressForForm(event.currentTarget, "property")} />
-            <Field label="Endereço" name="property_street" defaultValue={property.street ?? ""} />
-            <Field label="Número" name="property_number" defaultValue={property.number ?? ""} />
-            <Field label="Complemento" name="property_complement" defaultValue={property.complement ?? ""} />
-            <Field label="Bairro" name="property_neighborhood" defaultValue={property.neighborhood ?? ""} />
-            <Field label="Cidade" name="property_city" defaultValue={property.city ?? ""} />
-            <Field label="UF" name="property_state" defaultValue={property.state ?? ""} maxLength={2} />
-            <Field label="País" name="property_country" defaultValue={property.country ?? "Brasil"} />
-            <Field label="Latitude" name="latitude" defaultValue={property.latitude ? String(property.latitude).replace(".", ",") : ""} inputMode="decimal" format="decimal" />
-            <Field label="Longitude" name="longitude" defaultValue={property.longitude ? String(property.longitude).replace(".", ",") : ""} inputMode="decimal" format="decimal" />
-            <Field label="Nome do condomínio" name="condominium_name" defaultValue={property.condominium_name ?? ""} />
-            <TextArea label="Rodovias próximas" name="nearby_highways" defaultValue={property.nearby_highways?.join("\n") ?? ""} />
-          </EditSection>
-
-          <EditSection title="3. Captação">
-            <Field label="Captador" name="captor_name" defaultValue={String(capture.captor_name ?? "")} />
-            <Field label="Local das chaves" name="key_location" defaultValue={String(capture.key_location ?? "")} />
-            <Field label="Nome do zelador ou porteiro" name="doorman_name" defaultValue={String(capture.doorman_name ?? "")} />
-            <Field label="Telefone do zelador ou porteiro" name="doorman_phone" defaultValue={String(capture.doorman_phone ?? "")} format="phone" />
-            <SelectField label="Placa no local?" name="has_sign" defaultValue={capture.has_sign ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <Field label="Data colocação" name="sign_installed_at" type="date" defaultValue={String(capture.sign_installed_at ?? "")} />
-            <Field label="Data retirada" name="sign_removed_at" type="date" defaultValue={String(capture.sign_removed_at ?? "")} />
-            <SelectField label="Exclusividade?" name="exclusive" defaultValue={capture.exclusive ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <Field label="Exclusividade até" name="exclusive_until" type="date" defaultValue={String(capture.exclusive_until ?? "")} />
-          </EditSection>
-
-          <EditSection title="4. Dados primários">
-            <SelectField label="Tipo" name="property_type" defaultValue={property.property_type} options={propertyTypeOptions.map(([value, label]) => [value, label])} />
-            <SelectField label="Transação" name="operation" defaultValue={property.operation} options={operationOptions.map(([value, label]) => [value, label])} />
-            <Field label="Dormitórios" name="bedrooms" defaultValue={property.bedrooms?.toString() ?? ""} inputMode="numeric" />
-            <Field label="Suítes" name="suites" defaultValue={property.suites?.toString() ?? ""} inputMode="numeric" />
-            <Field label="Banheiros" name="bathrooms" defaultValue={property.bathrooms?.toString() ?? ""} inputMode="numeric" />
-            <Field label="Vagas" name="parking_spaces" defaultValue={property.parking_spaces?.toString() ?? ""} inputMode="numeric" />
-            <Field label="Fração multi propriedade" name="multi_property_fraction" defaultValue={String(primary.multi_property_fraction ?? "")} />
-            <SelectField label="Aceita permuta" name="accepts_exchange" defaultValue={String(primary.accepts_exchange ?? "no")} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Aceita financiamento" name="accepts_financing" defaultValue={String(primary.accepts_financing ?? "no")} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <Field label="Salas" name="living_rooms" defaultValue={String(primary.living_rooms ?? "")} inputMode="numeric" />
-            <Field label="Total de docas" name="total_docks" defaultValue={String(primary.total_docks ?? "")} inputMode="numeric" />
-            <Field label="Resistência do piso ton/m²" name="floor_resistance" defaultValue={String(primary.floor_resistance ?? "")} inputMode="decimal" format="decimal" />
-            <SelectField label="Topografia" name="topography" defaultValue={String(primary.topography ?? "")} options={[["", "Não informado"], ...topographyOptions.map((item) => [item, item] as const)]} />
-          </EditSection>
-
-          <EditSection title="5. Metragens">
-            <Field label="Área útil" name="private_area" defaultValue={property.private_area ? String(property.private_area).replace(".", ",") : ""} inputMode="decimal" format="decimal" />
-            <Field label="Área total" name="total_area" defaultValue={property.total_area ? String(property.total_area).replace(".", ",") : ""} inputMode="decimal" format="decimal" />
-            {["ceiling_height", "land_area_m2", "land_area_alqueire", "land_area_hectare", "land_area_acre", "built_area", "industrial_area", "office_area", "support_area", "maneuver_area", "external_area", "yard_area", "gross_area", "exclusive_area", "common_area", "land_dimensions", "mezzanine_area", "glebe_area", "plateau_area"].map((key) => (
-              <Field key={key} label={humanizeKey(key)} name={key} defaultValue={String(measurements[key] ?? "")} inputMode="decimal" format="decimal" />
-            ))}
-          </EditSection>
-
-          <EditSection title="6. Valores e regra comercial">
-            <Field label="Valor de venda" name="sale_price" defaultValue={formatMoneyInput(Number(commercialRule.original_sale_price_cents ?? property.sale_price_cents ?? 0) || property.sale_price_cents)} inputMode="decimal" format="money" />
-            <Field label="Valor de locação" name="rent_price" defaultValue={formatMoneyInput(Number(commercialRule.original_rent_price_cents ?? property.rent_price_cents ?? 0) || property.rent_price_cents)} inputMode="decimal" format="money" />
-            <Field label="Valor de temporada" name="season_price" defaultValue={formatMoneyInput(Number(property.commercial_terms_json?.season_price_cents ?? 0) || null)} inputMode="decimal" format="money" />
-            <Field label="Condomínio" name="condominium_fee" defaultValue={formatMoneyInput(property.condominium_fee_cents)} inputMode="decimal" format="money" />
-            <Field label="IPTU" name="iptu" defaultValue={formatMoneyInput(property.iptu_cents)} inputMode="decimal" format="money" />
-            <SelectField label="IPTU" name="iptu_period" defaultValue={String(property.commercial_terms_json?.iptu_period ?? "monthly")} options={[["monthly", "Mensal"], ["yearly", "Anual"]]} />
-            <SelectField label="Regra comercial" name="commercial_rule_type" defaultValue={String(commercialRule.type ?? "none")} options={[["none", "Nenhuma"], ["percent", "Percentual"], ["fixed", "Valor fixo"]]} />
-            <SelectField label="Aplicação da regra" name="commercial_rule_mode" defaultValue={String(commercialRule.mode ?? "add")} options={[["add", "Adicionar ao valor"], ["subtract", "Tirar do valor"]]} />
-            <Field label="% ou valor fixo" name="commercial_rule_value" defaultValue={String(commercialRule.value ?? "")} inputMode="decimal" format="decimal" />
-            <TextArea label="Dados adicionais/Locação" name="rent_notes" defaultValue={String(property.commercial_terms_json?.rent_notes ?? "")} />
-            <TextArea label="Dados adicionais/Temporada" name="season_notes" defaultValue={String(property.commercial_terms_json?.season_notes ?? "")} />
-          </EditSection>
-
-          <EditSection title="7. Vídeos, descrição e liberações">
-            <TextArea label="Links de vídeo" name="videos" defaultValue={videoLinks} />
-            <TextArea label="Descrição" name="description" defaultValue={property.description ?? ""} />
-            <TextArea label="Características (JSON)" name="features_json" defaultValue={featuresJson} />
-            <TextArea label="Grupos de amenidades (JSON)" name="amenity_groups_json" defaultValue={amenityGroupsJson} />
-            <SelectField label="Liberado no site?" name="site_enabled" defaultValue={publication.site_enabled ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <SelectField label="Destaque no site?" name="site_featured" defaultValue={publication.site_featured ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
-            <input type="hidden" name="site_banner" value="no" />
-            <div className="rounded-md border border-amber-300/60 bg-amber-50 p-3 text-sm text-amber-900 md:col-span-2 xl:col-span-4">
-              Banner e publicação automática em portais/redes estão indisponíveis. Configure e valide cada integração antes de publicar; esta edição não cria status fictício.
-            </div>
-            <div className="md:col-span-2 xl:col-span-4">
-              <PropertyPublicationSummary property={property} />
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={isPublishing || Boolean(property.published_at)}
-                  onClick={() => void handlePublishToggle(true)}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
-                  Publicar no site
-                </button>
-                <button
-                  type="button"
-                  disabled={isPublishing || !property.published_at}
-                  onClick={() => void handlePublishToggle(false)}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isPublishing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                  Despublicar
-                </button>
-                {property.published_at && siteSlug ? (
-                  <a
-                    href={getPropertyDetailUrl(siteSlug, property)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold underline-offset-2 hover:bg-accent hover:underline"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                    Ver página pública
-                  </a>
-                ) : null}
-              </div>
-              {publicationError ? <p className="mt-2 text-xs text-destructive">{publicationError}</p> : null}
-              {publicationNotice ? <p className="mt-2 text-xs text-emerald-700">{publicationNotice}</p> : null}
-            </div>
-          </EditSection>
-          <EditSection title="10. Imagens e mídia do imóvel">
-            <div className="md:col-span-2 xl:col-span-4">
-              <p className="mb-2 text-sm text-muted-foreground">
-                A edição usa o mesmo pipeline canônico de mídia do cadastro. Mídias não alteradas são preservadas; você pode adicionar, excluir, reordenar ou definir a capa.
-              </p>
-              <PropertyMediaManager
-                property={mediaProperty}
-                onMediaChanged={setEditableMedia}
-              />
-              <PropertyMediaUpload
-                property={mediaProperty}
-                onUploaded={(media) => setEditableMedia((current) => [media, ...current])}
-                isFirstMedia={!editableMedia.length}
-              />
-            </div>
-          </EditSection>
-        </div>
-        {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-        <div className="mt-4 flex justify-end">
-          <button type="submit" disabled={isSaving} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
-            Salvar edição
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function EditSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-md border border-border bg-background p-4">
-      <h3 className="mb-3 text-sm font-semibold">{title}</h3>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{children}</div>
-    </section>
-  );
+  for (const checkbox of Array.from(form.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))) checkbox.checked = false;
+  const setChecked = (name: string, selected: string[]) => {
+    const selectedSet = new Set(selected);
+    for (const checkbox of Array.from(form.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`))) checkbox.checked = selectedSet.has(checkbox.value);
+  };
+  setChecked("capture_flags", Array.isArray(capture.flags) ? capture.flags.map(String) : []);
+  for (const [group, selected] of Object.entries(property.amenity_groups_json ?? {})) setChecked(`amenity_${group}`, Array.isArray(selected) ? selected.map(String) : []);
 }
 
 // B1 (Fase B): estado visual da publicação — quatro estados exigidos pelo
@@ -2608,16 +2453,6 @@ function formatCommercialRule(rule?: Record<string, unknown>) {
 
 function humanizeKey(key: string) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function parseBooleanRecord(value: string, fallback: Record<string, boolean>) {
-  try {
-    const parsed = JSON.parse(value || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
-    return Object.fromEntries(Object.entries(parsed).filter(([, item]) => typeof item === "boolean")) as Record<string, boolean>;
-  } catch {
-    return fallback;
-  }
 }
 
 function parseStringArrayRecord(value: string, fallback: Record<string, string[]>) {
