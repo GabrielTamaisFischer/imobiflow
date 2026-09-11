@@ -553,7 +553,7 @@ sitesRouter.post(
       // só AVALIA se um deeplink de WhatsApp pode ser oferecido (e registra em
       // auditoria quando não pode) — nunca envia nada pelo servidor. Toda a
       // lógica vive em property-events.ts. Nunca deve derrubar esta resposta.
-      void emitPropertyPublishedEvent(companyId, property.id).catch((eventError) => {
+      void emitPropertyPublishedEvent(companyId, property.id, userId).catch((eventError) => {
         console.error("[property.published] evento falhou de forma inesperada", eventError);
       });
 

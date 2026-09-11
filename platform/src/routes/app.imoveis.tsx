@@ -40,10 +40,10 @@ import {
   toPropertySummary,
   type Property,
   type PropertyInput,
+  type PropertyMedia,
   type PropertyOwner,
   type PropertyPagination,
   type PropertySummary,
-  type PropertySummaryMedia,
 } from "@/product/real-estate";
 import {
   grantPropertyAccess,
@@ -482,20 +482,6 @@ function PropertiesPage() {
               onPropertyRemoved={(propertyId) => {
                 setProperties((current) => current.filter((item) => item.id !== propertyId));
                 reloadProperties();
-              }}
-              onMediaUploaded={(media) => {
-                setProperties((current) =>
-                  current.map((item) =>
-                    item.id === property.id
-                      ? { ...item, property_media: [media, ...(item.property_media ?? [])] }
-                      : item,
-                  ),
-                );
-              }}
-              onMediaChanged={(propertyId, media) => {
-                setProperties((current) =>
-                  current.map((item) => (item.id === propertyId ? { ...item, property_media: media } : item)),
-                );
               }}
             />
           ))}
@@ -1463,8 +1449,6 @@ function PropertyCard({
   currentUser,
   onPropertyUpdated,
   onPropertyRemoved,
-  onMediaUploaded,
-  onMediaChanged,
 }: {
   property: PropertySummary;
   owners: PropertyOwner[];
@@ -1473,8 +1457,6 @@ function PropertyCard({
   currentUser: CurrentAppUser | undefined;
   onPropertyUpdated: (property: Property) => void;
   onPropertyRemoved: (propertyId: string) => void;
-  onMediaUploaded: (media: NonNullable<Property["property_media"]>[number]) => void;
-  onMediaChanged: (propertyId: string, media: PropertySummaryMedia[]) => void;
 }) {
   const location = [property.neighborhood, property.city, property.state].filter(Boolean).join(", ");
   const salePrice = formatCurrency(property.sale_price_cents);
@@ -1651,14 +1633,6 @@ function PropertyCard({
         <PropertyReportModal
           property={detailProperty}
           onClose={() => setIsReportOpen(false)}
-          onMediaUploaded={(media) => {
-            setDetailProperty((current) => current ? { ...current, property_media: [media, ...(current.property_media ?? [])] } : current);
-            onMediaUploaded(media);
-          }}
-          onMediaChanged={(media) => {
-            setDetailProperty((current) => current ? { ...current, property_media: media } : current);
-            onMediaChanged(property.id, media);
-          }}
         />
       ) : null}
       {isEditOpen && detailProperty ? (
@@ -1742,13 +1716,9 @@ function getPropertyCoverMedia(property: Pick<PropertySummary, "property_media">
 function PropertyReportModal({
   property,
   onClose,
-  onMediaUploaded,
-  onMediaChanged,
 }: {
   property: Property;
   onClose: () => void;
-  onMediaUploaded: (media: NonNullable<Property["property_media"]>[number]) => void;
-  onMediaChanged: (media: NonNullable<Property["property_media"]>) => void;
 }) {
   const report = buildPropertyReport(property);
 
@@ -1796,24 +1766,25 @@ function PropertyReportModal({
             Fechar
           </button>
         </div>
-        {property.property_media?.length ? (
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {property.property_media.map((media) => (
-              media.media_type === "video" ? (
-                <video key={media.id} src={media.url} controls className="h-44 w-full rounded-md bg-black object-cover" />
-              ) : (
-                <img key={media.id} src={media.url} alt={media.caption ?? property.title} className="h-44 w-full rounded-md object-cover" />
-              )
-            ))}
-          </div>
-        ) : (
-          <div className="mb-4 rounded-md border border-dashed border-border bg-muted p-4 text-sm text-muted-foreground">
-            Nenhuma imagem ou vídeo vinculado a este imóvel ainda.
-          </div>
-        )}
         <pre className="whitespace-pre-wrap rounded-md bg-muted p-4 text-sm leading-relaxed text-foreground">{report}</pre>
-        <PropertyMediaManager property={property} onMediaChanged={onMediaChanged} />
-        <PropertyMediaUpload property={property} onUploaded={onMediaUploaded} isFirstMedia={!property.property_media?.length} />
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Mídias do imóvel</p>
+          {property.property_media?.length ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {property.property_media.map((media) => (
+                media.media_type === "video" ? (
+                  <video key={media.id} src={media.url} controls className="h-44 w-full rounded-md bg-black object-cover" />
+                ) : (
+                  <img key={media.id} src={media.url} alt={media.caption ?? property.title} className="h-44 w-full rounded-md object-cover" />
+                )
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-border bg-muted p-4 text-sm text-muted-foreground">
+              Nenhuma imagem ou vídeo vinculado a este imóvel ainda.
+            </div>
+          )}
+        </div>
         <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
           <button type="button" onClick={generatePdf} className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-medium hover:bg-accent">
             <FileText className="h-4 w-4" />
@@ -1861,6 +1832,10 @@ function EditPropertyDialog({
   const commercialRule = (property.commercial_terms_json?.rule ?? {}) as Record<string, unknown>;
   const publication = property.publication_settings_json ?? {};
   const videoLinks = property.videos_json?.map((item) => String(item.url ?? "")).filter(Boolean).join("\n") ?? "";
+  const featuresJson = JSON.stringify(property.features_json ?? {}, null, 2);
+  const amenityGroupsJson = JSON.stringify(property.amenity_groups_json ?? {}, null, 2);
+  const [editableMedia, setEditableMedia] = useState<NonNullable<Property["property_media"]>>(property.property_media ?? []);
+  const mediaProperty = { ...property, property_media: editableMedia };
 
   async function handleEditSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1905,10 +1880,12 @@ function EditPropertyDialog({
         primary_details_json: buildPrimaryDetailsJson(form),
         measurements_json: buildMeasurementsJson(form),
         commercial_terms_json: buildCommercialTermsJson(form, priceCalculation),
+        features_json: parseBooleanRecord(text(form, "features_json"), property.features_json ?? {}),
+        amenity_groups_json: parseStringArrayRecord(text(form, "amenity_groups_json"), property.amenity_groups_json ?? {}),
         videos_json: splitLines(text(form, "videos")).map((url) => ({ type: "link", url })),
         publication_settings_json: buildPublicationSettingsJson(form),
       });
-      onSaved(response.property);
+      onSaved({ ...response.property, property_media: editableMedia });
     } catch (editError) {
       setError(editError instanceof Error ? editError.message : "Não foi possível editar o anúncio.");
     } finally {
@@ -2078,6 +2055,8 @@ function EditPropertyDialog({
           <EditSection title="7. Vídeos, descrição e liberações">
             <TextArea label="Links de vídeo" name="videos" defaultValue={videoLinks} />
             <TextArea label="Descrição" name="description" defaultValue={property.description ?? ""} />
+            <TextArea label="Características (JSON)" name="features_json" defaultValue={featuresJson} />
+            <TextArea label="Grupos de amenidades (JSON)" name="amenity_groups_json" defaultValue={amenityGroupsJson} />
             <SelectField label="Liberado no site?" name="site_enabled" defaultValue={publication.site_enabled ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
             <SelectField label="Destaque no site?" name="site_featured" defaultValue={publication.site_featured ? "yes" : "no"} options={[["no", "Não"], ["yes", "Sim"]]} />
             <input type="hidden" name="site_banner" value="no" />
@@ -2119,6 +2098,22 @@ function EditPropertyDialog({
               </div>
               {publicationError ? <p className="mt-2 text-xs text-destructive">{publicationError}</p> : null}
               {publicationNotice ? <p className="mt-2 text-xs text-emerald-700">{publicationNotice}</p> : null}
+            </div>
+          </EditSection>
+          <EditSection title="10. Imagens e mídia do imóvel">
+            <div className="md:col-span-2 xl:col-span-4">
+              <p className="mb-2 text-sm text-muted-foreground">
+                A edição usa o mesmo pipeline canônico de mídia do cadastro. Mídias não alteradas são preservadas; você pode adicionar, excluir, reordenar ou definir a capa.
+              </p>
+              <PropertyMediaManager
+                property={mediaProperty}
+                onMediaChanged={setEditableMedia}
+              />
+              <PropertyMediaUpload
+                property={mediaProperty}
+                onUploaded={(media) => setEditableMedia((current) => [media, ...current])}
+                isFirstMedia={!editableMedia.length}
+              />
             </div>
           </EditSection>
         </div>
@@ -2320,6 +2315,7 @@ function PropertyMediaUpload({
 }) {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<PropertyMedia["media_type"]>("photo");
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2335,8 +2331,8 @@ function PropertyMediaUpload({
         mime_type: file.type,
         size_bytes: dataUrlByteLength(content),
         content_base64: content,
-        media_type: file.type.startsWith("video/") ? "video" : "photo",
-        is_cover: isFirstMedia,
+        media_type: mediaType,
+        is_cover: isFirstMedia && mediaType === "photo",
       });
       onUploaded(response.media);
       event.target.value = "";
@@ -2349,10 +2345,18 @@ function PropertyMediaUpload({
 
   return (
     <div className="mt-4 border-t border-border pt-4">
+      <label className="mb-2 block text-xs font-medium text-muted-foreground">
+        Tipo de mídia
+        <select value={mediaType} onChange={(event) => setMediaType(event.target.value as PropertyMedia["media_type"])} className={`${fieldClass} mt-1`}>
+          <option value="photo">Foto</option>
+          <option value="tour">Panorama / tour 360</option>
+          <option value="video">Vídeo MP4</option>
+        </select>
+      </label>
       <label className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-border text-xs font-medium transition hover:bg-accent">
         {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
         {isUploading ? "Enviando..." : "Enviar foto/vídeo"}
-        <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" className="sr-only" disabled={isUploading} onChange={handleFileChange} />
+        <input type="file" accept={mediaType === "video" ? "video/mp4" : "image/jpeg,image/png,image/webp"} className="sr-only" disabled={isUploading} onChange={handleFileChange} />
       </label>
       <p className="mt-1 text-xs text-muted-foreground">Vídeos: limite prático de ~10MB por arquivo enviado. Para vídeos maiores, use o campo de link externo na etapa 8 do cadastro.</p>
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
@@ -2536,6 +2540,7 @@ function buildPropertyReport(property: Property) {
     `Tipo: ${property.property_type}`,
     `Transação: ${property.operation}`,
     `Proprietário: ${property.property_owners?.name || "Não vinculado"}`,
+    `Contato do proprietário: ${property.property_owners?.email || property.property_owners?.phone || "Não informado"}`,
     "",
     "LOCALIZAÇÃO",
     location || "Não informada",
@@ -2579,7 +2584,7 @@ function buildPropertyReport(property: Property) {
     "",
     "MÍDIAS",
     property.property_media?.length
-      ? property.property_media.map((media, index) => `${index + 1}. ${media.media_type} - ${media.caption || media.storage_path || media.url}`).join("\n")
+      ? property.property_media.map((media, index) => `${index + 1}. ${media.media_type}${media.is_cover ? " (capa)" : ""}${media.caption ? ` - ${media.caption}` : ""}`).join("\n")
       : "Nenhum arquivo vinculado.",
   ].join("\n");
 }
@@ -2605,6 +2610,28 @@ function humanizeKey(key: string) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function parseBooleanRecord(value: string, fallback: Record<string, boolean>) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+    return Object.fromEntries(Object.entries(parsed).filter(([, item]) => typeof item === "boolean")) as Record<string, boolean>;
+  } catch {
+    return fallback;
+  }
+}
+
+function parseStringArrayRecord(value: string, fallback: Record<string, string[]>) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, item]) => Array.isArray(item) && item.every((entry) => typeof entry === "string")),
+    ) as Record<string, string[]>;
+  } catch {
+    return fallback;
+  }
+}
+
 function escapeHtml(value: unknown) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -2621,7 +2648,7 @@ function buildPropertyPdfHtml(property: Property) {
   const mediaHtml = (property.property_media ?? [])
     .map((media) =>
       media.media_type === "video"
-        ? `<div class="media-box">Video: ${escapeHtml(media.caption || media.storage_path || media.url)}</div>`
+        ? `<div class="media-box">Vídeo${media.caption ? `: ${escapeHtml(media.caption)}` : ""}</div>`
         : `<img src="${escapeHtml(media.url)}" alt="${escapeHtml(media.caption || property.title)}" />`,
     )
     .join("");

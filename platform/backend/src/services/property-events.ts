@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { env } from "../config/env.js";
+import { supabaseAdmin } from "../lib/supabase.js";
 import { getWhatsAppProvider } from "./whatsapp/index.js";
 import { loadMysqlPublicPropertyByReference, prisma } from "./mysql-real-estate.js";
 
@@ -160,7 +161,7 @@ export async function resolveWhatsAppOwnerNotification(
 // para auditar. Isso evita repetir o erro encontrado na auditoria de
 // 2026-08-31: registrar "owner_notified" quando, na verdade, nenhuma
 // mensagem foi enviada.
-export async function emitPropertyPublishedEvent(companyId: string, propertyId: string) {
+export async function emitPropertyPublishedEvent(companyId: string, propertyId: string, actorUserId?: string | null) {
   try {
     const result = await resolveWhatsAppOwnerNotification(companyId, propertyId);
     if (!result.eligible) {
@@ -171,6 +172,8 @@ export async function emitPropertyPublishedEvent(companyId: string, propertyId: 
         entityId: propertyId,
         metadataJson: { reason: result.reason },
       });
+    } else {
+      await preparePropertyPublishedOwnerNotification(companyId, propertyId, actorUserId ?? null, result);
     }
     return result;
   } catch (error) {
@@ -187,6 +190,66 @@ export async function emitPropertyPublishedEvent(companyId: string, propertyId: 
     }).catch(() => undefined);
     return { eligible: false as const, reason: "ERROR" };
   }
+}
+
+/**
+ * Registra a comunicação canônica como PREPARED/SIMULATED após a publicação.
+ * Nenhum provider externo é chamado aqui: o dispatch/manual-delivery existente
+ * continua sendo a única fronteira que pode marcar uma entrega real. A busca
+ * anterior torna o evento idempotente para retries da publicação.
+ */
+async function preparePropertyPublishedOwnerNotification(
+  companyId: string,
+  propertyId: string,
+  actorUserId: string | null,
+  eligibility: Extract<WhatsAppOwnerNotificationEligibility, { eligible: true }>,
+) {
+  const property = await prisma().property.findFirst({
+    where: { id: propertyId, companyId },
+    select: { owner: { select: { id: true, email: true, whatsapp: true, phone: true } } },
+  });
+  const owner = property?.owner;
+  if (!owner) return;
+
+  const channel = owner.email ? "email" : "whatsapp";
+  const recipientContact = owner.email ?? owner.whatsapp ?? owner.phone ?? eligibility.phone;
+  const metadata = {
+    event: "property.published.owner_notification",
+    delivery_status: "SIMULATED",
+    public_url: eligibility.publicUrl,
+    deeplink_url: eligibility.waUrl,
+  };
+
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("notification_events")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("related_entity_type", "properties")
+    .eq("related_entity_id", propertyId)
+    .eq("recipient_type", "owner")
+    .contains("metadata", { event: metadata.event })
+    .limit(1);
+  if (existingError) throw existingError;
+  if (existing?.length) return;
+
+  const { error } = await supabaseAdmin.from("notification_events").insert({
+    company_id: companyId,
+    channel,
+    direction: "outbound",
+    recipient_type: "owner",
+    recipient_id: owner.id,
+    recipient_name: eligibility.ownerName,
+    recipient_contact: recipientContact,
+    subject: "Imóvel publicado no site",
+    body: eligibility.message,
+    status: "prepared",
+    provider: "simulated",
+    related_entity_type: "properties",
+    related_entity_id: propertyId,
+    metadata,
+    created_by: actorUserId,
+  });
+  if (error) throw error;
 }
 
 // Chamada pela rota POST /properties/:id/whatsapp-link-opened quando o
