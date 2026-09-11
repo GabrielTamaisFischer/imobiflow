@@ -23,6 +23,8 @@ import {
   getMysqlPropertyByExternalId,
   grantMysqlPropertyAccess,
   listMysqlOwnerDocuments,
+  listMysqlOwnerPropertyUpdateRequests,
+  loadMysqlOwnerDashboard,
   listMysqlOwners,
   listMysqlProperties,
   listMysqlPropertyAccess,
@@ -34,6 +36,7 @@ import {
   replaceMysqlPropertyAccess,
   resolvePropertyShareTarget,
   revokeMysqlPropertyAccess,
+  resolveMysqlOwnerPropertyUpdateRequest,
   setMysqlOwnerPortalEnabled,
   setMysqlPropertyMediaCover,
   updateMysqlOwner,
@@ -315,6 +318,47 @@ realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: Re
     const status = typeof req.query.status === "string" ? req.query.status : "active";
     const search = typeof req.query.search === "string" ? req.query.search.slice(0, 120) : undefined;
     res.json({ owners: await listMysqlOwners(companyId, status, search) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.get("/owners/:id/dashboard", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const dashboard = await loadMysqlOwnerDashboard(req.access!.company.id, String(req.params.id));
+    res.json(dashboard);
+  } catch (error) {
+    next(error);
+  }
+});
+
+realEstateRouter.get("/owners/:id/property-update-requests", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const status = typeof req.query.status === "string" && ["PENDING", "APPROVED", "REJECTED"].includes(req.query.status)
+      ? req.query.status as "PENDING" | "APPROVED" | "REJECTED"
+      : undefined;
+    res.json({ requests: await listMysqlOwnerPropertyUpdateRequests({ companyId: req.access!.company.id, ownerId: String(req.params.id), status }) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const ownerPropertyUpdateResolutionSchema = z.object({
+  decision: z.enum(["APPROVED", "REJECTED"]),
+  resolution_note: z.string().trim().max(1000).optional().or(z.literal("")),
+});
+
+realEstateRouter.patch("/owner-property-update-requests/:id", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = ownerPropertyUpdateResolutionSchema.parse(req.body);
+    const request = await resolveMysqlOwnerPropertyUpdateRequest({
+      companyId: req.access!.company.id,
+      requestId: String(req.params.id),
+      actorUserId: req.access!.appUser.id,
+      decision: input.decision,
+      resolutionNote: input.resolution_note,
+    });
+    res.json({ request });
   } catch (error) {
     next(error);
   }

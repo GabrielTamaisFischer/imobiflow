@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import type { Request } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import {
@@ -6,6 +7,8 @@ import {
   loadMysqlOwnerPortalDocumentFile,
   loadMysqlOwnerPortalDocuments,
   loadMysqlOwnerPortalLeadsSummary,
+  ownerPropertyUpdateTypes,
+  requestMysqlOwnerPropertyUpdate,
   touchMysqlOwnerPortalAccess,
 } from "../services/mysql-real-estate.js";
 import { getStorageProviderForName } from "../services/storage/index.js";
@@ -300,6 +303,37 @@ publicPortalsRouter.get("/owners/:token/documents/:documentId", async (req, res,
     // outra coisa (ex.: um PDF malformado sendo tratado como HTML).
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.status(200).send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+const ownerPropertyUpdateSchema = z.object({
+  property_id: z.string().uuid(),
+  type: z.enum(ownerPropertyUpdateTypes),
+  reason: z.string().trim().min(3).max(1000),
+});
+
+publicPortalsRouter.post("/owners/:token/property-updates", async (req, res, next) => {
+  try {
+    const { owner } = await loadMysqlOwnerPortalCore(String(req.params.token ?? ""));
+    const input = ownerPropertyUpdateSchema.parse(req.body);
+    const result = await requestMysqlOwnerPropertyUpdate({
+      tokenOwnerId: owner.id,
+      companyId: owner.companyId,
+      propertyId: input.property_id,
+      type: input.type,
+      reason: input.reason,
+    });
+    res.status(201).json({
+      update: {
+        property_id: input.property_id,
+        type: input.type,
+        reason: input.reason,
+        resulting_status: result.property.status,
+        requires_internal_confirmation: true,
+      },
+    });
   } catch (error) {
     next(error);
   }

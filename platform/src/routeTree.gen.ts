@@ -50,6 +50,7 @@ import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquil
 import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
 import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
+import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
 import { Route as AppSiteBuilderPreviewWebsiteIdRouteImport } from './routes/app.site.builder.preview.$websiteId'
 import { Route as AppSiteBuilderEditorWebsiteIdRouteImport } from './routes/app.site.builder.editor.$websiteId'
@@ -262,6 +263,11 @@ const AppSiteBuilderRoute = AppSiteBuilderRouteImport.update({
   path: '/builder',
   getParentRoute: () => AppSiteRoute,
 } as any)
+const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
+  id: '/$ownerId',
+  path: '/$ownerId',
+  getParentRoute: () => AppProprietariosRoute,
+} as any)
 const SiteSlugImoveisPropertySlugRoute =
   SiteSlugImoveisPropertySlugRouteImport.update({
     id: '/imoveis/$propertySlug',
@@ -322,13 +328,14 @@ export interface FileRoutesByFullPath {
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
   '/app/operacoes': typeof AppOperacoesRoute
-  '/app/proprietarios': typeof AppProprietariosRoute
+  '/app/proprietarios': typeof AppProprietariosRouteWithChildren
   '/app/site': typeof AppSiteRouteWithChildren
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
   '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app/': typeof AppIndexRoute
+  '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -369,12 +376,13 @@ export interface FileRoutesByTo {
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
   '/app/operacoes': typeof AppOperacoesRoute
-  '/app/proprietarios': typeof AppProprietariosRoute
+  '/app/proprietarios': typeof AppProprietariosRouteWithChildren
   '/app/site': typeof AppSiteRouteWithChildren
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
   '/app': typeof AppIndexRoute
+  '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -417,13 +425,14 @@ export interface FileRoutesById {
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
   '/app/operacoes': typeof AppOperacoesRoute
-  '/app/proprietarios': typeof AppProprietariosRoute
+  '/app/proprietarios': typeof AppProprietariosRouteWithChildren
   '/app/site': typeof AppSiteRouteWithChildren
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
   '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app/': typeof AppIndexRoute
+  '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -474,6 +483,7 @@ export interface FileRouteTypes {
     | '/assinar-vistoria/$token'
     | '/site/$slug'
     | '/app/'
+    | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -520,6 +530,7 @@ export interface FileRouteTypes {
     | '/app/vistorias'
     | '/assinar-vistoria/$token'
     | '/app'
+    | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -568,6 +579,7 @@ export interface FileRouteTypes {
     | '/assinar-vistoria/$token'
     | '/site/$slug'
     | '/app/'
+    | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -894,6 +906,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteBuilderRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/app/proprietarios/$ownerId': {
+      id: '/app/proprietarios/$ownerId'
+      path: '/$ownerId'
+      fullPath: '/app/proprietarios/$ownerId'
+      preLoaderRoute: typeof AppProprietariosOwnerIdRouteImport
+      parentRoute: typeof AppProprietariosRoute
+    }
     '/site/$slug/imoveis/$propertySlug': {
       id: '/site/$slug/imoveis/$propertySlug'
       path: '/imoveis/$propertySlug'
@@ -931,6 +950,17 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface AppProprietariosRouteChildren {
+  AppProprietariosOwnerIdRoute: typeof AppProprietariosOwnerIdRoute
+}
+
+const AppProprietariosRouteChildren: AppProprietariosRouteChildren = {
+  AppProprietariosOwnerIdRoute: AppProprietariosOwnerIdRoute,
+}
+
+const AppProprietariosRouteWithChildren =
+  AppProprietariosRoute._addFileChildren(AppProprietariosRouteChildren)
 
 interface AppSiteBuilderEditorWebsiteIdRouteChildren {
   AppSiteBuilderEditorWebsiteIdCodeRoute: typeof AppSiteBuilderEditorWebsiteIdCodeRoute
@@ -1014,7 +1044,7 @@ interface AppRouteChildren {
   AppInteligenciaRoute: typeof AppInteligenciaRoute
   AppNotificacoesRoute: typeof AppNotificacoesRoute
   AppOperacoesRoute: typeof AppOperacoesRoute
-  AppProprietariosRoute: typeof AppProprietariosRoute
+  AppProprietariosRoute: typeof AppProprietariosRouteWithChildren
   AppSiteRoute: typeof AppSiteRouteWithChildren
   AppTestesRoute: typeof AppTestesRoute
   AppVistoriasRoute: typeof AppVistoriasRouteWithChildren
@@ -1034,7 +1064,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppInteligenciaRoute: AppInteligenciaRoute,
   AppNotificacoesRoute: AppNotificacoesRoute,
   AppOperacoesRoute: AppOperacoesRoute,
-  AppProprietariosRoute: AppProprietariosRoute,
+  AppProprietariosRoute: AppProprietariosRouteWithChildren,
   AppSiteRoute: AppSiteRouteWithChildren,
   AppTestesRoute: AppTestesRoute,
   AppVistoriasRoute: AppVistoriasRouteWithChildren,

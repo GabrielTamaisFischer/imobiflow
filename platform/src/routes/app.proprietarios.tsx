@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Building2,
   Copy,
@@ -313,9 +313,9 @@ function OwnerCard({
   onOwnerUpdated: (owner: PropertyOwner) => void;
   onOwnerRemoved: (ownerId: string) => void;
 }) {
+  const navigate = useNavigate();
   const Icon = owner.owner_type === "company" ? Building2 : UserRound;
   const [copied, setCopied] = useState(false);
-  const [isViewing, setIsViewing] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [isTogglingPortal, setIsTogglingPortal] = useState(false);
@@ -474,7 +474,7 @@ function OwnerCard({
         )}
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => setIsViewing(true)} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent">
+        <button type="button" onClick={() => void navigate({ to: "/app/proprietarios/$ownerId", params: { ownerId: owner.id } })} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs font-semibold transition hover:bg-accent">
           <Eye className="h-3.5 w-3.5" />
           Visualizar
         </button>
@@ -598,7 +598,6 @@ function OwnerCard({
           Envie documentos (PDF ou imagem) para ficarem disponíveis ao proprietário no portal.
         </p>
       </div>
-      {isViewing ? <OwnerDetailsModal owner={owner} linkedProperties={linkedProperties} onClose={() => setIsViewing(false)} /> : null}
       {isManagingDocuments ? (
         <OwnerDocumentsModal
           owner={owner}

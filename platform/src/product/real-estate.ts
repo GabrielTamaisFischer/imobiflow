@@ -29,6 +29,74 @@ export type PropertyOwner = {
   updated_at: string;
 };
 
+export type OwnerDashboard = {
+  owner: PropertyOwner;
+  properties: Property[];
+  responsible_users: Array<{ id: string; name: string }>;
+  documents: OwnerDocument[];
+  financial_entries: Array<{
+    id: string;
+    type: string;
+    category: string;
+    amount: string;
+    status: string;
+    due_date: string | null;
+    paid_at: string | null;
+    property_id: string | null;
+    contract_id: string | null;
+    property?: { id: string; code: string | null; title: string } | null;
+    contract?: { id: string; title: string; status: string } | null;
+  }>;
+  appointments: Array<{
+    id: string;
+    property_id: string | null;
+    title: string;
+    appointment_type: string;
+    status: string;
+    starts_at: string;
+    ends_at: string;
+    property?: { id: string; code: string | null; title: string } | null;
+    assignee?: { id: string; name: string } | null;
+  }>;
+  activities: Array<{
+    id: string;
+    action: string;
+    entity_type: string;
+    entity_id: string | null;
+    metadata: Record<string, unknown>;
+    created_at: string;
+    actor_user_id: string | null;
+  }>;
+  counts: {
+    total: number;
+    active: number;
+    archived: number;
+    published: number;
+    pending_payouts: number;
+    paid_payouts: number;
+    open_charges: number;
+  };
+};
+
+export type OwnerPropertyUpdateRequest = {
+  id: string;
+  company_id: string;
+  owner_id: string;
+  property_id: string;
+  type: "VENDEU" | "ALUGOU" | "DESISTIU_DE_VENDER" | "DESISTIU_DE_ALUGAR" | "OUTRO";
+  reason: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  previous_publication_state: Record<string, unknown> | null;
+  requested_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  created_at: string;
+  updated_at: string;
+  property?: { id: string; code: string | null; title: string; status: string };
+  owner?: { id: string; name: string };
+};
+
 export type Property = {
   id: string;
   company_id: string;
@@ -253,6 +321,42 @@ export async function listOwners() {
   });
 
   return { owners: response.owners.filter((owner) => owner.status !== "archived") };
+}
+
+export async function getOwnerDashboard(ownerId: string) {
+  if (isPreviewRealEstate()) {
+    const owner = readPreviewOwners().find((item) => item.id === ownerId);
+    if (!owner) throw new Error("Proprietário não encontrado.");
+    const properties = readPreviewProperties().filter((property) => property.owner_id === ownerId);
+    return {
+      owner,
+      properties,
+      responsible_users: [],
+      documents: readPreviewOwnerDocuments()[ownerId] ?? [],
+      financial_entries: [],
+      appointments: [],
+      activities: [],
+      counts: { total: properties.length, active: properties.filter((property) => !["archived", "inactive"].includes(property.status)).length, archived: properties.filter((property) => property.status === "archived").length, published: properties.filter((property) => Boolean(property.published_at)).length, pending_payouts: 0, paid_payouts: 0, open_charges: 0 },
+    } satisfies OwnerDashboard;
+  }
+  return apiRequest<OwnerDashboard>(`/real-estate/owners/${encodeURIComponent(ownerId)}/dashboard`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function listOwnerPropertyUpdateRequests(ownerId: string, status?: OwnerPropertyUpdateRequest["status"]) {
+  if (isPreviewRealEstate()) return { requests: [] };
+  return apiRequest<{ requests: OwnerPropertyUpdateRequest[] }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/property-update-requests${status ? `?status=${encodeURIComponent(status)}` : ""}`, {
+    token: getStoredToken() ?? undefined,
+  });
+}
+
+export async function resolveOwnerPropertyUpdateRequest(requestId: string, decision: "APPROVED" | "REJECTED", resolutionNote?: string) {
+  return apiRequest<{ request: OwnerPropertyUpdateRequest }>(`/real-estate/owner-property-update-requests/${encodeURIComponent(requestId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ decision, resolution_note: resolutionNote ?? "" }),
+    token: getStoredToken() ?? undefined,
+  });
 }
 
 export async function createOwner(input: OwnerInput) {

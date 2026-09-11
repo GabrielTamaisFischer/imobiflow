@@ -158,6 +158,26 @@ export async function getOwnerPortal(token: string) {
   return apiRequest<OwnerPortalResponse>(`/public/portals/owners/${token}`);
 }
 
+export type OwnerPropertyUpdateType =
+  | "VENDEU"
+  | "ALUGOU"
+  | "DESISTIU_DE_VENDER"
+  | "DESISTIU_DE_ALUGAR"
+  | "OUTRO";
+
+export async function submitOwnerPropertyUpdate(
+  token: string,
+  input: { property_id: string; type: OwnerPropertyUpdateType; reason: string },
+) {
+  if (token === "preview") {
+    return { update: { ...input, requires_internal_confirmation: true } };
+  }
+  return apiRequest<{ update: { property_id: string; type: OwnerPropertyUpdateType; reason: string; requires_internal_confirmation: boolean } }>(
+    `/public/portals/owners/${token}/property-updates`,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 // Fase 4D — link direto (view/download) de um documento do proprietário.
 // Nunca aponta para a secureUrl do provider de storage: sempre para o
 // próprio backend do ImobiFlow, que resolve/valida token+documentId antes de

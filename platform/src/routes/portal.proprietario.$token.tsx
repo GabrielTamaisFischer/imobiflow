@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getOwnerPortal,
   getOwnerPortalDocumentUrl,
+  submitOwnerPropertyUpdate,
+  type OwnerPropertyUpdateType,
   type OwnerPortalResponse,
   type PortalCharge,
   type PortalOwnerDocument,
@@ -46,6 +48,9 @@ function OwnerPortalPage() {
   const [data, setData] = useState<OwnerPortalResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadPortal();
@@ -65,6 +70,28 @@ function OwnerPortalPage() {
       );
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function submitPropertyUpdate(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!data) return;
+    const form = new FormData(event.currentTarget);
+    setUpdateBusy(true);
+    setUpdateMessage(null);
+    setUpdateError(null);
+    try {
+      await submitOwnerPropertyUpdate(token, {
+        property_id: String(form.get("property_id") ?? ""),
+        type: String(form.get("type") ?? "OUTRO") as OwnerPropertyUpdateType,
+        reason: String(form.get("reason") ?? ""),
+      });
+      setUpdateMessage("Solicitação registrada. A imobiliária confirmará a atualização.");
+      event.currentTarget.reset();
+    } catch (cause) {
+      setUpdateError(cause instanceof Error ? cause.message : "Não foi possível registrar a solicitação.");
+    } finally {
+      setUpdateBusy(false);
     }
   }
 
@@ -143,6 +170,16 @@ function OwnerPortalPage() {
                 )}
               </Panel>
             </section>
+
+            <Panel title="Atualizar situação do imóvel">
+              <p className="mb-3 text-sm text-muted-foreground">Envie uma solicitação para a imobiliária revisar a situação do imóvel. A confirmação interna é necessária antes de qualquer alteração operacional.</p>
+              <form onSubmit={submitPropertyUpdate} className="grid gap-3 md:grid-cols-3">
+                <label className="text-sm"><span className="font-medium">Imóvel</span><select name="property_id" required className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"><option value="">Selecione</option>{data.properties.map((property) => <option key={property.id} value={property.id}>{property.code || property.title}</option>)}</select></label>
+                <label className="text-sm"><span className="font-medium">Situação</span><select name="type" required defaultValue="OUTRO" className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3"><option value="VENDEU">Vendeu</option><option value="ALUGOU">Alugou</option><option value="DESISTIU_DE_VENDER">Desistiu de vender</option><option value="DESISTIU_DE_ALUGAR">Desistiu de alugar</option><option value="OUTRO">Outro</option></select></label>
+                <label className="text-sm md:col-span-1"><span className="font-medium">Motivo</span><input name="reason" required minLength={3} className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3" placeholder="Explique brevemente" /></label>
+                <div className="md:col-span-3"><button type="submit" disabled={updateBusy || data.properties.length === 0} className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-60">{updateBusy ? "Enviando..." : "Enviar solicitação"}</button>{updateMessage ? <p className="mt-2 text-sm text-emerald-600">{updateMessage}</p> : null}{updateError ? <p className="mt-2 text-sm text-destructive">{updateError}</p> : null}</div>
+              </form>
+            </Panel>
 
             <Panel title="Documentos">
               {!data.documents || data.documents.length === 0 ? (

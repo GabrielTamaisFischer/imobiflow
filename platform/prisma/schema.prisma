@@ -58,6 +58,7 @@ model Company {
   financialEvents FinancialEntryEvent[]
   proposals       Proposal[]
   proposalEvents  ProposalEvent[]
+  ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
 
   @@index([status])
   @@map("companies")
@@ -111,6 +112,7 @@ model AppUser {
   financialEventsActor FinancialEntryEvent[] @relation("FinancialEntryEventActor")
   createdProposals    Proposal[] @relation("ProposalCreator")
   proposalEvents      ProposalEvent[]
+  resolvedOwnerPropertyUpdates OwnerPropertyUpdateRequest[] @relation("OwnerPropertyUpdateResolver")
 
   @@unique([companyId, email])
   @@index([companyId, status])
@@ -233,6 +235,33 @@ model AuthAuditLog {
   @@index([companyId, createdAt])
   @@index([companyId, entityType, entityId])
   @@map("auth_audit_logs")
+}
+
+model OwnerPropertyUpdateRequest {
+  id                       String       @id @default(uuid()) @db.Char(36)
+  companyId                String       @map("company_id") @db.Char(36)
+  ownerId                  String       @map("owner_id") @db.Char(36)
+  propertyId               String       @map("property_id") @db.Char(36)
+  type                     String       @db.VarChar(40)
+  reason                   String       @db.Text
+  status                   String       @default("PENDING") @db.VarChar(20)
+  previousPublicationState Json?        @map("previous_publication_state")
+  requestedAt              DateTime     @default(now()) @map("requested_at")
+  resolvedAt               DateTime?    @map("resolved_at")
+  resolvedBy               String?      @map("resolved_by") @db.Char(36)
+  resolutionNote           String?      @map("resolution_note") @db.Text
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+  company                  Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  owner                    PropertyOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  property                 Property      @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  resolver                 AppUser?     @relation("OwnerPropertyUpdateResolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, requestedAt])
+  @@index([companyId, ownerId, requestedAt])
+  @@index([companyId, propertyId, status])
+  @@index([resolvedBy])
+  @@map("owner_property_update_requests")
 }
 
 model Subscription {
@@ -381,6 +410,7 @@ model PropertyOwner {
   company             Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   properties          Property[]
   financialEntries    FinancialEntry[]
+  ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
 
   @@index([companyId, status])
   @@index([companyId, document])
@@ -456,6 +486,7 @@ model Property {
   contracts               Contract[]
   financialEntries        FinancialEntry[]
   proposals               Proposal[]
+  ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])

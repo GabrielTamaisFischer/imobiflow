@@ -10,6 +10,8 @@ import {
   findStoredFilesForEntity,
 } from "./storage/stored-files.js";
 import { WATERMARK_POSITIONS, type WatermarkOverlay, type WatermarkPosition } from "./storage/types.js";
+import { listFinancialEntriesForPortal } from "./mysql-finance.js";
+import { supabaseAdmin } from "../lib/supabase.js";
 
 type PropertyInput = Record<string, any>;
 
@@ -173,6 +175,16 @@ export function prisma() {
   return getPrisma();
 }
 
+function ownerPropertyUpdateRequestDelegate(database: any) {
+  return database.ownerPropertyUpdateRequest as {
+    findFirst: (args: any) => Promise<any>;
+    findMany: (args: any) => Promise<any[]>;
+    create: (args: any) => Promise<any>;
+    update: (args: any) => Promise<any>;
+    count: (args: any) => Promise<number>;
+  };
+}
+
 export async function ensurePropertyBelongsToCompany(propertyId: string, companyId: string) {
   const property = await prisma().property.findFirst({
     where: { id: propertyId, companyId },
@@ -232,6 +244,331 @@ export async function listMysqlOwners(companyId: string, status = "active", sear
 
   return owners.map(serializeOwner);
 }
+
+export async function loadMysqlOwnerDashboard(companyId: string, ownerId: string) {
+  const owner = await prisma().propertyOwner.findFirst({
+    where: { id: ownerId, companyId },
+  });
+  if (!owner) throw ownerNotFoundError();
+
+  const properties = await prisma().property.findMany({
+    where: { companyId, ownerId },
+    include: propertyInclude,
+    orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+  });
+  const propertyIds = properties.map((property) => property.id);
+  const [documents, financialEntries, appointments, auditLogs] = await Promise.all([
+    listMysqlOwnerDocuments(companyId, ownerId),
+    listFinancialEntriesForPortal({ companyId, ownerId }),
+    prisma().appointment.findMany({
+      where: { companyId, propertyId: { in: propertyIds.length ? propertyIds : ["__none__"] } },
+      include: {
+        property: { select: { id: true, code: true, title: true } },
+        assignee: { select: { id: true, name: true } },
+      },
+      orderBy: { startsAt: "asc" },
+      take: 100,
+    }),
+    prisma().authAuditLog.findMany({
+      where: {
+        companyId,
+        OR: [
+          { entityType: "property_owner", entityId: ownerId },
+          ...(propertyIds.length ? [{ entityType: "property", entityId: { in: propertyIds } }] : []),
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    }),
+  ]);
+
+  const responsibleUsers = Array.from(
+    new Map(
+      properties
+        .map((property) => property.responsibleUser)
+        .filter((user): user is { id: string; name: string } => Boolean(user))
+        .map((user) => [user.id, user]),
+    ).values(),
+  );
+
+  return {
+    owner: serializeOwner(owner),
+    properties: properties.map(serializeProperty),
+    responsible_users: responsibleUsers,
+    documents,
+    financial_entries: financialEntries,
+    appointments: appointments.map((appointment: any) => ({
+      id: appointment.id,
+      property_id: appointment.propertyId,
+      title: appointment.title,
+      appointment_type: appointment.appointmentType,
+      status: appointment.status,
+      starts_at: appointment.startsAt.toISOString(),
+      ends_at: appointment.endsAt.toISOString(),
+      property: appointment.property,
+      assignee: appointment.assignee,
+    })),
+    activities: auditLogs.map((event: any) => ({
+      id: event.id,
+      action: event.action,
+      entity_type: event.entityType,
+      entity_id: event.entityId,
+      metadata: event.metadataJson ?? {},
+      created_at: event.createdAt.toISOString(),
+      actor_user_id: event.actorUserId,
+    })),
+    counts: {
+      total: properties.length,
+      active: properties.filter((property) => !["archived", "inactive"].includes(property.status)).length,
+      archived: properties.filter((property) => property.status === "archived").length,
+      published: properties.filter((property) => Boolean(property.publishedAt) && !["archived", "inactive"].includes(property.status)).length,
+      pending_payouts: financialEntries.filter((entry) => entry.type === "payable" && entry.status !== "paid").length,
+      paid_payouts: financialEntries.filter((entry) => entry.type === "payable" && entry.status === "paid").length,
+      open_charges: financialEntries.filter((entry) => entry.type === "receivable" && entry.status !== "paid").length,
+    },
+  };
+}
+
+const ownerPropertyUpdateTypes = ["VENDEU", "ALUGOU", "DESISTIU_DE_VENDER", "DESISTIU_DE_ALUGAR", "OUTRO"] as const;
+export type OwnerPropertyUpdateType = (typeof ownerPropertyUpdateTypes)[number];
+export type OwnerPropertyUpdateStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export function propertyStatusForOwnerUpdate(type: OwnerPropertyUpdateType) {
+  if (type === "VENDEU") return { status: "sold", unpublish: true } as const;
+  if (type === "ALUGOU") return { status: "rented", unpublish: true } as const;
+  if (type === "DESISTIU_DE_VENDER" || type === "DESISTIU_DE_ALUGAR") return { status: "inactive", unpublish: true } as const;
+  return { status: null, unpublish: false } as const;
+}
+
+export async function requestMysqlOwnerPropertyUpdate(input: {
+  tokenOwnerId: string;
+  companyId: string;
+  propertyId: string;
+  type: OwnerPropertyUpdateType;
+  reason: string;
+}) {
+  const reason = input.reason.trim();
+  if (reason.length < 3) throw Object.assign(new Error("Informe o motivo da atualização."), { statusCode: 422, code: "OWNER_PROPERTY_UPDATE_REASON_REQUIRED" });
+  const result = await prisma().$transaction(async (tx: any) => {
+    const property = await tx.property.findFirst({
+      where: { id: input.propertyId, companyId: input.companyId, ownerId: input.tokenOwnerId },
+      select: {
+        id: true,
+        title: true,
+        code: true,
+        status: true,
+        publishedAt: true,
+        siteFeatured: true,
+        publicationSettingsJson: true,
+        responsibleUserId: true,
+      },
+    });
+    if (!property) throw Object.assign(new Error("Imóvel não encontrado para este proprietário."), { statusCode: 404, code: "OWNER_PROPERTY_NOT_FOUND" });
+    const pending = await ownerPropertyUpdateRequestDelegate(tx).findFirst({
+      where: { companyId: input.companyId, propertyId: property.id, type: input.type, status: "PENDING" },
+      orderBy: { requestedAt: "desc" },
+    });
+    if (pending) return { request: pending, property, created: false };
+
+    const outcome = propertyStatusForOwnerUpdate(input.type);
+    const previousPublicationState = {
+      status: property.status,
+      published_at: property.publishedAt?.toISOString() ?? null,
+      site_featured: property.siteFeatured,
+      publication_settings_json: property.publicationSettingsJson,
+      resulting_status: outcome.status ?? property.status,
+    };
+    if (outcome.unpublish) {
+      await tx.property.update({
+        where: { id: property.id },
+        data: { status: outcome.status, publishedAt: null, siteFeatured: false },
+      });
+    }
+    const request = await ownerPropertyUpdateRequestDelegate(tx).create({
+      data: {
+        companyId: input.companyId,
+        ownerId: input.tokenOwnerId,
+        propertyId: property.id,
+        type: input.type,
+        reason,
+        status: "PENDING",
+        previousPublicationState,
+      },
+    });
+    await tx.authAuditLog.create({
+      data: {
+        companyId: input.companyId,
+        actorUserId: null,
+        action: "owner.property_update.requested",
+        entityType: "property",
+        entityId: property.id,
+        metadataJson: {
+          owner_id: input.tokenOwnerId,
+          type: input.type,
+          reason,
+          previous_status: property.status,
+          resulting_status: outcome.status ?? property.status,
+          request_id: request.id,
+          requires_internal_confirmation: true,
+        },
+      },
+    });
+    return { request, property: outcome.unpublish ? { ...property, status: outcome.status, publishedAt: null, siteFeatured: false } : property, created: true };
+  });
+  if (result.created) {
+    await recordOwnerPropertyUpdateNotification({
+      companyId: input.companyId,
+      requestId: result.request.id,
+      propertyId: result.property.id,
+      ownerId: input.tokenOwnerId,
+      type: input.type,
+      status: "PENDING",
+    });
+  }
+  return { request: serializeOwnerPropertyUpdateRequest(result.request), property: result.property, responsibleUserId: result.property.responsibleUserId };
+}
+
+function serializeOwnerPropertyUpdateRequest(request: any) {
+  return {
+    id: request.id,
+    company_id: request.companyId,
+    owner_id: request.ownerId,
+    property_id: request.propertyId,
+    type: request.type,
+    reason: request.reason,
+    status: request.status as OwnerPropertyUpdateStatus,
+    previous_publication_state: request.previousPublicationState ?? null,
+    requested_at: request.requestedAt.toISOString(),
+    resolved_at: request.resolvedAt?.toISOString() ?? null,
+    resolved_by: request.resolvedBy ?? null,
+    resolution_note: request.resolutionNote ?? null,
+    created_at: request.createdAt.toISOString(),
+    updated_at: request.updatedAt.toISOString(),
+    property: request.property ? { id: request.property.id, code: request.property.code, title: request.property.title, status: request.property.status } : undefined,
+    owner: request.owner ? { id: request.owner.id, name: request.owner.name } : undefined,
+  };
+}
+
+export async function listMysqlOwnerPropertyUpdateRequests(input: { companyId: string; ownerId?: string; status?: OwnerPropertyUpdateStatus }) {
+  const requests = await ownerPropertyUpdateRequestDelegate(prisma()).findMany({
+    where: {
+      companyId: input.companyId,
+      ...(input.ownerId ? { ownerId: input.ownerId } : {}),
+      ...(input.status ? { status: input.status } : {}),
+    },
+    include: {
+      property: { select: { id: true, code: true, title: true, status: true } },
+      owner: { select: { id: true, name: true } },
+    },
+    orderBy: { requestedAt: "desc" },
+    take: 200,
+  });
+  return requests.map(serializeOwnerPropertyUpdateRequest);
+}
+
+export async function resolveMysqlOwnerPropertyUpdateRequest(input: {
+  companyId: string;
+  requestId: string;
+  actorUserId: string;
+  decision: Exclude<OwnerPropertyUpdateStatus, "PENDING">;
+  resolutionNote?: string;
+}) {
+  const note = input.resolutionNote?.trim() ?? "";
+  if (input.decision === "REJECTED" && note.length < 3) {
+    throw Object.assign(new Error("Informe o motivo da rejeição."), { statusCode: 422, code: "OWNER_PROPERTY_UPDATE_REJECTION_NOTE_REQUIRED" });
+  }
+  const result = await prisma().$transaction(async (tx: any) => {
+    const request = await ownerPropertyUpdateRequestDelegate(tx).findFirst({
+      where: { id: input.requestId, companyId: input.companyId },
+      include: { property: true, owner: { select: { id: true, name: true } } },
+    });
+    if (!request) throw Object.assign(new Error("Solicitação não encontrada."), { statusCode: 404, code: "OWNER_PROPERTY_UPDATE_NOT_FOUND" });
+    if (request.status !== "PENDING") {
+      throw Object.assign(new Error("Solicitação já resolvida."), { statusCode: 409, code: "OWNER_PROPERTY_UPDATE_ALREADY_RESOLVED" });
+    }
+    let property = request.property;
+    if (input.decision === "REJECTED" && request.previousPublicationState && typeof request.previousPublicationState === "object") {
+      const previous = request.previousPublicationState as Record<string, any>;
+      const otherPending = await ownerPropertyUpdateRequestDelegate(tx).count({
+        where: { companyId: input.companyId, propertyId: request.propertyId, status: "PENDING", id: { not: request.id } },
+      });
+      if (otherPending === 0) {
+        property = await tx.property.update({
+          where: { id: request.propertyId },
+          data: {
+            status: String(previous.status ?? property.status),
+            publishedAt: previous.published_at ? new Date(String(previous.published_at)) : null,
+            siteFeatured: Boolean(previous.site_featured),
+            ...(previous.publication_settings_json !== undefined ? { publicationSettingsJson: previous.publication_settings_json } : {}),
+          },
+        });
+      }
+    } else if (input.decision === "APPROVED") {
+      const resultingStatus = (request.previousPublicationState as Record<string, any> | null)?.resulting_status;
+      if (resultingStatus && property.status !== resultingStatus) {
+        property = await tx.property.update({ where: { id: request.propertyId }, data: { status: String(resultingStatus), publishedAt: null, siteFeatured: false } });
+      }
+    }
+    const resolved = await ownerPropertyUpdateRequestDelegate(tx).update({
+      where: { id: request.id },
+      data: { status: input.decision, resolvedAt: new Date(), resolvedBy: input.actorUserId, resolutionNote: note || null },
+      include: { property: { select: { id: true, code: true, title: true, status: true } }, owner: { select: { id: true, name: true } } },
+    });
+    await tx.authAuditLog.create({
+      data: {
+        companyId: input.companyId,
+        actorUserId: input.actorUserId,
+        action: `owner.property_update.${input.decision.toLowerCase()}`,
+        entityType: "owner_property_update_request",
+        entityId: request.id,
+        metadataJson: { request_id: request.id, property_id: request.propertyId, decision: input.decision, resolution_note: note || null },
+      },
+    });
+    return resolved;
+  });
+  await recordOwnerPropertyUpdateNotification({
+    companyId: input.companyId,
+    requestId: result.id,
+    propertyId: result.propertyId,
+    ownerId: result.ownerId,
+    type: result.type,
+    status: input.decision,
+  });
+  return serializeOwnerPropertyUpdateRequest(result);
+}
+
+async function recordOwnerPropertyUpdateNotification(input: { companyId: string; requestId: string; propertyId: string; ownerId: string; type: string; status: OwnerPropertyUpdateStatus }) {
+  const metadata = { event: "owner.property_update", request_id: input.requestId, property_id: input.propertyId, owner_id: input.ownerId, type: input.type, status: input.status };
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("notification_events")
+    .select("id")
+    .eq("company_id", input.companyId)
+    .eq("related_entity_type", "owner_property_update_request")
+    .eq("related_entity_id", input.requestId)
+    .contains("metadata", { status: input.status })
+    .limit(1);
+  if (existingError) throw existingError;
+  if (existing?.length) return;
+  const { error } = await supabaseAdmin.from("notification_events").insert({
+    company_id: input.companyId,
+    channel: "system",
+    direction: "outbound",
+    recipient_type: "company",
+    recipient_id: input.companyId,
+    recipient_name: "Equipe interna",
+    recipient_contact: `company:${input.companyId}`,
+    subject: "Atualização de imóvel solicitada pelo proprietário",
+    body: `Solicitação ${input.type} para o imóvel ${input.propertyId} (${input.status}).`,
+    status: "prepared",
+    provider: "internal",
+    related_entity_type: "owner_property_update_request",
+    related_entity_id: input.requestId,
+    metadata,
+  });
+  if (error) throw error;
+}
+
+export { ownerPropertyUpdateTypes };
 
 export async function createMysqlOwner(companyId: string, userId: string, input: PropertyInput) {
   const document = await ensureOwnerDocumentAvailable(companyId, input.document);
