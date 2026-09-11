@@ -819,7 +819,6 @@ export function PropertyWizard({
     // rota de publicação real usada na edição — POST /site/properties/:id/
     // publish — nunca um status fictício). Detectado via SubmitEvent.
     // submitter (padrão da spec de forms), não por heurística de clique.
-    if (!formElement.reportValidity()) return;
     pendingIntentRef.current = null;
     setIsSaving(true);
     setError(null);
