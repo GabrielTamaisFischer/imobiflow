@@ -68,6 +68,39 @@ import { ResourceOwnershipBadge, ResourceShareDialog } from "@/components/app/re
 
 type CurrentAppUser = NonNullable<AccessResponse["access"]["appUser"]>;
 
+// full-page-imoveis (2026-09-11): pure helper (exported for unit tests) that
+// parses /app/imoveis search params. `notice` foi adicionado para permitir
+// que as novas rotas full-page /app/imoveis/novo e /app/imoveis/:id/editar
+// entreguem uma mensagem de sucesso/erro pós-navegação (ver PropertiesPage,
+// useEffect que consome pageNotice) sem depender de router/location state
+// (que não sobrevive a um refresh) — a própria URL carrega o aviso.
+export function parsePropertiesSearch(search: Record<string, unknown>): { focusPropertyId?: string; notice?: string } {
+  return {
+    ...(typeof search.focusPropertyId === "string" ? { focusPropertyId: search.focusPropertyId } : {}),
+    ...(typeof search.notice === "string" ? { notice: search.notice } : {}),
+  };
+}
+
+export type SubmitIntent = "draft" | "save" | "publish";
+
+// P2 (2026-09-11): pure helper (exported for unit tests) that mirrors the
+// intent-detection used in PropertyWizard's handleSubmit — the primary
+// source is `SubmitEvent.submitter.value` (correct per the forms spec, no
+// heuristics), but a null/unrecognized submitter falls back to
+// `pendingIntent` (a ref set by each submit button's onMouseDown) instead
+// of silently defaulting straight to "save", which used to make a
+// "Salvar e publicar" click look like it did nothing whenever submitter
+// came back null.
+export function resolveSubmitIntent(
+  submitterValue: string | null | undefined,
+  pendingIntent: SubmitIntent | null,
+): SubmitIntent {
+  if (submitterValue === "draft" || submitterValue === "save" || submitterValue === "publish") {
+    return submitterValue;
+  }
+  return pendingIntent ?? "save";
+}
+
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
   // AJUSTE-FUNCIONAL-03 (2026-09-11): permite abrir o dossiê (somente
@@ -75,9 +108,7 @@ export const Route = createFileRoute("/app/imoveis")({
   // por id — reaproveita o mesmo diálogo "report" que o botão Visualizar já
   // abre. Usado pela Ficha do proprietário (Abrir imóvel) para apontar para
   // o imóvel exato em vez do módulo genérico.
-  validateSearch: (search: Record<string, unknown>): { focusPropertyId?: string } => ({
-    ...(typeof search.focusPropertyId === "string" ? { focusPropertyId: search.focusPropertyId } : {}),
-  }),
+  validateSearch: parsePropertiesSearch,
 });
 
 const propertyTypeOptions = [
@@ -240,7 +271,7 @@ function PropertiesPage() {
   // carregamos o imóvel direto por id (mesma getProperty usada pelo card) e
   // reaproveitamos o mesmo PropertyReportModal (dossiê somente leitura) que
   // o botão "Visualizar" de cada card já abre.
-  const { focusPropertyId } = Route.useSearch();
+  const { focusPropertyId, notice: noticeFromUrl } = Route.useSearch();
   const [focusedProperty, setFocusedProperty] = useState<Property | null>(null);
   const [focusError, setFocusError] = useState<string | null>(null);
   useEffect(() => {
@@ -266,7 +297,6 @@ function PropertiesPage() {
   const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [isPropertiesLoading, setIsPropertiesLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
   const [propertySearch, setPropertySearch] = useState("");
   const deferredPropertySearch = useDeferredValue(propertySearch);
   const [propertyPage, setPropertyPage] = useState(1);
@@ -286,6 +316,24 @@ function PropertiesPage() {
   const [pageNotice, setPageNotice] = useState<string | null>(null);
   const [siteSlug, setSiteSlug] = useState<string | null>(null);
   const [appUsers, setAppUsers] = useState<AppUserSummary[]>([]);
+
+  // full-page-imoveis (2026-09-11): /app/imoveis/novo e /app/imoveis/:id/
+  // editar navegam de volta para cá com ?notice=... após salvar/publicar —
+  // é assim que o feedback de sucesso/erro chega até o usuário depois do
+  // full-page reload (nunca via router/location state, que some num
+  // refresh). Consome o aviso e IMEDIATAMENTE limpa o parâmetro da URL
+  // (replace, mantendo focusPropertyId se houver) para que um F5 não repita
+  // o mesmo aviso indefinidamente.
+  useEffect(() => {
+    if (!noticeFromUrl) return;
+    setPageNotice(noticeFromUrl);
+    void navigate({
+      to: "/app/imoveis",
+      search: focusPropertyId ? { focusPropertyId } : {},
+      replace: true,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noticeFromUrl]);
 
   useEffect(() => {
     // B4 (Fase B): lista de usuários da empresa para o seletor de "corretor
@@ -396,7 +444,7 @@ function PropertiesPage() {
         </div>
         <button
           type="button"
-          onClick={() => setShowForm((current) => !current)}
+          onClick={() => void navigate({ to: "/app/imoveis/novo" })}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"
         >
           <Plus className="h-4 w-4" />
@@ -408,24 +456,6 @@ function PropertiesPage() {
         <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
           Modo visualização ativo: imóveis criados aqui ficam apenas neste navegador.
         </div>
-      ) : null}
-
-      {showForm ? (
-        <PropertyWizard
-          mode="create"
-          owners={owners}
-          appUsers={appUsers}
-          currentUserId={session?.access.appUser?.id}
-          canCreateOwner={canCreateOwner}
-          onCancel={() => setShowForm(false)}
-          onCreated={(_property, owner, notice) => {
-            if (owner) setOwners((current) => [owner, ...current]);
-            setPropertyPage(1);
-            reloadProperties();
-            setShowForm(false);
-            setPageNotice(notice ?? null);
-          }}
-        />
       ) : null}
 
       {pageNotice ? (
@@ -495,7 +525,7 @@ function PropertiesPage() {
           title="Nenhum imóvel cadastrado"
           description="Cadastre imóveis reais para alimentar CRM, vistorias, contratos, publicação e financeiro."
           actionLabel="Cadastrar imóvel"
-          onAction={() => setShowForm(true)}
+          onAction={() => void navigate({ to: "/app/imoveis/novo" })}
         />
       ) : properties.length === 0 ? (
         <EmptyState
@@ -585,7 +615,12 @@ function FilterSelect({
   );
 }
 
-function PropertyWizard({
+// full-page-imoveis (2026-09-11): exportado para ser reaproveitado, sem
+// duplicação, pelas rotas full-page /app/imoveis/novo e
+// /app/imoveis/:id/editar (ver app.imoveis.novo.tsx e
+// app.imoveis.$propertyId.editar.tsx) — continua sendo o ÚNICO componente
+// de wizard de imóvel do produto, só variando via `mode`.
+export function PropertyWizard({
   mode,
   property,
   owners,
@@ -612,6 +647,17 @@ function PropertyWizard({
 }) {
   const isEdit = mode === "edit";
   const formRef = useRef<HTMLFormElement>(null);
+  // P2 (2026-09-11): `SubmitEvent.submitter` é o caminho padrão e correto
+  // para saber qual botão disparou o submit (comentário original abaixo, em
+  // handleSubmit), mas não é garantido em 100% dos ambientes/navegadores
+  // (ex.: alguns fluxos de auto-submit/teste não populam `submitter`). Sem
+  // fallback, esse caso caía silenciosamente em "save" — se fosse o clique
+  // em "Salvar e publicar", a publicação simplesmente não acontecia e nada
+  // no fluxo indicava o motivo (o botão "não fazia nada" na percepção do
+  // usuário). Este ref é preenchido no onClick/onMouseDown de cada botão de
+  // submit e serve só como rede de segurança quando submitter vier nulo —
+  // nunca substitui submitter quando ele existe.
+  const pendingIntentRef = useRef<"draft" | "save" | "publish" | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedOwnerId, setSelectedOwnerId] = useState(property?.owner_id ?? "");
@@ -775,7 +821,8 @@ function PropertyWizard({
     // publish — nunca um status fictício). Detectado via SubmitEvent.
     // submitter (padrão da spec de forms), não por heurística de clique.
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-    const intent = (submitter?.value as "draft" | "save" | "publish" | undefined) ?? "save";
+    const intent = resolveSubmitIntent(submitter?.value, pendingIntentRef.current);
+    pendingIntentRef.current = null;
     setIsSaving(true);
     setError(null);
 
@@ -899,7 +946,13 @@ function PropertyWizard({
         setFormOperation(normalizeOperation(text(form, "operation")));
         setPricePreview(calculateCommercialPrices(form));
       }}
-      className={isEdit ? "max-h-[90vh] w-full max-w-5xl overflow-auto rounded-lg border border-border bg-card p-5 shadow-xl" : "mb-4 rounded-lg border border-border bg-card p-4"}
+      // full-page-imoveis (2026-09-11): antes só o modo "create" era
+      // desenhado como um bloco de página normal; "edit" carregava estilo
+      // de modal (max-h/overflow/shadow) porque era montado como diálogo
+      // sobreposto ao card. Agora as duas rotas que montam este wizard
+      // (/app/imoveis/novo e /app/imoveis/:id/editar) são páginas cheias —
+      // o mesmo estilo de bloco serve para os dois modos.
+      className="mb-4 rounded-lg border border-border bg-card p-4"
     >
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
@@ -1276,6 +1329,7 @@ function PropertyWizard({
             type="submit"
             name={!isEdit ? "intent" : undefined}
             value={!isEdit ? "draft" : undefined}
+            onMouseDown={() => { pendingIntentRef.current = "draft"; }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -1286,6 +1340,7 @@ function PropertyWizard({
             type="submit"
             name="intent"
             value="save"
+            onMouseDown={() => { pendingIntentRef.current = "save"; }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -1296,6 +1351,7 @@ function PropertyWizard({
             type="submit"
             name="intent"
             value="publish"
+            onMouseDown={() => { pendingIntentRef.current = "publish"; }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -1599,8 +1655,8 @@ function PropertyCard({
   const salePrice = formatCurrency(property.sale_price_cents);
   const rentPrice = formatCurrency(property.rent_price_cents);
   const coverMedia = getPropertyCoverMedia(property);
+  const navigate = useNavigate();
   const [isReportOpen, setIsReportOpen] = useState(false);
-  const [isEditOpen, setIsEditOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [detailProperty, setDetailProperty] = useState<Property | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1614,14 +1670,18 @@ function PropertyCard({
     isAdministrative: isAdministrative(currentUser),
   });
 
-  async function openProperty(mode: "report" | "edit") {
+  // full-page-imoveis (2026-09-11): só existe mais o modo "report" aqui —
+  // "editar" agora navega para /app/imoveis/:id/editar (rota full-page
+  // dedicada, ver app.imoveis.$propertyId.editar.tsx), que busca o imóvel
+  // por id sozinha. Não faz mais sentido pré-carregar o imóvel aqui só para
+  // jogar fora e buscar de novo na rota de destino.
+  async function openProperty(mode: "report") {
     setIsActionLoading(true);
     setActionError(null);
     try {
       const response = await getProperty(property.id);
       setDetailProperty(response.property);
       if (mode === "report") setIsReportOpen(true);
-      else setIsEditOpen(true);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Não foi possível carregar o imóvel.");
     } finally {
@@ -1736,7 +1796,12 @@ function PropertyCard({
       </div>
       <div className="mt-4 grid grid-cols-2 gap-2">
         <ActionButton icon={Eye} label="Visualizar" onClick={() => void openProperty("report")} disabled={isActionLoading} />
-        <ActionButton icon={Pencil} label="Editar" onClick={() => void openProperty("edit")} disabled={isActionLoading} />
+        <ActionButton
+          icon={Pencil}
+          label="Editar"
+          onClick={() => void navigate({ to: "/app/imoveis/$propertyId/editar", params: { propertyId: property.id } })}
+          disabled={isActionLoading}
+        />
         <ActionButton
           icon={FileText}
           label={property.status === "available" ? "Desativar" : "Ativar"}
@@ -1771,30 +1836,6 @@ function PropertyCard({
         <PropertyReportModal
           property={detailProperty}
           onClose={() => setIsReportOpen(false)}
-        />
-      ) : null}
-      {isEditOpen && detailProperty ? (
-        <PropertyWizard
-          mode="edit"
-          property={detailProperty}
-          owners={owners}
-          siteSlug={siteSlug}
-          appUsers={appUsers}
-          currentUserId={currentUser?.id}
-          canCreateOwner={canCreateOwner}
-          onCancel={() => setIsEditOpen(false)}
-          onUpdated={(updated) => {
-            setDetailProperty(updated);
-            onPropertyUpdated(updated);
-            setIsEditOpen(false);
-          }}
-          onPublicationChanged={(updated) => {
-            // Publicar/despublicar é uma ação dedicada (B1): atualiza o estado
-            // local e o card, mas não fecha o diálogo de edição nem passa por
-            // handleEditSubmit — nunca é um efeito colateral de "Salvar edição".
-            setDetailProperty(updated);
-            onPropertyUpdated(updated);
-          }}
         />
       ) : null}
       {isShareOpen ? (

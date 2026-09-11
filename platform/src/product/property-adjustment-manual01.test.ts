@@ -7,14 +7,27 @@ async function source(path: string) {
 
 describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
   it("usa literalmente o mesmo PropertyWizard para criar e editar", async () => {
+    // full-page-imoveis (2026-09-11): o PropertyWizard continua sendo o
+    // único componente de wizard (definido em app.imoveis.tsx, exportado),
+    // mas quem o MONTA em cada modo agora são as rotas full-page dedicadas
+    // (/app/imoveis/novo e /app/imoveis/:id/editar) em vez de blocos
+    // inline dentro de app.imoveis.tsx — ver AGENT HANDOFF, tarefa
+    // "full-page create/edit de Imóveis". As asserções abaixo foram
+    // atualizadas para apontar para onde cada coisa realmente está agora,
+    // preservando a mesma garantia original: mode="create" e mode="edit"
+    // literalmente montam o MESMO PropertyWizard exportado, não uma cópia.
     const route = await source("../routes/app.imoveis.tsx");
-    expect(route).toContain("function PropertyWizard({");
+    const novo = await source("../routes/app.imoveis.novo.tsx");
+    const editar = await source("../routes/app.imoveis.$propertyId.editar.tsx");
+    expect(route).toContain("export function PropertyWizard({");
     expect(route).toContain('mode: "create" | "edit"');
-    expect(route).toContain('mode="create"');
-    expect(route).toContain('mode="edit"');
     expect(route).not.toContain("function EditPropertyDialog");
     expect(route).toContain("populatePropertyWizardForm(formRef.current, property)");
     expect(route).toContain("Mídias não alteradas são preservadas");
+    expect(novo).toContain('import { PropertyWizard } from "./app.imoveis"');
+    expect(novo).toContain('mode="create"');
+    expect(editar).toContain('import { PropertyWizard } from "./app.imoveis"');
+    expect(editar).toContain('mode="edit"');
     for (const step of [
       "Proprietário",
       "Localização",
@@ -35,6 +48,8 @@ describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
 
   it("preserva campos existentes e integra a etapa única de mídia em create/edit", async () => {
     const route = await source("../routes/app.imoveis.tsx");
+    const novo = await source("../routes/app.imoveis.novo.tsx");
+    const editar = await source("../routes/app.imoveis.$propertyId.editar.tsx");
     expect(route).toContain("10. Imagens");
     expect(route).toContain("<PropertyMediaManager");
     expect(route).toContain("<PropertyMediaUpload");
@@ -44,8 +59,14 @@ describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
     expect(route).toContain("initialItems={isEdit && property");
     expect(route).toContain("const [customItems, setCustomItems] = useState<string[]>(() => initialItems.filter");
     expect(route).toContain('property?.description ?? ""');
-    expect(route).toContain("currentUserId={currentUser?.id}");
-    expect(route).toContain("canCreateOwner={canCreateOwner}");
+    // currentUserId e canCreateOwner são resolvidos pelas próprias rotas
+    // full-page (cada uma carrega sua sessão/permissões) e passados ao
+    // PropertyWizard compartilhado — não mais montados inline dentro de
+    // app.imoveis.tsx.
+    expect(novo).toContain("currentUserId={session?.access.appUser?.id}");
+    expect(novo).toContain("canCreateOwner={canCreateOwner}");
+    expect(editar).toContain("currentUserId={session?.access.appUser?.id}");
+    expect(editar).toContain("canCreateOwner={canCreateOwner}");
     expect(route).toContain('status: !isEdit && intent === "draft"');
     expect(route).toContain('name={!isEdit ? "intent" : undefined}');
   });
