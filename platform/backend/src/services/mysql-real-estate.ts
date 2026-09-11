@@ -423,6 +423,7 @@ export async function requestMysqlOwnerPropertyUpdate(input: {
       ownerId: input.tokenOwnerId,
       type: input.type,
       status: "PENDING",
+      responsibleUserId: result.property.responsibleUserId ?? null,
     });
   }
   return { request: serializeOwnerPropertyUpdateRequest(result.request), property: result.property, responsibleUserId: result.property.responsibleUserId };
@@ -486,6 +487,7 @@ export async function resolveMysqlOwnerPropertyUpdateRequest(input: {
     if (request.status !== "PENDING") {
       throw Object.assign(new Error("Solicitação já resolvida."), { statusCode: 409, code: "OWNER_PROPERTY_UPDATE_ALREADY_RESOLVED" });
     }
+    const responsibleUserId: string | null = request.property?.responsibleUserId ?? null;
     let property = request.property;
     if (input.decision === "REJECTED" && request.previousPublicationState && typeof request.previousPublicationState === "object") {
       const previous = request.previousPublicationState as Record<string, any>;
@@ -524,20 +526,21 @@ export async function resolveMysqlOwnerPropertyUpdateRequest(input: {
         metadataJson: { request_id: request.id, property_id: request.propertyId, decision: input.decision, resolution_note: note || null },
       },
     });
-    return resolved;
+    return { resolved, responsibleUserId };
   });
   await recordOwnerPropertyUpdateNotification({
     companyId: input.companyId,
-    requestId: result.id,
-    propertyId: result.propertyId,
-    ownerId: result.ownerId,
-    type: result.type,
+    requestId: result.resolved.id,
+    propertyId: result.resolved.propertyId,
+    ownerId: result.resolved.ownerId,
+    type: result.resolved.type,
     status: input.decision,
+    responsibleUserId: result.responsibleUserId,
   });
-  return serializeOwnerPropertyUpdateRequest(result);
+  return serializeOwnerPropertyUpdateRequest(result.resolved);
 }
 
-async function recordOwnerPropertyUpdateNotification(input: { companyId: string; requestId: string; propertyId: string; ownerId: string; type: string; status: OwnerPropertyUpdateStatus }) {
+async function recordOwnerPropertyUpdateNotification(input: { companyId: string; requestId: string; propertyId: string; ownerId: string; type: string; status: OwnerPropertyUpdateStatus; responsibleUserId?: string | null }) {
   const metadata = { event: "owner.property_update", request_id: input.requestId, property_id: input.propertyId, owner_id: input.ownerId, type: input.type, status: input.status };
   const { data: existing, error: existingError } = await supabaseAdmin
     .from("notification_events")
@@ -548,24 +551,64 @@ async function recordOwnerPropertyUpdateNotification(input: { companyId: string;
     .contains("metadata", { status: input.status })
     .limit(1);
   if (existingError) throw existingError;
-  if (existing?.length) return;
-  const { error } = await supabaseAdmin.from("notification_events").insert({
-    company_id: input.companyId,
-    channel: "system",
-    direction: "outbound",
-    recipient_type: "company",
-    recipient_id: input.companyId,
-    recipient_name: "Equipe interna",
-    recipient_contact: `company:${input.companyId}`,
-    subject: "Atualização de imóvel solicitada pelo proprietário",
-    body: `Solicitação ${input.type} para o imóvel ${input.propertyId} (${input.status}).`,
-    status: "prepared",
-    provider: "internal",
-    related_entity_type: "owner_property_update_request",
-    related_entity_id: input.requestId,
-    metadata,
-  });
-  if (error) throw error;
+  if (!existing?.length) {
+    const { error } = await supabaseAdmin.from("notification_events").insert({
+      company_id: input.companyId,
+      channel: "system",
+      direction: "outbound",
+      recipient_type: "company",
+      recipient_id: input.companyId,
+      recipient_name: "Equipe interna",
+      recipient_contact: `company:${input.companyId}`,
+      subject: "Atualização de imóvel solicitada pelo proprietário",
+      body: `Solicitação ${input.type} para o imóvel ${input.propertyId} (${input.status}).`,
+      status: "prepared",
+      provider: "internal",
+      related_entity_type: "owner_property_update_request",
+      related_entity_id: input.requestId,
+      metadata,
+    });
+    if (error) throw error;
+  }
+
+  // AJUSTE-FUNCIONAL-03 (2026-09-11): além do aviso interno genérico acima
+  // (recipient_type "company"), o corretor responsável pelo imóvel — quando
+  // existe — recebe seu próprio evento dedicado (recipient_type "user"),
+  // exatamente como pedido ("o corretor responsável relacionado recebe
+  // aviso quando aplicável"). Reaproveita a mesma tabela notification_events
+  // e a mesma idempotência por (related_entity_id, status) já usada acima,
+  // apenas com um recipient_id distinto — nenhuma tabela nova.
+  if (input.responsibleUserId) {
+    const { data: existingForUser, error: existingForUserError } = await supabaseAdmin
+      .from("notification_events")
+      .select("id")
+      .eq("company_id", input.companyId)
+      .eq("related_entity_type", "owner_property_update_request")
+      .eq("related_entity_id", input.requestId)
+      .eq("recipient_id", input.responsibleUserId)
+      .contains("metadata", { status: input.status })
+      .limit(1);
+    if (existingForUserError) throw existingForUserError;
+    if (!existingForUser?.length) {
+      const { error: userNotifyError } = await supabaseAdmin.from("notification_events").insert({
+        company_id: input.companyId,
+        channel: "system",
+        direction: "outbound",
+        recipient_type: "user",
+        recipient_id: input.responsibleUserId,
+        recipient_name: "Corretor responsável",
+        recipient_contact: `user:${input.responsibleUserId}`,
+        subject: "Atualização de imóvel solicitada pelo proprietário",
+        body: `Solicitação ${input.type} para o imóvel ${input.propertyId} (${input.status}).`,
+        status: "prepared",
+        provider: "internal",
+        related_entity_type: "owner_property_update_request",
+        related_entity_id: input.requestId,
+        metadata,
+      });
+      if (userNotifyError) throw userNotifyError;
+    }
+  }
 }
 
 export { ownerPropertyUpdateTypes };

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   BedDouble,
   Download,
@@ -70,6 +70,14 @@ type CurrentAppUser = NonNullable<AccessResponse["access"]["appUser"]>;
 
 export const Route = createFileRoute("/app/imoveis")({
   component: PropertiesPage,
+  // AJUSTE-FUNCIONAL-03 (2026-09-11): permite abrir o dossiê (somente
+  // leitura) de um imóvel específico via link, sem inventar uma nova rota
+  // por id — reaproveita o mesmo diálogo "report" que o botão Visualizar já
+  // abre. Usado pela Ficha do proprietário (Abrir imóvel) para apontar para
+  // o imóvel exato em vez do módulo genérico.
+  validateSearch: (search: Record<string, unknown>): { focusPropertyId?: string } => ({
+    ...(typeof search.focusPropertyId === "string" ? { focusPropertyId: search.focusPropertyId } : {}),
+  }),
 });
 
 const propertyTypeOptions = [
@@ -224,7 +232,37 @@ const descriptionTemplates = [
 function PropertiesPage() {
   const { session, isLoading } = useSessionGuard();
   const module = getModuleByKey("properties");
+  const navigate = useNavigate();
   const canCreateOwner = canManage(session?.access.appUser, "owners.manage");
+  // AJUSTE-FUNCIONAL-03 (2026-09-11): "Abrir imóvel" a partir da Ficha do
+  // proprietário precisa apontar para o imóvel exato, não para a lista
+  // genérica — independente de paginação/filtros aplicados na tela, então
+  // carregamos o imóvel direto por id (mesma getProperty usada pelo card) e
+  // reaproveitamos o mesmo PropertyReportModal (dossiê somente leitura) que
+  // o botão "Visualizar" de cada card já abre.
+  const { focusPropertyId } = Route.useSearch();
+  const [focusedProperty, setFocusedProperty] = useState<Property | null>(null);
+  const [focusError, setFocusError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusPropertyId) {
+      setFocusedProperty(null);
+      setFocusError(null);
+      return;
+    }
+    let canceled = false;
+    getProperty(focusPropertyId)
+      .then((response) => {
+        if (!canceled) setFocusedProperty(response.property);
+      })
+      .catch((error) => {
+        if (!canceled) {
+          setFocusError(error instanceof Error ? error.message : "Não foi possível carregar o imóvel.");
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [focusPropertyId]);
   const [properties, setProperties] = useState<PropertySummary[]>([]);
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [isPropertiesLoading, setIsPropertiesLoading] = useState(true);
@@ -511,6 +549,14 @@ function PropertiesPage() {
           </div>
         </section>
       )}
+      {focusError ? (
+        <div className="fixed inset-x-4 bottom-4 z-50 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive shadow-lg">
+          {focusError}
+        </div>
+      ) : null}
+      {focusedProperty ? (
+        <PropertyReportModal property={focusedProperty} onClose={() => void navigate({ to: "/app/imoveis" })} />
+      ) : null}
     </ModulePage>
   );
 }

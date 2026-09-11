@@ -95,6 +95,28 @@ publicSitesRouter.post("/:slug/leads", async (req, res, next) => {
     }
 
     const input = leadSchema.parse(req.body);
+
+    // AJUSTE-FUNCIONAL-03 (2026-09-11): um imóvel despublicado (inclusive
+    // via fluxo do proprietário — VENDEU/ALUGOU/DESISTIU_*) não pode mais
+    // aceitar novos leads públicos, mesmo que o cliente envie o property_id
+    // antigo diretamente no body. loadMysqlPublicPropertyByReference já
+    // filtra publishedAt: { not: null } — reaproveitamos essa mesma
+    // consulta em vez de duplicar a regra de publicação em outro lugar.
+    if (input.property_id) {
+      try {
+        await loadMysqlPublicPropertyByReference(site, input.property_id);
+      } catch {
+        // loadMysqlPublicPropertyByReference lança quando o imóvel não
+        // existe, não pertence a este site ou não está mais publicado
+        // (publishedAt: null) — nos três casos, não é seguro aceitar um
+        // lead público amarrado a este property_id.
+        return res.status(404).json({
+          error: "PROPERTY_NOT_AVAILABLE",
+          message: "Este imóvel não está mais disponível para contato.",
+        });
+      }
+    }
+
     const lead = await createMysqlPublicLead({
       site: { id: site.id, companyId: site.companyId, slug: site.slug },
       propertyId: input.property_id || null,
