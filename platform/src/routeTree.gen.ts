@@ -51,9 +51,9 @@ import { Route as PortalCompradorTokenRouteImport } from './routes/portal.compra
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
 import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
 import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
-import { Route as AppImoveisNovoRouteImport } from './routes/app.imoveis.novo'
+import { Route as AppImoveisNovoRouteImport } from './routes/app.imoveis_.novo'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
-import { Route as AppImoveisPropertyIdEditarRouteImport } from './routes/app.imoveis.$propertyId.editar'
+import { Route as AppImoveisPropertyIdEditarRouteImport } from './routes/app.imoveis_.$propertyId.editar'
 import { Route as AppSiteBuilderPreviewWebsiteIdRouteImport } from './routes/app.site.builder.preview.$websiteId'
 import { Route as AppSiteBuilderEditorWebsiteIdRouteImport } from './routes/app.site.builder.editor.$websiteId'
 import { Route as AppSiteBuilderEditorWebsiteIdCodeRouteImport } from './routes/app.site.builder.editor.$websiteId.code'
@@ -271,9 +271,9 @@ const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
   getParentRoute: () => AppProprietariosRoute,
 } as any)
 const AppImoveisNovoRoute = AppImoveisNovoRouteImport.update({
-  id: '/novo',
-  path: '/novo',
-  getParentRoute: () => AppImoveisRoute,
+  id: '/imoveis_/novo',
+  path: '/imoveis/novo',
+  getParentRoute: () => AppRoute,
 } as any)
 const SiteSlugImoveisPropertySlugRoute =
   SiteSlugImoveisPropertySlugRouteImport.update({
@@ -283,9 +283,9 @@ const SiteSlugImoveisPropertySlugRoute =
   } as any)
 const AppImoveisPropertyIdEditarRoute =
   AppImoveisPropertyIdEditarRouteImport.update({
-    id: '/$propertyId/editar',
-    path: '/$propertyId/editar',
-    getParentRoute: () => AppImoveisRoute,
+    id: '/imoveis_/$propertyId/editar',
+    path: '/imoveis/$propertyId/editar',
+    getParentRoute: () => AppRoute,
   } as any)
 const AppSiteBuilderPreviewWebsiteIdRoute =
   AppSiteBuilderPreviewWebsiteIdRouteImport.update({
@@ -335,7 +335,7 @@ export interface FileRoutesByFullPath {
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
-  '/app/imoveis': typeof AppImoveisRouteWithChildren
+  '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
@@ -385,7 +385,7 @@ export interface FileRoutesByTo {
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
-  '/app/imoveis': typeof AppImoveisRouteWithChildren
+  '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
@@ -436,7 +436,7 @@ export interface FileRoutesById {
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
-  '/app/imoveis': typeof AppImoveisRouteWithChildren
+  '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
@@ -449,7 +449,7 @@ export interface FileRoutesById {
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
   '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app/': typeof AppIndexRoute
-  '/app/imoveis/novo': typeof AppImoveisNovoRoute
+  '/app/imoveis_/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
@@ -457,7 +457,7 @@ export interface FileRoutesById {
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
   '/site/$slug/': typeof SiteSlugIndexRoute
-  '/app/imoveis/$propertyId/editar': typeof AppImoveisPropertyIdEditarRoute
+  '/app/imoveis_/$propertyId/editar': typeof AppImoveisPropertyIdEditarRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
   '/app/site/builder/editor/$websiteId': typeof AppSiteBuilderEditorWebsiteIdRouteWithChildren
   '/app/site/builder/preview/$websiteId': typeof AppSiteBuilderPreviewWebsiteIdRouteWithChildren
@@ -602,7 +602,7 @@ export interface FileRouteTypes {
     | '/assinar-vistoria/$token'
     | '/site/$slug'
     | '/app/'
-    | '/app/imoveis/novo'
+    | '/app/imoveis_/novo'
     | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
@@ -610,7 +610,7 @@ export interface FileRouteTypes {
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
     | '/site/$slug/'
-    | '/app/imoveis/$propertyId/editar'
+    | '/app/imoveis_/$propertyId/editar'
     | '/site/$slug/imoveis/$propertySlug'
     | '/app/site/builder/editor/$websiteId'
     | '/app/site/builder/preview/$websiteId'
@@ -938,12 +938,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProprietariosOwnerIdRouteImport
       parentRoute: typeof AppProprietariosRoute
     }
-    '/app/imoveis/novo': {
-      id: '/app/imoveis/novo'
-      path: '/novo'
+    '/app/imoveis_/novo': {
+      id: '/app/imoveis_/novo'
+      path: '/imoveis/novo'
       fullPath: '/app/imoveis/novo'
       preLoaderRoute: typeof AppImoveisNovoRouteImport
-      parentRoute: typeof AppImoveisRoute
+      parentRoute: typeof AppRoute
     }
     '/site/$slug/imoveis/$propertySlug': {
       id: '/site/$slug/imoveis/$propertySlug'
@@ -952,12 +952,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SiteSlugImoveisPropertySlugRouteImport
       parentRoute: typeof SiteSlugRoute
     }
-    '/app/imoveis/$propertyId/editar': {
-      id: '/app/imoveis/$propertyId/editar'
-      path: '/$propertyId/editar'
+    '/app/imoveis_/$propertyId/editar': {
+      id: '/app/imoveis_/$propertyId/editar'
+      path: '/imoveis/$propertyId/editar'
       fullPath: '/app/imoveis/$propertyId/editar'
       preLoaderRoute: typeof AppImoveisPropertyIdEditarRouteImport
-      parentRoute: typeof AppImoveisRoute
+      parentRoute: typeof AppRoute
     }
     '/app/site/builder/preview/$websiteId': {
       id: '/app/site/builder/preview/$websiteId'
@@ -989,20 +989,6 @@ declare module '@tanstack/react-router' {
     }
   }
 }
-
-interface AppImoveisRouteChildren {
-  AppImoveisNovoRoute: typeof AppImoveisNovoRoute
-  AppImoveisPropertyIdEditarRoute: typeof AppImoveisPropertyIdEditarRoute
-}
-
-const AppImoveisRouteChildren: AppImoveisRouteChildren = {
-  AppImoveisNovoRoute: AppImoveisNovoRoute,
-  AppImoveisPropertyIdEditarRoute: AppImoveisPropertyIdEditarRoute,
-}
-
-const AppImoveisRouteWithChildren = AppImoveisRoute._addFileChildren(
-  AppImoveisRouteChildren,
-)
 
 interface AppProprietariosRouteChildren {
   AppProprietariosOwnerIdRoute: typeof AppProprietariosOwnerIdRoute
@@ -1091,7 +1077,7 @@ interface AppRouteChildren {
   AppCrmRoute: typeof AppCrmRoute
   AppCustosRoute: typeof AppCustosRoute
   AppFinanceiroRoute: typeof AppFinanceiroRoute
-  AppImoveisRoute: typeof AppImoveisRouteWithChildren
+  AppImoveisRoute: typeof AppImoveisRoute
   AppImportacoesRoute: typeof AppImportacoesRoute
   AppIntegracoesRoute: typeof AppIntegracoesRoute
   AppInteligenciaRoute: typeof AppInteligenciaRoute
@@ -1102,6 +1088,8 @@ interface AppRouteChildren {
   AppTestesRoute: typeof AppTestesRoute
   AppVistoriasRoute: typeof AppVistoriasRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
+  AppImoveisNovoRoute: typeof AppImoveisNovoRoute
+  AppImoveisPropertyIdEditarRoute: typeof AppImoveisPropertyIdEditarRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -1111,7 +1099,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCrmRoute: AppCrmRoute,
   AppCustosRoute: AppCustosRoute,
   AppFinanceiroRoute: AppFinanceiroRoute,
-  AppImoveisRoute: AppImoveisRouteWithChildren,
+  AppImoveisRoute: AppImoveisRoute,
   AppImportacoesRoute: AppImportacoesRoute,
   AppIntegracoesRoute: AppIntegracoesRoute,
   AppInteligenciaRoute: AppInteligenciaRoute,
@@ -1122,6 +1110,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppTestesRoute: AppTestesRoute,
   AppVistoriasRoute: AppVistoriasRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
+  AppImoveisNovoRoute: AppImoveisNovoRoute,
+  AppImoveisPropertyIdEditarRoute: AppImoveisPropertyIdEditarRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

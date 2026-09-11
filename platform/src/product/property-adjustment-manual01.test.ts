@@ -17,8 +17,8 @@ describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
     // preservando a mesma garantia original: mode="create" e mode="edit"
     // literalmente montam o MESMO PropertyWizard exportado, não uma cópia.
     const route = await source("../routes/app.imoveis.tsx");
-    const novo = await source("../routes/app.imoveis.novo.tsx");
-    const editar = await source("../routes/app.imoveis.$propertyId.editar.tsx");
+    const novo = await source("../routes/app.imoveis_.novo.tsx");
+    const editar = await source("../routes/app.imoveis_.$propertyId.editar.tsx");
     expect(route).toContain("export function PropertyWizard({");
     expect(route).toContain('mode: "create" | "edit"');
     expect(route).not.toContain("function EditPropertyDialog");
@@ -48,8 +48,8 @@ describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
 
   it("preserva campos existentes e integra a etapa única de mídia em create/edit", async () => {
     const route = await source("../routes/app.imoveis.tsx");
-    const novo = await source("../routes/app.imoveis.novo.tsx");
-    const editar = await source("../routes/app.imoveis.$propertyId.editar.tsx");
+    const novo = await source("../routes/app.imoveis_.novo.tsx");
+    const editar = await source("../routes/app.imoveis_.$propertyId.editar.tsx");
     expect(route).toContain("10. Imagens");
     expect(route).toContain("<PropertyMediaManager");
     expect(route).toContain("<PropertyMediaUpload");
