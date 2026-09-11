@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parsePropertiesSearch, resolveSubmitIntent } from "./app.imoveis";
+
+const propertyRouteSource = readFileSync(new URL("./app.imoveis.tsx", import.meta.url), "utf8");
 
 // full-page-imoveis (2026-09-11): este projeto não tem jsdom/React Testing
 // Library configurado (vitest.config.ts roda em "environment: node" e só
@@ -62,5 +65,22 @@ describe("resolveSubmitIntent — P2: bug 'Salvar e publicar' não fazia nada", 
   it("ignora um value de submitter desconhecido e usa o fallback em vez de aceitar lixo", () => {
     expect(resolveSubmitIntent("qualquer-coisa", "publish")).toBe("publish");
     expect(resolveSubmitIntent("", "publish")).toBe("publish");
+  });
+});
+
+describe("PropertyWizard — ações explícitas e mídia do imóvel", () => {
+  it("dispara draft/save/publish por onClick direto, sem depender do submit nativo do navegador", () => {
+    expect(propertyRouteSource).toContain('onClick={() => {\n              const form = formRef.current;\n              if (form) void submitProperty("draft", form);');
+    expect(propertyRouteSource).toContain('onClick={() => {\n              const form = formRef.current;\n              if (form) void submitProperty("save", form);');
+    expect(propertyRouteSource).toContain('onClick={() => {\n              const form = formRef.current;\n              if (form) void submitProperty("publish", form);');
+    expect(propertyRouteSource).toContain('type="button"');
+  });
+
+  it("mantém preview, exclusão, capa e ordenação ligados às APIs canônicas de mídia", () => {
+    expect(propertyRouteSource).toContain("<PropertyMediaManager");
+    expect(propertyRouteSource).toContain("deletePropertyMedia(property.id, mediaId)");
+    expect(propertyRouteSource).toContain("reorderPropertyMedia(property.id");
+    expect(propertyRouteSource).toContain("setPropertyMediaCover(property.id, mediaId)");
+    expect(propertyRouteSource).toContain("<PropertyMediaUpload");
   });
 });

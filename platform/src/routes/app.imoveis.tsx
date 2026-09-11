@@ -811,8 +811,7 @@ export function PropertyWizard({
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function submitProperty(intent: SubmitIntent, formElement: HTMLFormElement) {
     // Item 12 do escopo: 3 ações explícitas no cadastro — SALVAR RASCUNHO
     // (força status=draft, nunca tenta publicar), SALVAR (mantém o status
     // escolhido no formulário, comportamento anterior, nunca publica
@@ -820,13 +819,11 @@ export function PropertyWizard({
     // rota de publicação real usada na edição — POST /site/properties/:id/
     // publish — nunca um status fictício). Detectado via SubmitEvent.
     // submitter (padrão da spec de forms), não por heurística de clique.
-    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-    const intent = resolveSubmitIntent(submitter?.value, pendingIntentRef.current);
+    if (!formElement.reportValidity()) return;
     pendingIntentRef.current = null;
     setIsSaving(true);
     setError(null);
 
-    const formElement = event.currentTarget;
     const form = new FormData(formElement);
 
     try {
@@ -934,6 +931,13 @@ export function PropertyWizard({
     } finally {
       setIsSaving(false);
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const intent = resolveSubmitIntent(submitter?.value, pendingIntentRef.current);
+    await submitProperty(intent, event.currentTarget);
   }
 
   return (
@@ -1326,10 +1330,13 @@ export function PropertyWizard({
             no SubmitEvent.submitter (lido em handleSubmit), sem heurística. */}
         <div className="flex flex-wrap gap-2">
           <button
-            type="submit"
+            type="button"
             name={!isEdit ? "intent" : undefined}
             value={!isEdit ? "draft" : undefined}
-            onMouseDown={() => { pendingIntentRef.current = "draft"; }}
+            onClick={() => {
+              const form = formRef.current;
+              if (form) void submitProperty("draft", form);
+            }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -1337,10 +1344,13 @@ export function PropertyWizard({
             {isEdit ? "Salvar alterações" : "Salvar rascunho"}
           </button>
           {!isEdit ? <button
-            type="submit"
+            type="button"
             name="intent"
             value="save"
-            onMouseDown={() => { pendingIntentRef.current = "save"; }}
+            onClick={() => {
+              const form = formRef.current;
+              if (form) void submitProperty("save", form);
+            }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-background px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -1348,10 +1358,13 @@ export function PropertyWizard({
             Salvar
           </button> : null}
           {!isEdit ? <button
-            type="submit"
+            type="button"
             name="intent"
             value="publish"
-            onMouseDown={() => { pendingIntentRef.current = "publish"; }}
+            onClick={() => {
+              const form = formRef.current;
+              if (form) void submitProperty("publish", form);
+            }}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
