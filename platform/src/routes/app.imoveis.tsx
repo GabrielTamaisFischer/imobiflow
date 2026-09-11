@@ -756,7 +756,7 @@ function PropertyWizard({
         description,
         property_type: normalizePropertyType(text(form, "property_type")),
         operation: normalizeOperation(text(form, "operation")),
-        status: intent === "draft" ? "draft" : (text(form, "status") as PropertyInput["status"]),
+        status: !isEdit && intent === "draft" ? "draft" : (text(form, "status") as PropertyInput["status"]),
         street: text(form, "property_street"),
         number: text(form, "property_number"),
         complement: text(form, "property_complement"),
@@ -1228,8 +1228,8 @@ function PropertyWizard({
         <div className="flex flex-wrap gap-2">
           <button
             type="submit"
-            name="intent"
-            value="draft"
+            name={!isEdit ? "intent" : undefined}
+            value={!isEdit ? "draft" : undefined}
             disabled={isSaving}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-4 text-sm font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
           >

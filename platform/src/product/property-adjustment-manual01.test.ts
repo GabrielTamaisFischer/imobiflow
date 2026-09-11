@@ -46,6 +46,8 @@ describe("AJUSTE-MANUAL-01B — wizard compartilhado de imóveis", () => {
     expect(route).toContain('property?.description ?? ""');
     expect(route).toContain("currentUserId={currentUser?.id}");
     expect(route).toContain("canCreateOwner={canCreateOwner}");
+    expect(route).toContain('status: !isEdit && intent === "draft"');
+    expect(route).toContain('name={!isEdit ? "intent" : undefined}');
   });
 
   it("mantém a ficha visual somente leitura e não expõe chaves internas de storage", async () => {
