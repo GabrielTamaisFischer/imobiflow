@@ -277,11 +277,59 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
     </div>
     <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} id={key === "treatment_consent" ? "consentimento-lgpd" : undefined} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
     <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
-      <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
-      {canManage && !restricted ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
+      <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : activeTab === "professional" || activeTab === "financial" ? <OwnerStructuredEditor kind={activeTab} profile={profile} canManage={canManage} busy={busy} onSave={onSave} /> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
+      {canManage && !restricted && activeTab !== "professional" && activeTab !== "financial" ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
     </div>
     <p className="mt-3 text-xs text-muted-foreground">Valores preservam origem, confiança e consentimento LGPD. Consultas externas permanecem desativadas quando o provedor está NOT_CONFIGURED.</p>
   </section>;
+}
+
+type StructuredEditorKind = "professional" | "financial";
+
+function OwnerStructuredEditor({ kind, profile, canManage, busy, onSave }: {
+  kind: StructuredEditorKind;
+  profile: OwnerProfile;
+  canManage: boolean;
+  busy: boolean;
+  onSave: (patch: Record<string, unknown>) => Promise<void>;
+}) {
+  const source = (profile[kind] && typeof profile[kind] === "object" ? profile[kind] : {}) as Record<string, unknown>;
+  const [draft, setDraft] = useState<Record<string, unknown>>(source);
+  useEffect(() => { setDraft(source); }, [profile, kind]);
+  const setValue = (key: string, value: unknown) => setDraft((current) => ({ ...current, [key]: value }));
+  const save = () => void onSave({ [kind]: draft });
+  if (kind === "professional") {
+    return <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Profissão" value={String(draft.profession ?? "")} disabled={!canManage} onChange={(value) => setValue("profession", value)} />
+      <Field label="Ocupação" value={String(draft.occupation ?? "")} disabled={!canManage} onChange={(value) => setValue("occupation", value)} />
+      <label className="grid gap-1 text-xs font-medium"><span>Tipo de vínculo</span><select value={String(draft.employment_type ?? "")} disabled={!canManage} onChange={(event) => setValue("employment_type", event.target.value || null)} className="h-9 rounded-md border border-border bg-background px-2"><option value="">Selecione</option><option value="CLT">CLT</option><option value="PJ">PJ</option><option value="autonomo">Autônomo</option><option value="empresario">Empresário</option><option value="servidor">Servidor</option><option value="aposentado">Aposentado</option><option value="pensionista">Pensionista</option><option value="estudante">Estudante</option><option value="desempregado">Desempregado</option><option value="outro">Outro</option></select></label>
+      <Field label="Empresa atual" value={String(draft.current_employer ?? "")} disabled={!canManage} onChange={(value) => setValue("current_employer", value)} />
+      <Field label="CNPJ da empresa" value={String(draft.employer_cnpj ?? "")} disabled={!canManage} onChange={(value) => setValue("employer_cnpj", value)} />
+      <Field label="Cargo" value={String(draft.role ?? "")} disabled={!canManage} onChange={(value) => setValue("role", value)} />
+      <Field label="Data de admissão" type="date" value={String(draft.started_at ?? "")} disabled={!canManage} onChange={(value) => setValue("started_at", value)} />
+      <Field label="Tempo de vínculo (meses)" type="number" value={draft.tenure_months == null ? "" : String(draft.tenure_months)} disabled={!canManage} onChange={(value) => setValue("tenure_months", value === "" ? null : Number(value))} />
+      <div className="sm:col-span-2 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Status profissional: {String(draft.status ?? "pending")}</p>{canManage ? <button type="button" disabled={busy} onClick={save} className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar profissional</button> : null}</div>
+    </div>;
+  }
+  const sources = Array.isArray(draft.income_sources) ? draft.income_sources as Array<Record<string, unknown>> : [];
+  const assets = Array.isArray(draft.assets) ? draft.assets as Array<Record<string, unknown>> : [];
+  const updateRow = (key: "income_sources" | "assets", index: number, field: string, value: unknown) => {
+    const rows = (Array.isArray(draft[key]) ? draft[key] : []) as Array<Record<string, unknown>>;
+    setValue(key, rows.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
+  };
+  return <div className="grid gap-3 sm:grid-cols-2">
+    <Field label="Renda mensal declarada" type="number" value={draft.income_declared_monthly == null ? "" : String(draft.income_declared_monthly)} disabled={!canManage} onChange={(value) => setValue("income_declared_monthly", value === "" ? null : Number(value))} />
+    <Field label="Renda mensal comprovada" type="number" value={draft.income_proven_monthly == null ? "" : String(draft.income_proven_monthly)} disabled={!canManage} onChange={(value) => setValue("income_proven_monthly", value === "" ? null : Number(value))} />
+    <Field label="Renda familiar mensal" type="number" value={draft.family_income_monthly == null ? "" : String(draft.family_income_monthly)} disabled={!canManage} onChange={(value) => setValue("family_income_monthly", value === "" ? null : Number(value))} />
+    <Field label="Renda variável mensal" type="number" value={draft.variable_income_monthly == null ? "" : String(draft.variable_income_monthly)} disabled={!canManage} onChange={(value) => setValue("variable_income_monthly", value === "" ? null : Number(value))} />
+    <section className="sm:col-span-2 rounded-md border border-border p-3"><div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-semibold uppercase text-muted-foreground">Fontes de renda</h3>{canManage ? <button type="button" onClick={() => setValue("income_sources", [...sources, { id: crypto.randomUUID(), type: "salario", amount: 0, recurrence: "monthly", verification_status: "DECLARADA", provenance: "OWNER_DECLARED" }])} className="text-xs font-semibold text-primary">Adicionar fonte</button> : null}</div>{sources.length ? sources.map((source, index) => <div key={String(source.id ?? index)} className="grid gap-2 border-t border-border py-2 sm:grid-cols-3"><select value={String(source.type ?? "salario")} disabled={!canManage} onChange={(event) => updateRow("income_sources", index, "type", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs"><option value="salario">Salário</option><option value="pro_labore">Pró-labore</option><option value="aluguel">Aluguel</option><option value="comissao">Comissão</option><option value="prestacao_servico">Prestação de serviço</option><option value="outras">Outras</option></select><input type="number" value={String(source.amount ?? "")} disabled={!canManage} onChange={(event) => updateRow("income_sources", index, "amount", Number(event.target.value))} className="h-9 rounded-md border border-border bg-background px-2 text-xs" placeholder="Valor" /><select value={String(source.verification_status ?? "DECLARADA")} disabled={!canManage} onChange={(event) => updateRow("income_sources", index, "verification_status", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs"><option>DECLARADA</option><option>DOCUMENTADA</option><option>VERIFICADA</option><option>DESATUALIZADA</option></select></div>) : <p className="text-xs text-muted-foreground">Nenhuma fonte cadastrada.</p>}</section>
+    <section className="sm:col-span-2 rounded-md border border-border p-3"><div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-semibold uppercase text-muted-foreground">Patrimônio</h3>{canManage ? <button type="button" onClick={() => setValue("assets", [...assets, { id: crypto.randomUUID(), type: "outro", label: "", declared_value: 0, verification_status: "DECLARADA", provenance: "OWNER_DECLARED" }])} className="text-xs font-semibold text-primary">Adicionar bem</button> : null}</div>{assets.length ? assets.map((asset, index) => <div key={String(asset.id ?? index)} className="grid gap-2 border-t border-border py-2 sm:grid-cols-3"><select value={String(asset.type ?? "outro")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "type", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs"><option value="imovel">Imóvel</option><option value="veiculo">Veículo</option><option value="participacao_societaria">Participação societária</option><option value="investimento">Investimento</option><option value="outro">Outro</option></select><input value={String(asset.label ?? "")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "label", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs" placeholder="Descrição" /><input type="number" value={String(asset.declared_value ?? "")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "declared_value", Number(event.target.value))} className="h-9 rounded-md border border-border bg-background px-2 text-xs" placeholder="Valor declarado" /></div>) : <p className="text-xs text-muted-foreground">Nenhum bem cadastrado.</p>}</section>
+    <div className="sm:col-span-2 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Status: {String(draft.status ?? "PENDENTE")} · Capacidade: {String((draft.financial_capacity as Record<string, unknown> | undefined)?.status ?? "DATA_INSUFFICIENT")}</p>{canManage ? <button type="button" disabled={busy} onClick={save} className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar financeiro</button> : null}</div>
+  </div>;
+}
+
+function Field({ label, value, onChange, type = "text", disabled }: { label: string; value: string; onChange: (value: string) => void; type?: string; disabled?: boolean }) {
+  return <label className="grid gap-1 text-xs font-medium"><span>{label}</span><input type={type} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2" /></label>;
 }
 
 function OwnerIntelligencePanel({ profile, checks, busy, message, error, onQuery, onOpenConsent }: {

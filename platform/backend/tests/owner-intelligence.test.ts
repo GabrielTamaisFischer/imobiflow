@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildOwner360Status,
   buildOwnerContractData,
+  buildInsuranceApplicantData,
+  buildFinancingApplicantData,
   normalizeOwnerAddress,
   normalizeOwnerCivil,
   normalizeOwnerIdentity,
@@ -51,15 +53,24 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(status.consent).toBe("valid");
   });
 
+  it("builds contract, insurance and financing DTOs from the same owner profile source", () => {
+    const input = { owner: { name: "Pessoa QA" }, profile: { identity: { full_name: "Pessoa QA" }, address: { city: "São Paulo" }, professional: { profession: "Arquiteta" }, financial: { assets: [{ type: "imovel" }], declared_assets_total: 100000, income_declared_monthly: 5000 } } };
+    expect(buildInsuranceApplicantData(input)).toMatchObject({ professional: { profession: "Arquiteta" }, income: { declaredMonthly: 5000 } });
+    expect(buildFinancingApplicantData(input).patrimony).toMatchObject({ declaredTotal: 100000 });
+  });
+
   it("derives contract data from the canonical profile without provider-specific fields", () => {
     const data = buildOwnerContractData({
       owner: { name: "Pessoa QA", document: "52998224725" },
       profile: {
         identity: { rg: "QA-1", nationality: "Brasileira", birthplace: "São Paulo", profession: "Arquiteta", marital_status: "solteira" },
+        professional: { employment_type: "PJ", current_employer: "Empresa QA", role: "Sócia", started_at: "2025-01-01" },
+        financial: { income_declared_monthly: 5000, income_proven_monthly: 4000, income_sources: [{ type: "salario", amount: 4000 }] },
         address: { city: "São Paulo", state: "SP" },
       },
     });
-    expect(data).toMatchObject({ name: "Pessoa QA", cpf: "52998224725", rg: "QA-1", profession: "Arquiteta", maritalStatus: "solteira" });
+    expect(data).toMatchObject({ name: "Pessoa QA", cpf: "52998224725", rg: "QA-1", profession: "Arquiteta", maritalStatus: "solteira", employment: { type: "PJ", employer: "Empresa QA", role: "Sócia" } });
+    expect(data.income).toMatchObject({ declaredMonthly: 5000, provenMonthly: 4000 });
     expect(data.address).toEqual({ city: "São Paulo", state: "SP" });
   });
 });

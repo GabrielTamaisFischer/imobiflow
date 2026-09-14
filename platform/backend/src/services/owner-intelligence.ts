@@ -247,6 +247,14 @@ export type OwnerContractData = {
   nationality: string | null;
   birthplace: string | null;
   profession: string | null;
+  employment: {
+    type: string | null;
+    employer: string | null;
+    role: string | null;
+    startedAt: string | null;
+  };
+  income: Record<string, unknown>;
+  patrimony: Record<string, unknown>;
   maritalStatus: string | null;
   propertyRegime: string | null;
   spouseName: string | null;
@@ -254,13 +262,15 @@ export type OwnerContractData = {
 };
 
 export type OwnerInspectionData = { name: string | null; cpf: string | null; contact: Record<string, unknown>; property: Record<string, unknown>; relationship: string | null };
-export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: Record<string, unknown>; documents: Array<Record<string, unknown>> };
+export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; professional: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: Record<string, unknown>; documents: Array<Record<string, unknown>> };
 export type FinancingApplicantData = InsuranceApplicantData & { civil: Record<string, unknown>; patrimony: Record<string, unknown> };
 
 export function buildOwnerContractData(input: { owner: Record<string, unknown>; profile: Record<string, unknown> }): OwnerContractData {
   const identity = objectValue(input.profile.identity);
   const civil = normalizeOwnerCivil(objectValue(input.profile.identity));
   const address = objectValue(input.profile.address);
+  const professional = objectValue(input.profile.professional);
+  const financial = objectValue(input.profile.financial);
   return {
     name: stringValue(input.owner.name) ?? stringValue(identity.fullName ?? identity.full_name),
     cpf: stringValue(input.owner.document) ?? stringValue(identity.cpf),
@@ -268,11 +278,52 @@ export function buildOwnerContractData(input: { owner: Record<string, unknown>; 
     issuingAuthority: stringValue(identity.issuingAuthority ?? identity.issuing_authority),
     nationality: stringValue(identity.nationality),
     birthplace: stringValue(identity.birthplace),
-    profession: stringValue(identity.occupation ?? identity.profession),
+    profession: stringValue(identity.occupation ?? identity.profession ?? professional.profession ?? professional.occupation),
+    employment: {
+      type: stringValue(professional.employment_type),
+      employer: stringValue(professional.current_employer ?? professional.employer),
+      role: stringValue(professional.role ?? professional.position),
+      startedAt: stringValue(professional.started_at ?? professional.start_date),
+    },
+    income: {
+      declaredMonthly: financial.income_declared_monthly ?? null,
+      provenMonthly: financial.income_proven_monthly ?? financial.income_verified_monthly ?? null,
+      familyMonthly: financial.family_income_monthly ?? null,
+      commitmentMonthly: financial.declared_commitment_monthly ?? null,
+      sources: Array.isArray(financial.income_sources) ? financial.income_sources : [],
+    },
+    patrimony: {
+      assets: Array.isArray(financial.assets) ? financial.assets : [],
+      declaredTotal: financial.declared_assets_total ?? null,
+      verifiedTotal: financial.verified_assets_total ?? null,
+    },
     maritalStatus: civil.maritalStatus.value,
     propertyRegime: civil.propertyRegime.value,
     spouseName: civil.spouseName.value,
     address,
+  };
+}
+
+export function buildInsuranceApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null }): InsuranceApplicantData {
+  const contract = buildOwnerContractData(input);
+  return {
+    identity: objectValue(input.profile.identity),
+    address: contract.address,
+    professional: objectValue(input.profile.professional),
+    income: contract.income,
+    relationship: input.relationship ?? null,
+    credit: objectValue(input.profile.credit),
+    documents: Array.isArray(input.profile.documents) ? input.profile.documents.filter((document): document is Record<string, unknown> => Boolean(document) && typeof document === "object" && !Array.isArray(document)) : [],
+  };
+}
+
+export function buildFinancingApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null }): FinancingApplicantData {
+  const applicant = buildInsuranceApplicantData(input);
+  const identity = objectValue(input.profile.identity);
+  return {
+    ...applicant,
+    civil: objectValue(input.profile.civil ?? identity),
+    patrimony: objectValue(input.profile.financial).assets ? { assets: objectValue(input.profile.financial).assets, declaredTotal: objectValue(input.profile.financial).declared_assets_total ?? null, verifiedTotal: objectValue(input.profile.financial).verified_assets_total ?? null } : {},
   };
 }
 

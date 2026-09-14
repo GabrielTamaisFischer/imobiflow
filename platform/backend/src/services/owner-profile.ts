@@ -3,6 +3,12 @@ import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
 import { notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
+import {
+  calculateInformativeFinancialCapacity,
+  normalizeOwnerEmployment,
+  normalizeOwnerFinancial,
+  sanitizeEmploymentForPermissions,
+} from "./owner-financial.js";
 
 export const OWNER_PROFILE_GROUPS = [
   "identity",
@@ -107,6 +113,7 @@ async function auditProfileViews(companyId: string, actorUserId: string, ownerId
 
 function serializeProfile(profile: any, permissions: OwnerProfilePermissions) {
   const canSensitive = hasPermission(permissions, "owners.sensitive.view");
+  const canViewFinancial = hasPermission(permissions, "owners.financial.view");
   const result: Record<string, unknown> = {
     id: profile.id,
     company_id: profile.companyId,
@@ -114,13 +121,13 @@ function serializeProfile(profile: any, permissions: OwnerProfilePermissions) {
     identity: profile.identityJson ?? {},
     contact: profile.contactJson ?? {},
     address: profile.addressJson ?? {},
-    professional: profile.professionalJson ?? {},
+    professional: sanitizeEmploymentForPermissions(profile.professionalJson ?? {}, canViewFinancial || canSensitive),
     provenance: canSensitive ? profile.provenanceJson ?? {} : {},
     confidence: canSensitive ? profile.confidenceJson ?? {} : {},
     treatment_consent: canSensitive ? profile.treatmentConsentJson ?? {} : {},
     updated_at: profile.updatedAt.toISOString(),
   };
-  result.financial = hasPermission(permissions, "owners.financial.view") ? profile.financialJson ?? {} : null;
+  result.financial = canViewFinancial ? profile.financialJson ?? {} : null;
   result.credit = hasPermission(permissions, "owners.credit.view") ? profile.creditJson ?? {} : null;
   result.legal = hasPermission(permissions, "owners.legal.view") ? profile.legalJson ?? {} : null;
   result.fiscal = hasPermission(permissions, "owners.fiscal.view") ? profile.fiscalJson ?? {} : null;
@@ -170,12 +177,57 @@ export async function updateOwnerProfile(options: {
   const defaults = ownerProfileDefaults();
   const input = options.patch;
   const group = (key: string) => ensureBoundedJson(input[key], key);
+  const currentProfessional = current?.professionalJson && typeof current.professionalJson === "object" && !Array.isArray(current.professionalJson) ? current.professionalJson as JsonRecord : defaults.professional;
+  const professionalInput = input.professional === undefined ? null : group("professional");
+  const professionalPatch = professionalInput ? normalizeOwnerEmployment(mergeProfileGroup(currentProfessional, professionalInput)) : null;
+  const currentFinancial = current?.financialJson && typeof current.financialJson === "object" && !Array.isArray(current.financialJson) ? current.financialJson as JsonRecord : defaults.financial;
+  const financialInput = input.financial === undefined ? null : group("financial");
+  const financialPatch = financialInput ? normalizeOwnerFinancial(mergeProfileGroup(currentFinancial, financialInput)) : null;
+  const mergedFinancial = financialPatch
+    ? financialPatch
+    : null;
+  if (mergedFinancial) {
+    const propertyIds = mergedFinancial.assets.map((asset) => asset.property_id).filter((id): id is string => Boolean(id));
+    if (propertyIds.length) {
+      const linkedProperties = await getPrisma().property.findMany({
+        where: { companyId: options.companyId, id: { in: propertyIds } },
+        select: { id: true },
+      });
+      if (linkedProperties.length !== new Set(propertyIds).size) {
+        throw Object.assign(new Error("Imóvel patrimonial não pertence à empresa atual."), { statusCode: 400, code: "OWNER_ASSET_PROPERTY_TENANT_MISMATCH" });
+      }
+    }
+    const documentIds = [
+      ...mergedFinancial.income_sources.map((source) => source.document_id),
+      ...mergedFinancial.assets.map((asset) => asset.document_id),
+    ].filter((id): id is string => Boolean(id));
+    if (documentIds.length) {
+      const linkedDocuments = await getPrisma().ownerDocumentRecord.findMany({
+        where: {
+          companyId: options.companyId,
+          ownerId: options.ownerId,
+          OR: [{ id: { in: documentIds } }, { storedFileId: { in: documentIds } }],
+        },
+        select: { id: true, storedFileId: true },
+      });
+      const validDocumentIds = new Set(linkedDocuments.flatMap((document) => [document.id, document.storedFileId]));
+      if (documentIds.some((id) => !validDocumentIds.has(id))) {
+        throw Object.assign(new Error("Documento de renda/patrimônio não pertence ao proprietário atual."), { statusCode: 400, code: "OWNER_FINANCIAL_DOCUMENT_MISMATCH" });
+      }
+    }
+  }
+  const financialCapacity = mergedFinancial
+    ? calculateInformativeFinancialCapacity(mergedFinancial)
+    : null;
+  const financialData = mergedFinancial
+    ? { ...mergedFinancial, financial_capacity: financialCapacity }
+    : mergeProfileGroup(currentFinancial, group("financial"));
   const data = {
     identityJson: mergeProfileGroup(current?.identityJson ?? defaults.identity, group("identity")),
     contactJson: mergeProfileGroup(current?.contactJson ?? defaults.contact, group("contact")),
     addressJson: mergeProfileGroup(current?.addressJson ?? defaults.address, group("address")),
-    professionalJson: mergeProfileGroup(current?.professionalJson ?? defaults.professional, group("professional")),
-    financialJson: mergeProfileGroup(current?.financialJson ?? defaults.financial, group("financial")),
+    professionalJson: professionalPatch ? { ...currentProfessional, ...professionalPatch } : currentProfessional,
+    financialJson: financialData,
     creditJson: mergeProfileGroup(current?.creditJson ?? defaults.credit, group("credit")),
     legalJson: mergeProfileGroup(current?.legalJson ?? defaults.legal, group("legal")),
     fiscalJson: mergeProfileGroup(current?.fiscalJson ?? defaults.fiscal, group("fiscal")),
@@ -189,6 +241,29 @@ export async function updateOwnerProfile(options: {
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.profile.updated", "property_owner", options.ownerId, {
     sections: Object.keys(input).filter((key) => OWNER_PROFILE_GROUPS.includes(key as OwnerProfileGroup)),
   });
+  if (professionalPatch) {
+    await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.employment.updated", "property_owner", options.ownerId, {
+      sections: ["profession", "employment", "history"],
+    });
+  }
+  if (financialPatch) {
+    const financialKeys = Object.keys(financialInput ?? {});
+    if (financialKeys.some((key) => key.includes("income") || key === "sources" || key === "income_sources")) {
+      await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.income.updated", "property_owner", options.ownerId, {
+        source_count: mergedFinancial?.income_sources.length ?? 0,
+      });
+    }
+    if (financialKeys.some((key) => key === "assets" || key === "patrimony" || key.includes("assets_total"))) {
+      await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.asset.updated", "property_owner", options.ownerId, {
+        asset_count: mergedFinancial?.assets.length ?? 0,
+      });
+    }
+    if (financialCapacity) {
+      await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.financial_analysis.generated", "property_owner", options.ownerId, {
+        status: financialCapacity.status,
+      });
+    }
+  }
   return serializeProfile(profile, options.permissions);
 }
 
