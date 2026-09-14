@@ -15,6 +15,8 @@ import { getStorageProviderForName } from "../services/storage/index.js";
 import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { listFinancialEntriesForPortal } from "../services/mysql-finance.js";
 import type { StorageProviderName, StorageResourceType } from "../services/storage/types.js";
+import { getPrisma } from "../lib/website-builder-prisma.js";
+import { writeAuthAudit } from "../services/mysql-auth.js";
 
 export const publicPortalsRouter = Router();
 
@@ -287,6 +289,15 @@ publicPortalsRouter.get("/owners/:token/documents/:documentId", async (req, res,
     }
 
     const buffer = Buffer.from(await upstream.arrayBuffer());
+    await writeAuthAudit(
+      getPrisma(),
+      owner.companyId,
+      null,
+      "owner.document_downloaded",
+      "property_owner",
+      owner.id,
+      { documentId: file.id, access_channel: "owner_portal" },
+    );
     const disposition =
       file.mimeType === "application/pdf" || file.mimeType.startsWith("image/")
         ? "inline"

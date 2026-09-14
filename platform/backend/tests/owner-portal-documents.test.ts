@@ -22,6 +22,7 @@ const { database, authenticatedUrlState } = vi.hoisted(() => ({
     company: { findFirst: vi.fn() },
     property: { findMany: vi.fn() },
     storedFile: { findFirst: vi.fn(), findMany: vi.fn() },
+    authAuditLog: { create: vi.fn() },
   },
   // Fast-follow de privacidade (F4E): a rota de download agora resolve uma
   // URL assinada de curta duração via
@@ -369,6 +370,18 @@ describe("GET /public/portals/owners/:token/documents/:documentId (download)", (
     expect(response.headers.get("content-disposition")).toContain("inline");
     expect(response.headers.get("content-disposition")).toContain("Contrato de loca");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(database.authAuditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: "company-a",
+        actorUserId: null,
+        action: "owner.document_downloaded",
+        entityType: "property_owner",
+        entityId: "owner-a",
+        metadataJson: { documentId: "doc-1", access_channel: "owner_portal" },
+      }),
+    });
+    const auditPayload = JSON.stringify(database.authAuditLog.create.mock.calls[0]?.[0]);
+    expect(auditPayload).not.toMatch(/52998224725|11111111-1111-4111-8111-111111111111|secureUrl|publicId/i);
   });
 
   it("[F4E fast-follow #4] owner_document usa acesso authenticated: URL é gerada via getAuthenticatedDownloadUrl, nunca via fetch direto de secureUrl", async () => {
@@ -426,6 +439,7 @@ describe("GET /public/portals/owners/:token/documents/:documentId (download)", (
     const response = await requestPublicPortal(`/owners/${OWNER_A_TOKEN}/documents/doc-of-owner-b`);
     expect(response.status).toBe(404);
     expect((response.body as Record<string, unknown>).code).toBe("PORTAL_NOT_FOUND");
+    expect(database.authAuditLog.create).not.toHaveBeenCalled();
   });
 
   it("13. download cross-company bloqueado — mesmo padrão 404 tenant-safe, nunca revela existência", async () => {
@@ -435,12 +449,14 @@ describe("GET /public/portals/owners/:token/documents/:documentId (download)", (
     database.storedFile.findFirst.mockResolvedValue(null);
     const response = await requestPublicPortal(`/owners/${OWNER_B_TOKEN}/documents/doc-1`);
     expect(response.status).toBe(404);
+    expect(database.authAuditLog.create).not.toHaveBeenCalled();
   });
 
   it("token inválido no endpoint de download também cai em 404 tenant-safe sem consultar StoredFile", async () => {
     const response = await requestPublicPortal("/owners/not-a-token/documents/doc-1");
     expect(response.status).toBe(404);
     expect(database.storedFile.findFirst).not.toHaveBeenCalled();
+    expect(database.authAuditLog.create).not.toHaveBeenCalled();
   });
 
   it("id de documento arbitrário/inexistente nunca vaza um arquivo — cai no mesmo 404", async () => {
