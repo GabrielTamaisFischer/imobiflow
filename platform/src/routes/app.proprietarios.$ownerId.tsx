@@ -175,7 +175,7 @@ function OwnerDashboardPage() {
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} /> : null}
-      {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} /> : null}
+      {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} onOpenConsent={() => setProfileTab("treatment_consent")} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Panel title="Imóveis vinculados">
@@ -275,7 +275,7 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><p className="text-xs font-semibold uppercase text-muted-foreground">Cadastro inteligente</p><h2 className="text-lg font-semibold">Ficha cadastral</h2></div>
     </div>
-    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
+    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} id={key === "treatment_consent" ? "consentimento-lgpd" : undefined} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
     <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
       <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
       {canManage && !restricted ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
@@ -284,13 +284,14 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
   </section>;
 }
 
-function OwnerIntelligencePanel({ profile, checks, busy, message, error, onQuery }: {
+function OwnerIntelligencePanel({ profile, checks, busy, message, error, onQuery, onOpenConsent }: {
   profile: OwnerProfile;
   checks: OwnerCheck[];
   busy: boolean;
   message: string | null;
   error: string | null;
   onQuery: () => void;
+  onOpenConsent: () => void;
 }) {
   const consent = hasValidTreatmentConsent(profile);
   const latest = checks.find((check) => check.check_type === "intelligence");
@@ -306,7 +307,7 @@ function OwnerIntelligencePanel({ profile, checks, busy, message, error, onQuery
         {busy ? "Buscando dados..." : latest ? "Atualizar dados" : "Buscar dados"}
       </button>
     </div>
-    {!consent ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800">É necessário registrar a autorização de tratamento de dados antes de realizar consultas. Registre-a na aba “Consentimento LGPD” acima.</p> : null}
+    {!consent ? <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800"><p>É necessário registrar a autorização de tratamento de dados antes de realizar consultas.</p><button type="button" onClick={onOpenConsent} className="mt-2 font-semibold underline">Abrir consentimento LGPD</button></div> : null}
     {message ? <p role="status" className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-800">{message}</p> : null}
     {error ? <p role="alert" className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p> : null}
     <div className="mt-4 grid gap-3 sm:grid-cols-3">
