@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Building2,
   Copy,
@@ -50,6 +50,7 @@ export const Route = createFileRoute("/app/proprietarios")({
 
 function OwnersPage() {
   const { session, isLoading } = useSessionGuard();
+  const isDetailRoute = useRouterState({ select: (state) => state.matches.some((match) => match.routeId === "/app/proprietarios/$ownerId") });
   const module = getModuleByKey("owners");
   const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [properties, setProperties] = useState<PropertySummary[]>([]);
@@ -108,6 +109,8 @@ function OwnersPage() {
       </main>
     );
   }
+
+  if (isDetailRoute) return <Outlet />;
 
   return (
     <ModulePage session={session} module={module}>
