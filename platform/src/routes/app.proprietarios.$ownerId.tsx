@@ -12,6 +12,10 @@ import {
   regenerateOwnerPortalToken,
   resolveOwnerPropertyUpdateRequest,
   setOwnerPortalEnabled,
+  getOwnerProfile,
+  updateOwnerProfile,
+  runOwnerEnrichment,
+  type OwnerProfile,
   type OwnerPropertyUpdateRequest,
   type OwnerDashboard,
 } from "@/product/real-estate";
@@ -31,6 +35,9 @@ function OwnerDashboardPage() {
   const module = getModuleByKey("owners");
   const navigate = useNavigate();
   const [dashboard, setDashboard] = useState<OwnerDashboard | null>(null);
+  const [profile, setProfile] = useState<OwnerProfile | null>(null);
+  const [profileTab, setProfileTab] = useState("identity");
+  const [profileBusy, setProfileBusy] = useState(false);
   const [updateRequests, setUpdateRequests] = useState<OwnerPropertyUpdateRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,12 +55,14 @@ function OwnerDashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextDashboard, nextRequests] = await Promise.all([
+      const [nextDashboard, nextRequests, nextProfile] = await Promise.all([
         getOwnerDashboard(ownerId),
         listOwnerPropertyUpdateRequests(ownerId, "PENDING"),
+        getOwnerProfile(ownerId),
       ]);
       setDashboard(nextDashboard);
       setUpdateRequests(nextRequests.requests);
+      setProfile(nextProfile.profile);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível carregar o proprietário."); }
     finally { setLoading(false); }
@@ -111,6 +120,24 @@ function OwnerDashboardPage() {
     window.setTimeout(() => setCopied(false), 1600);
   }
 
+  async function saveProfile(patch: Record<string, unknown>) {
+    setProfileBusy(true);
+    try {
+      const response = await updateOwnerProfile(ownerId, patch);
+      setProfile(response.profile);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível salvar a ficha."); }
+    finally { setProfileBusy(false); }
+  }
+
+  async function requestEnrichment() {
+    setProfileBusy(true);
+    try {
+      await runOwnerEnrichment(ownerId, ["identity", "address", "professional"]);
+      setError("Enriquecimento registrado como não configurado neste ambiente; nenhum provedor externo foi acionado.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível solicitar enriquecimento."); }
+    finally { setProfileBusy(false); }
+  }
+
   if (isSessionLoading || loading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando proprietário...</main>;
 
   return <ModulePage session={session} module={module}>
@@ -118,6 +145,7 @@ function OwnerDashboardPage() {
     {error ? <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
+      {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} onEnrich={() => void requestEnrichment()} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Panel title="Imóveis vinculados">
@@ -192,6 +220,40 @@ function OwnerDashboardPage() {
       ) : null}
     </>}
   </ModulePage>;
+}
+
+const profileTabs: Array<[string, string]> = [
+  ["identity", "Dados pessoais"], ["contact", "Contato"], ["address", "Endereço"], ["professional", "Profissional"],
+  ["financial", "Financeiro"], ["credit", "Crédito"], ["legal", "Jurídico"], ["fiscal", "Fiscal"],
+  ["treatment_consent", "Consentimento LGPD"],
+];
+
+function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, onSave, onEnrich }: {
+  profile: OwnerProfile;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+  canManage: boolean;
+  busy: boolean;
+  onSave: (patch: Record<string, unknown>) => Promise<void>;
+  onEnrich: () => void;
+}) {
+  const value = profile[activeTab as keyof OwnerProfile];
+  const isObject = value && typeof value === "object" && !Array.isArray(value);
+  const restricted = value === null;
+  const [draft, setDraft] = useState(() => JSON.stringify(isObject ? value : {}, null, 2));
+  useEffect(() => { setDraft(JSON.stringify(isObject ? value : {}, null, 2)); }, [activeTab, profile]);
+  return <section className="mt-4 rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><p className="text-xs font-semibold uppercase text-muted-foreground">Cadastro inteligente</p><h2 className="text-lg font-semibold">Ficha cadastral e enriquecimento</h2></div>
+      <button type="button" onClick={onEnrich} disabled={!canManage || busy} className="rounded-md border border-border px-3 py-2 text-xs font-semibold">{busy ? "Processando..." : "Consultar enriquecimento"}</button>
+    </div>
+    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
+    <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+      <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
+      {canManage && !restricted ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
+    </div>
+    <p className="mt-3 text-xs text-muted-foreground">Valores preservam origem, confiança e consentimento LGPD. Consultas externas permanecem desativadas quando o provedor está NOT_CONFIGURED.</p>
+  </section>;
 }
 
 function Panel({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {

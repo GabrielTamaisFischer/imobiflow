@@ -59,6 +59,9 @@ model Company {
   proposals       Proposal[]
   proposalEvents  ProposalEvent[]
   ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
+  ownerProfiles   OwnerProfile[]
+  ownerChecks     OwnerCheck[]
+  ownerDocuments  OwnerDocumentRecord[]
 
   @@index([status])
   @@map("companies")
@@ -88,6 +91,8 @@ model AppUser {
   passwordResetTokens PasswordResetToken[]
   invitationsSent UserInvitation[] @relation("InvitationSender")
   authAuditLogs AuthAuditLog[] @relation("AuthAuditActor")
+  ownerChecksRequested OwnerCheck[] @relation("OwnerCheckRequestedBy")
+  ownerDocumentsVerified OwnerDocumentRecord[] @relation("OwnerDocumentVerifiedBy")
   activatedProvisionings AccountProvisioning[] @relation("ProvisioningOwner")
   routingMemberships CrmRoutingMember[]
   assignedLeads Lead[] @relation("LeadAssignee")
@@ -411,10 +416,93 @@ model PropertyOwner {
   properties          Property[]
   financialEntries    FinancialEntry[]
   ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
+  profile                OwnerProfile?
+  checks                OwnerCheck[]
+  documentRecords       OwnerDocumentRecord[]
 
   @@index([companyId, status])
   @@index([companyId, document])
   @@map("property_owners")
+}
+
+// P1 Proprietários — ficha cadastral canônica. Os grupos JSON são validados
+// pelos DTOs do backend e preservam origem/confiança sem espalhar payloads de
+// providers externos pelo domínio. O vínculo 1:1 continua tenant-scoped pelo
+// companyId e pelo ownerId.
+model OwnerProfile {
+  id                    String        @id @default(uuid()) @db.Char(36)
+  companyId             String        @map("company_id") @db.Char(36)
+  ownerId               String        @unique @map("owner_id") @db.Char(36)
+  identityJson          Json          @map("identity_json")
+  contactJson           Json          @map("contact_json")
+  addressJson           Json          @map("address_json")
+  professionalJson      Json          @map("professional_json")
+  financialJson         Json          @map("financial_json")
+  creditJson            Json          @map("credit_json")
+  legalJson             Json          @map("legal_json")
+  fiscalJson            Json          @map("fiscal_json")
+  provenanceJson        Json          @map("provenance_json")
+  confidenceJson        Json          @map("confidence_json")
+  treatmentConsentJson  Json          @map("treatment_consent_json")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+  company               Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner                 PropertyOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, ownerId])
+  @@index([companyId, updatedAt])
+  @@map("owner_profiles")
+}
+
+model OwnerCheck {
+  id               String         @id @default(uuid()) @db.Char(36)
+  companyId        String         @map("company_id") @db.Char(36)
+  ownerId          String         @map("owner_id") @db.Char(36)
+  checkType        String         @map("check_type") @db.VarChar(40)
+  provider         String         @db.VarChar(100)
+  status           String         @db.VarChar(30)
+  inputFingerprint String         @map("input_fingerprint") @db.VarChar(128)
+  idempotencyKey   String         @map("idempotency_key") @db.VarChar(160)
+  source           String?        @db.VarChar(80)
+  summaryJson      Json?          @map("summary_json")
+  warningsJson     Json?          @map("warnings_json")
+  requestedBy      String?        @map("requested_by") @db.Char(36)
+  checkedAt        DateTime?      @map("checked_at")
+  expiresAt        DateTime?      @map("expires_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+  company          Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner            PropertyOwner  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  requestedByUser  AppUser?       @relation("OwnerCheckRequestedBy", fields: [requestedBy], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, ownerId, checkType, provider, idempotencyKey])
+  @@index([companyId, ownerId, checkType, checkedAt])
+  @@index([companyId, status, expiresAt])
+  @@map("owner_checks")
+}
+
+model OwnerDocumentRecord {
+  id           String         @id @default(uuid()) @db.Char(36)
+  companyId    String         @map("company_id") @db.Char(36)
+  ownerId      String         @map("owner_id") @db.Char(36)
+  storedFileId String         @unique @map("stored_file_id") @db.Char(36)
+  documentType String         @map("document_type") @db.VarChar(60)
+  status       String         @default("PENDING") @db.VarChar(30)
+  verified     Boolean        @default(false)
+  verifiedBy   String?        @map("verified_by") @db.Char(36)
+  verifiedAt   DateTime?      @map("verified_at")
+  expiresAt    DateTime?      @map("expires_at")
+  notes        String?        @db.Text
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner        PropertyOwner  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  storedFile   StoredFile     @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+  verifier     AppUser?       @relation("OwnerDocumentVerifiedBy", fields: [verifiedBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, ownerId, documentType])
+  @@index([companyId, status, expiresAt])
+  @@map("owner_document_records")
 }
 
 model Property {
@@ -580,6 +668,7 @@ model StoredFile {
   // services/storage/purposes.ts (STORED_FILE_PURPOSES).
   purpose          String?  @db.VarChar(40)
   inspectionEvidence InspectionEvidence?
+  ownerDocument      OwnerDocumentRecord?
 
   @@unique([provider, publicId])
   @@index([companyId, entityType, entityId])

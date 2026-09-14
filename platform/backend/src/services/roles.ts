@@ -9,6 +9,13 @@ export const permissionCatalog = [
   ["properties.manage", "Gerenciar imóveis"],
   ["owners.view", "Visualizar proprietários"],
   ["owners.manage", "Gerenciar proprietários"],
+  ["owners.sensitive.view", "Visualizar dados sensíveis de proprietários"],
+  ["owners.financial.view", "Visualizar dados financeiros de proprietários"],
+  ["owners.credit.view", "Visualizar dados de crédito de proprietários"],
+  ["owners.legal.view", "Visualizar dados jurídicos de proprietários"],
+  ["owners.fiscal.view", "Visualizar dados fiscais de proprietários"],
+  ["owners.documents.view", "Visualizar documentos de proprietários"],
+  ["owners.enrichment.run", "Executar enriquecimento de proprietários"],
   ["appointments.view", "Visualizar agenda"],
   ["appointments.manage", "Gerenciar agenda"],
   ["rentals.view", "Visualizar locações"],
@@ -55,6 +62,15 @@ export type SystemRoleKey =
 
 const allPermissions = permissionCatalog.map(([key]) => key);
 const viewPermissions = allPermissions.filter((key) => key.endsWith(".view"));
+const ownerSensitivePermissions = new Set([
+  "owners.sensitive.view",
+  "owners.financial.view",
+  "owners.credit.view",
+  "owners.legal.view",
+  "owners.fiscal.view",
+  "owners.documents.view",
+]);
+export const readOnlyPermissions = viewPermissions.filter((key) => !ownerSensitivePermissions.has(key));
 export const brokerResourceScopedPermissions = [
   "properties.view",
   "properties.manage",
@@ -119,7 +135,7 @@ export const roleTemplates: ReadonlyArray<{
       "notifications.view",
     ],
   },
-  { systemKey: "read_only", name: "Somente leitura", permissions: viewPermissions },
+  { systemKey: "read_only", name: "Somente leitura", permissions: readOnlyPermissions },
   {
     systemKey: "financial",
     name: "Financeiro",
@@ -146,7 +162,7 @@ export const roleTemplates: ReadonlyArray<{
   {
     systemKey: "legal",
     name: "Jurídico/Contratos",
-    permissions: ["properties.view", "owners.view", "contracts.view", "contracts.manage"],
+    permissions: ["properties.view", "owners.view", "owners.legal.view", "owners.documents.view", "contracts.view", "contracts.manage"],
   },
 ];
 
@@ -169,6 +185,20 @@ export async function ensureDefaultCompanyRoles(
     })),
     skipDuplicates: true,
   });
+
+  await reconcileCompanyRolePermissions(companyId, database);
+}
+
+/**
+ * Reconciles only missing assignments for canonical system roles. Existing
+ * RolePermission rows (including custom scopes) are never updated or removed.
+ * This is intentionally callable by a controlled one-off staging operation so
+ * existing tenants do not depend on a future login/activation.
+ */
+export async function reconcileCompanyRolePermissions(
+  companyId: string,
+  database: AuthDatabase = getPrisma(),
+) {
 
   const [permissionRows, roleRows] = await Promise.all([
     database.permission.findMany({
@@ -195,9 +225,16 @@ export async function ensureDefaultCompanyRoles(
         : [];
     });
   });
-  if (assignments.length) {
-    await database.rolePermission.createMany({ data: assignments, skipDuplicates: true });
-  }
+  if (assignments.length) await database.rolePermission.createMany({ data: assignments, skipDuplicates: true });
+}
+
+export async function reconcileExistingCompanyRolePermissions(database: AuthDatabase = getPrisma()) {
+  await database.permission.createMany({
+    data: permissionCatalog.map(([key, description]) => ({ key, description })),
+    skipDuplicates: true,
+  });
+  const companies = await database.company.findMany({ select: { id: true } });
+  for (const company of companies) await reconcileCompanyRolePermissions(company.id, database);
 }
 
 export async function getCompanyRoleBySystemKey(

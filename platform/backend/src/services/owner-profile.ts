@@ -1,0 +1,254 @@
+import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
+import { getPrisma } from "../lib/website-builder-prisma.js";
+import { writeAuthAudit } from "./mysql-auth.js";
+
+export const OWNER_PROFILE_GROUPS = [
+  "identity",
+  "contact",
+  "address",
+  "professional",
+  "financial",
+  "credit",
+  "legal",
+  "fiscal",
+] as const;
+export type OwnerProfileGroup = (typeof OWNER_PROFILE_GROUPS)[number];
+export type OwnerProfilePermissions = Set<string> | readonly string[];
+
+type JsonRecord = Record<string, unknown>;
+
+export function ownerProfileDefaults() {
+  return {
+    identity: {},
+    contact: {},
+    address: {},
+    professional: {},
+    financial: {},
+    credit: {},
+    legal: {},
+    fiscal: {},
+    provenance: {},
+    confidence: {},
+    treatment_consent: {},
+  } satisfies Record<string, JsonRecord>;
+}
+
+export function mergeProfileGroup(current: unknown, patch: unknown): JsonRecord {
+  const currentRecord = current && typeof current === "object" && !Array.isArray(current) ? current as JsonRecord : {};
+  const patchRecord = patch && typeof patch === "object" && !Array.isArray(patch) ? patch as JsonRecord : {};
+  return { ...currentRecord, ...patchRecord };
+}
+
+export function maskOwnerDocument(value: string | null | undefined) {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 11) return `***.***.${digits.slice(6, 9)}-${digits.slice(-2)}`;
+  if (digits.length === 14) return `**.***.***/****-${digits.slice(-2)}`;
+  return `${value.slice(0, 2)}***${value.slice(-2)}`;
+}
+
+export function sanitizeOwnerForPermissions(owner: Record<string, unknown>, permissions: OwnerProfilePermissions) {
+  if (hasPermission(permissions, "owners.sensitive.view")) return owner;
+  return { ...owner, document: maskOwnerDocument(typeof owner.document === "string" ? owner.document : null) };
+}
+
+function hasPermission(permissions: OwnerProfilePermissions, permission: string) {
+  return permissions instanceof Set ? permissions.has(permission) : permissions.includes(permission);
+}
+
+function jsonValue(value: unknown): Prisma.InputJsonValue {
+  return (value ?? {}) as Prisma.InputJsonValue;
+}
+
+function ensureBoundedJson(value: unknown, label: string): JsonRecord {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error(`${label} deve ser um objeto.`), { statusCode: 400, code: "INVALID_OWNER_PROFILE_GROUP" });
+  }
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 40_000) {
+    throw Object.assign(new Error(`${label} excede o limite permitido.`), { statusCode: 413, code: "OWNER_PROFILE_GROUP_TOO_LARGE" });
+  }
+  return value as JsonRecord;
+}
+
+function ownerNotFound() {
+  return Object.assign(new Error("Proprietário não encontrado."), { statusCode: 404, code: "OWNER_NOT_FOUND" });
+}
+
+async function ensureOwner(companyId: string, ownerId: string) {
+  const owner = await getPrisma().propertyOwner.findFirst({ where: { id: ownerId, companyId } });
+  if (!owner) throw ownerNotFound();
+  return owner;
+}
+
+async function auditProfileViews(companyId: string, actorUserId: string, ownerId: string, permissions: OwnerProfilePermissions) {
+  const granted = (permission: string) => hasPermission(permissions, permission);
+  const sensitiveActions: Array<[string, string]> = [
+    ["owners.financial.view", "owner.financial.viewed"],
+    ["owners.credit.view", "owner.credit.viewed"],
+    ["owners.legal.view", "owner.legal.viewed"],
+    ["owners.fiscal.view", "owner.fiscal.viewed"],
+    ["owners.documents.view", "owner.documents.viewed"],
+  ];
+  const visibleSensitive = sensitiveActions.filter(([permission]) => granted(permission)).map(([, action]) => action);
+  await writeAuthAudit(getPrisma(), companyId, actorUserId, "owner.profile.viewed", "property_owner", ownerId, {
+    sensitive_sections: visibleSensitive,
+  });
+  if (visibleSensitive.length && granted("owners.sensitive.view")) {
+    await writeAuthAudit(getPrisma(), companyId, actorUserId, "owner.sensitive_data.viewed", "property_owner", ownerId, {
+      actions: visibleSensitive,
+    });
+  }
+  await Promise.all(visibleSensitive.map((action) => writeAuthAudit(getPrisma(), companyId, actorUserId, action, "property_owner", ownerId, {})));
+}
+
+function serializeProfile(profile: any, permissions: OwnerProfilePermissions) {
+  const canSensitive = hasPermission(permissions, "owners.sensitive.view");
+  const result: Record<string, unknown> = {
+    id: profile.id,
+    company_id: profile.companyId,
+    owner_id: profile.ownerId,
+    identity: profile.identityJson ?? {},
+    contact: profile.contactJson ?? {},
+    address: profile.addressJson ?? {},
+    professional: profile.professionalJson ?? {},
+    provenance: canSensitive ? profile.provenanceJson ?? {} : {},
+    confidence: canSensitive ? profile.confidenceJson ?? {} : {},
+    treatment_consent: canSensitive ? profile.treatmentConsentJson ?? {} : {},
+    updated_at: profile.updatedAt.toISOString(),
+  };
+  result.financial = hasPermission(permissions, "owners.financial.view") ? profile.financialJson ?? {} : null;
+  result.credit = hasPermission(permissions, "owners.credit.view") ? profile.creditJson ?? {} : null;
+  result.legal = hasPermission(permissions, "owners.legal.view") ? profile.legalJson ?? {} : null;
+  result.fiscal = hasPermission(permissions, "owners.fiscal.view") ? profile.fiscalJson ?? {} : null;
+  return result;
+}
+
+export async function getOwnerProfile(options: {
+  companyId: string;
+  ownerId: string;
+  actorUserId: string;
+  permissions: OwnerProfilePermissions;
+}) {
+  await ensureOwner(options.companyId, options.ownerId);
+  const defaults = ownerProfileDefaults();
+  const profile = await getPrisma().ownerProfile.upsert({
+    where: { ownerId: options.ownerId },
+    create: {
+      companyId: options.companyId,
+      ownerId: options.ownerId,
+      identityJson: defaults.identity,
+      contactJson: defaults.contact,
+      addressJson: defaults.address,
+      professionalJson: defaults.professional,
+      financialJson: defaults.financial,
+      creditJson: defaults.credit,
+      legalJson: defaults.legal,
+      fiscalJson: defaults.fiscal,
+      provenanceJson: defaults.provenance,
+      confidenceJson: defaults.confidence,
+      treatmentConsentJson: defaults.treatment_consent,
+    },
+    update: {},
+  });
+  await auditProfileViews(options.companyId, options.actorUserId, options.ownerId, options.permissions);
+  return serializeProfile(profile, options.permissions);
+}
+
+export async function updateOwnerProfile(options: {
+  companyId: string;
+  ownerId: string;
+  actorUserId: string;
+  patch: Record<string, unknown>;
+  permissions: OwnerProfilePermissions;
+}) {
+  await ensureOwner(options.companyId, options.ownerId);
+  const current = await getPrisma().ownerProfile.findFirst({ where: { ownerId: options.ownerId, companyId: options.companyId } });
+  const defaults = ownerProfileDefaults();
+  const input = options.patch;
+  const group = (key: string) => ensureBoundedJson(input[key], key);
+  const data = {
+    identityJson: mergeProfileGroup(current?.identityJson ?? defaults.identity, group("identity")),
+    contactJson: mergeProfileGroup(current?.contactJson ?? defaults.contact, group("contact")),
+    addressJson: mergeProfileGroup(current?.addressJson ?? defaults.address, group("address")),
+    professionalJson: mergeProfileGroup(current?.professionalJson ?? defaults.professional, group("professional")),
+    financialJson: mergeProfileGroup(current?.financialJson ?? defaults.financial, group("financial")),
+    creditJson: mergeProfileGroup(current?.creditJson ?? defaults.credit, group("credit")),
+    legalJson: mergeProfileGroup(current?.legalJson ?? defaults.legal, group("legal")),
+    fiscalJson: mergeProfileGroup(current?.fiscalJson ?? defaults.fiscal, group("fiscal")),
+    provenanceJson: mergeProfileGroup(current?.provenanceJson ?? defaults.provenance, input.provenance),
+    confidenceJson: mergeProfileGroup(current?.confidenceJson ?? defaults.confidence, input.confidence),
+    treatmentConsentJson: mergeProfileGroup(current?.treatmentConsentJson ?? defaults.treatment_consent, input.treatment_consent),
+  };
+  const profile = current
+    ? await getPrisma().ownerProfile.update({ where: { id: current.id }, data })
+    : await getPrisma().ownerProfile.create({ data: { companyId: options.companyId, ownerId: options.ownerId, ...data } });
+  await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.profile.updated", "property_owner", options.ownerId, {
+    sections: Object.keys(input).filter((key) => OWNER_PROFILE_GROUPS.includes(key as OwnerProfileGroup)),
+  });
+  return serializeProfile(profile, options.permissions);
+}
+
+export type OwnerEnrichmentProvider = {
+  name: string;
+  run: (input: { ownerId: string; document: string | null; sections: string[] }) => Promise<{ status: string; summary: JsonRecord; warnings: string[] }>;
+};
+
+export const ownerEnrichmentProvider: OwnerEnrichmentProvider = {
+  name: "NOT_CONFIGURED",
+  async run() {
+    return { status: "NOT_CONFIGURED", summary: {}, warnings: ["Nenhum provedor de enriquecimento foi configurado para este ambiente."] };
+  },
+};
+
+export async function runOwnerEnrichment(options: {
+  companyId: string;
+  ownerId: string;
+  actorUserId: string;
+  idempotencyKey: string;
+  sections: string[];
+}) {
+  const owner = await ensureOwner(options.companyId, options.ownerId);
+  const profile = await getPrisma().ownerProfile.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId } });
+  const consent = profile?.treatmentConsentJson as JsonRecord | null | undefined;
+  if (!consent || !consent.authorized_at || !consent.purpose) {
+    throw Object.assign(new Error("Consentimento LGPD de tratamento é obrigatório antes do enriquecimento."), { statusCode: 422, code: "OWNER_TREATMENT_CONSENT_REQUIRED" });
+  }
+  const key = options.idempotencyKey.trim().slice(0, 160);
+  if (!key) throw Object.assign(new Error("Idempotency-Key é obrigatório."), { statusCode: 400, code: "IDEMPOTENCY_KEY_REQUIRED" });
+  const fingerprint = createHash("sha256").update(`${owner.document ?? ""}:${options.sections.sort().join(",")}`).digest("hex");
+  const existing = await getPrisma().ownerCheck.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId, checkType: "enrichment", provider: ownerEnrichmentProvider.name, idempotencyKey: key } });
+  if (existing) return serializeCheck(existing);
+  await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.enrichment.requested", "property_owner", options.ownerId, { provider: ownerEnrichmentProvider.name, sections: options.sections });
+  const result = await ownerEnrichmentProvider.run({ ownerId: owner.id, document: owner.document, sections: options.sections });
+  const check = await getPrisma().ownerCheck.create({
+    data: {
+      companyId: options.companyId,
+      ownerId: options.ownerId,
+      checkType: "enrichment",
+      provider: ownerEnrichmentProvider.name,
+      status: result.status,
+      inputFingerprint: fingerprint,
+      idempotencyKey: key,
+      source: "manual",
+      summaryJson: jsonValue(result.summary),
+      warningsJson: jsonValue(result.warnings),
+      requestedBy: options.actorUserId,
+      checkedAt: new Date(),
+    },
+  });
+  await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.enrichment.completed", "property_owner", options.ownerId, { status: result.status, provider: ownerEnrichmentProvider.name });
+  return serializeCheck(check);
+}
+
+function serializeCheck(check: any) {
+  return { id: check.id, owner_id: check.ownerId, check_type: check.checkType, provider: check.provider, status: check.status, summary: check.summaryJson ?? {}, warnings: check.warningsJson ?? [], checked_at: check.checkedAt?.toISOString() ?? null, created_at: check.createdAt.toISOString() };
+}
+
+export async function listOwnerChecks(companyId: string, ownerId: string) {
+  await ensureOwner(companyId, ownerId);
+  const checks = await getPrisma().ownerCheck.findMany({ where: { companyId, ownerId }, orderBy: { createdAt: "desc" }, take: 50 });
+  return checks.map(serializeCheck);
+}

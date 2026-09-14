@@ -68,6 +68,7 @@ import {
 } from "../services/authorization.js";
 import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
+import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
 
 export const realEstateRouter = Router();
 
@@ -317,7 +318,7 @@ realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: Re
     const companyId = req.access!.company.id;
     const status = typeof req.query.status === "string" ? req.query.status : "active";
     const search = typeof req.query.search === "string" ? req.query.search.slice(0, 120) : undefined;
-    res.json({ owners: await listMysqlOwners(companyId, status, search) });
+    res.json({ owners: (await listMysqlOwners(companyId, status, search)).map((owner) => sanitizeOwnerForPermissions(owner, req.access!.appUser.permissions)) });
   } catch (error) {
     next(error);
   }
@@ -326,10 +327,52 @@ realEstateRouter.get("/owners", requirePermission("owners.view"), async (req: Re
 realEstateRouter.get("/owners/:id/dashboard", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const dashboard = await loadMysqlOwnerDashboard(req.access!.company.id, String(req.params.id));
+    dashboard.owner = sanitizeOwnerForPermissions(dashboard.owner, req.access!.appUser.permissions);
     res.json(dashboard);
   } catch (error) {
     next(error);
   }
+});
+
+const ownerProfilePatchSchema = z.object({
+  identity: z.record(z.unknown()).optional(),
+  contact: z.record(z.unknown()).optional(),
+  address: z.record(z.unknown()).optional(),
+  professional: z.record(z.unknown()).optional(),
+  financial: z.record(z.unknown()).optional(),
+  credit: z.record(z.unknown()).optional(),
+  legal: z.record(z.unknown()).optional(),
+  fiscal: z.record(z.unknown()).optional(),
+  provenance: z.record(z.unknown()).optional(),
+  confidence: z.record(z.unknown()).optional(),
+  treatment_consent: z.record(z.unknown()).optional(),
+});
+
+realEstateRouter.get("/owners/:id/profile", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    res.json({ profile: await getOwnerProfile({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions }) });
+  } catch (error) { next(error); }
+});
+
+realEstateRouter.patch("/owners/:id/profile", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = ownerProfilePatchSchema.parse(req.body);
+    res.json({ profile: await updateOwnerProfile({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions, patch: input }) });
+  } catch (error) { next(error); }
+});
+
+realEstateRouter.get("/owners/:id/checks", requirePermission("owners.sensitive.view"), async (req: RequestWithAccess, res, next) => {
+  try { res.json({ checks: await listOwnerChecks(req.access!.company.id, String(req.params.id)) }); }
+  catch (error) { next(error); }
+});
+
+realEstateRouter.post("/owners/:id/enrich", requirePermission("owners.enrichment.run"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const sections = z.array(z.string().trim().min(1).max(40)).max(20).default([]).parse(req.body?.sections ?? []);
+    const idempotencyKey = String(req.header("Idempotency-Key") ?? req.body?.idempotency_key ?? "");
+    const check = await runOwnerEnrichment({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, idempotencyKey, sections });
+    res.status(201).json({ check });
+  } catch (error) { next(error); }
 });
 
 realEstateRouter.get("/owners/:id/property-update-requests", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
@@ -463,7 +506,7 @@ realEstateRouter.post(
 );
 
 // Fase 4D — gestão interna de documentos do proprietário (permissão
-// owners.manage para enviar/remover, owners.view para listar — mesma regra
+// owners.manage para enviar/remover, owners.documents.view para listar —
 // já usada em todo o CRUD de owners acima; um corretor sem essa permissão
 // não consegue gerenciar documentos, exatamente como pedido no escopo).
 const ownerDocumentUploadSchema = z.object({
@@ -472,14 +515,19 @@ const ownerDocumentUploadSchema = z.object({
   size_bytes: z.number().int().positive().max(10 * 1024 * 1024),
   content_base64: z.string().min(1),
   property_id: z.string().uuid().optional(),
+  document_type: z.string().trim().min(1).max(60).default("owner_document"),
+  expires_at: z.string().datetime().optional(),
+  notes: z.string().max(4000).optional().or(z.literal("")),
 });
 
 realEstateRouter.get(
   "/owners/:id/documents",
-  requirePermission("owners.view"),
+  requirePermission("owners.documents.view"),
   async (req: RequestWithAccess, res, next) => {
     try {
-      const documents = await listMysqlOwnerDocuments(req.access!.company.id, String(req.params.id));
+      const ownerId = String(req.params.id);
+      const documents = await listMysqlOwnerDocuments(req.access!.company.id, ownerId);
+      await writeAuthAudit(getPrisma(), req.access!.company.id, req.access!.appUser.id, "owner.documents.viewed", "property_owner", ownerId, { count: documents.length });
       res.json({ documents });
     } catch (error) {
       next(error);
@@ -535,6 +583,19 @@ realEstateRouter.post(
         purpose: "owner_document",
         metadata: propertyId ? { property_id: propertyId } : null,
       });
+      const ownerDocumentRecordModel = (getPrisma() as any).ownerDocumentRecord;
+      const documentRecord = ownerDocumentRecordModel?.create
+        ? await ownerDocumentRecordModel.create({
+            data: {
+              companyId,
+              ownerId,
+              storedFileId: record.id,
+              documentType: input.document_type,
+              expiresAt: input.expires_at ? new Date(input.expires_at) : null,
+              notes: input.notes || null,
+            },
+          })
+        : { documentType: input.document_type, status: "PENDING", verified: false, expiresAt: input.expires_at ? new Date(input.expires_at) : null };
 
       await writeAuthAudit(
         getPrisma(),
@@ -561,11 +622,33 @@ realEstateRouter.post(
           mime_type: record.mimeType,
           created_at: record.createdAt.toISOString(),
           property_id: propertyId,
+          document_type: documentRecord.documentType,
+          status: documentRecord.status,
+          verified: documentRecord.verified,
+          expires_at: documentRecord.expiresAt?.toISOString() ?? null,
         },
       });
     } catch (error) {
       next(error);
     }
+  },
+);
+
+realEstateRouter.patch(
+  "/owners/:id/documents/:documentId",
+  requirePermission("owners.manage"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const input = z.object({ document_type: z.string().trim().min(1).max(60).optional(), status: z.string().trim().min(1).max(30).optional(), verified: z.boolean().optional(), expires_at: z.string().datetime().nullable().optional(), notes: z.string().max(4000).nullable().optional() }).parse(req.body);
+      const { document_type, expires_at, ...metadata } = input;
+      const result = await getPrisma().ownerDocumentRecord.updateMany({
+        where: { id: String(req.params.documentId), ownerId: String(req.params.id), companyId: req.access!.company.id },
+        data: { ...metadata, documentType: document_type, expiresAt: expires_at === undefined ? undefined : expires_at ? new Date(expires_at) : null, verifiedBy: input.verified === true ? req.access!.appUser.id : undefined, verifiedAt: input.verified === true ? new Date() : undefined },
+      });
+      if (!result.count) throw Object.assign(new Error("Documento não encontrado."), { statusCode: 404, code: "OWNER_DOCUMENT_NOT_FOUND" });
+      await writeAuthAudit(getPrisma(), req.access!.company.id, req.access!.appUser.id, "owner.document_metadata_updated", "property_owner", String(req.params.id), { documentId: String(req.params.documentId) });
+      res.json({ ok: true, document_id: String(req.params.documentId) });
+    } catch (error) { next(error); }
   },
 );
 

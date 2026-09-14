@@ -17,7 +17,7 @@ const { database, permissionState, storageState } = vi.hoisted(() => ({
     storedFile: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
     authAuditLog: { create: vi.fn() },
   },
-  permissionState: { permissions: ["owners.view", "owners.manage"] as string[] },
+  permissionState: { permissions: ["owners.view", "owners.manage", "owners.documents.view"] as string[] },
   storageState: {
     deletedPublicIds: [] as string[],
     // Fast-follow de privacidade (F4E): registra o `input` completo recebido
@@ -95,7 +95,7 @@ const PDF_BASE64 = Buffer.from("%PDF-1.4 conteudo de teste").toString("base64");
 
 beforeEach(() => {
   vi.clearAllMocks();
-  permissionState.permissions = ["owners.view", "owners.manage"];
+  permissionState.permissions = ["owners.view", "owners.manage", "owners.documents.view"];
   storageState.deletedPublicIds = [];
   storageState.uploadCalls = [];
   storageState.deleteCalls = [];
@@ -287,7 +287,7 @@ describe("POST /real-estate/owners/:id/documents", () => {
   });
 
   it("rejeita um Corretor sem owners.manage (403), sem consultar o proprietário", async () => {
-    permissionState.permissions = ["owners.view"];
+    permissionState.permissions = ["owners.view", "owners.documents.view"];
     const response = await request("POST", "/owners/owner-a/documents", {
       file_name: "contrato.pdf",
       mime_type: "application/pdf",
@@ -311,8 +311,8 @@ describe("POST /real-estate/owners/:id/documents", () => {
 });
 
 describe("GET /real-estate/owners/:id/documents", () => {
-  it("lista os documentos do proprietário (owners.view já é suficiente, não exige owners.manage)", async () => {
-    permissionState.permissions = ["owners.view"];
+  it("lista os documentos do proprietário com owners.documents.view, sem exigir owners.manage", async () => {
+    permissionState.permissions = ["owners.view", "owners.documents.view"];
     database.propertyOwner.findFirst.mockResolvedValue({ id: "owner-a" });
     database.storedFile.findMany.mockResolvedValue([storedFileFixture()]);
     database.property.findMany.mockResolvedValue([]);
@@ -320,6 +320,12 @@ describe("GET /real-estate/owners/:id/documents", () => {
     const response = await request("GET", "/owners/owner-a/documents");
     expect(response.status).toBe(200);
     expect(response.body.documents).toHaveLength(1);
+  });
+
+  it("nega a listagem interna sem owners.documents.view", async () => {
+    permissionState.permissions = ["owners.view"];
+    const response = await request("GET", "/owners/owner-a/documents");
+    expect(response.status).toBe(403);
   });
 
   it("nunca expõe publicId/secureUrl/provider ao usuário interno", async () => {

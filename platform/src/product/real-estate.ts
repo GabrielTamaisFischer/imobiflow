@@ -78,6 +78,36 @@ export type OwnerDashboard = {
   };
 };
 
+export type OwnerProfile = {
+  id: string;
+  company_id: string;
+  owner_id: string;
+  identity: Record<string, unknown>;
+  contact: Record<string, unknown>;
+  address: Record<string, unknown>;
+  professional: Record<string, unknown>;
+  financial: Record<string, unknown> | null;
+  credit: Record<string, unknown> | null;
+  legal: Record<string, unknown> | null;
+  fiscal: Record<string, unknown> | null;
+  provenance: Record<string, unknown>;
+  confidence: Record<string, unknown>;
+  treatment_consent: Record<string, unknown>;
+  updated_at: string;
+};
+
+export type OwnerCheck = {
+  id: string;
+  owner_id: string;
+  check_type: string;
+  provider: string;
+  status: string;
+  summary: Record<string, unknown>;
+  warnings: string[];
+  checked_at: string | null;
+  created_at: string;
+};
+
 export type OwnerPropertyUpdateRequest = {
   id: string;
   company_id: string;
@@ -342,6 +372,25 @@ export async function getOwnerDashboard(ownerId: string) {
   return apiRequest<OwnerDashboard>(`/real-estate/owners/${encodeURIComponent(ownerId)}/dashboard`, {
     token: getStoredToken() ?? undefined,
   });
+}
+
+export async function getOwnerProfile(ownerId: string) {
+  if (isPreviewRealEstate()) {
+    return { profile: { id: `preview-${ownerId}`, company_id: "preview", owner_id: ownerId, identity: {}, contact: {}, address: {}, professional: {}, financial: null, credit: null, legal: null, fiscal: null, provenance: {}, confidence: {}, treatment_consent: {}, updated_at: new Date().toISOString() } satisfies OwnerProfile };
+  }
+  return apiRequest<{ profile: OwnerProfile }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/profile`, { token: getStoredToken() ?? undefined });
+}
+
+export async function updateOwnerProfile(ownerId: string, patch: Record<string, unknown>) {
+  return apiRequest<{ profile: OwnerProfile }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/profile`, { method: "PATCH", body: JSON.stringify(patch), token: getStoredToken() ?? undefined });
+}
+
+export async function runOwnerEnrichment(ownerId: string, sections: string[], idempotencyKey = crypto.randomUUID()) {
+  return apiRequest<{ check: OwnerCheck }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/enrich`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ sections }), token: getStoredToken() ?? undefined });
+}
+
+export async function listOwnerChecks(ownerId: string) {
+  return apiRequest<{ checks: OwnerCheck[] }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/checks`, { token: getStoredToken() ?? undefined });
 }
 
 export async function listOwnerPropertyUpdateRequests(ownerId: string, status?: OwnerPropertyUpdateRequest["status"]) {

@@ -915,6 +915,7 @@ function ownerDocumentCategory(mimeType: string): OwnerDocumentSummary["category
 function toOwnerDocumentDto(
   record: { id: string; originalFilename: string; mimeType: string; createdAt: Date; metadataJson: unknown },
   ownedPropertyIds: Set<string>,
+  _metadataRecord?: { documentType: string; status: string; verified: boolean; expiresAt: Date | null },
 ): OwnerDocumentSummary {
   const metadata =
     record.metadataJson && typeof record.metadataJson === "object" ? (record.metadataJson as Record<string, unknown>) : null;
@@ -939,12 +940,15 @@ export async function ensureMysqlOwnerExists(companyId: string, ownerId: string)
 /** Uso interno (gestão em /app/proprietarios, requer owners.view/owners.manage). */
 export async function listMysqlOwnerDocuments(companyId: string, ownerId: string): Promise<OwnerDocumentSummary[]> {
   await ensureOwnerBelongsToCompany(ownerId, companyId);
-  const [records, properties] = await Promise.all([
+  const ownerDocumentRecordModel = (prisma() as any).ownerDocumentRecord;
+  const [records, properties, metadataRecords] = await Promise.all([
     findStoredFilesForEntity(companyId, "property_owner", ownerId, "owner_document"),
     prisma().property.findMany({ where: { companyId, ownerId }, select: { id: true } }),
+    ownerDocumentRecordModel?.findMany ? ownerDocumentRecordModel.findMany({ where: { companyId, ownerId }, select: { storedFileId: true, documentType: true, status: true, verified: true, expiresAt: true } }) : Promise.resolve([]),
   ]);
   const ownedPropertyIds = new Set(properties.map((property) => property.id));
-  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds));
+  const metadataByFile = new Map(metadataRecords.map((record) => [record.storedFileId, record]));
+  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds, metadataByFile.get(record.id)));
 }
 
 /**
