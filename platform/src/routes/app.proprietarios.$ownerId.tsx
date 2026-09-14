@@ -14,11 +14,20 @@ import {
   setOwnerPortalEnabled,
   getOwnerProfile,
   updateOwnerProfile,
-  runOwnerEnrichment,
+  listOwnerChecks,
+  queryOwnerIntelligence,
+  type OwnerCheck,
   type OwnerProfile,
   type OwnerPropertyUpdateRequest,
   type OwnerDashboard,
 } from "@/product/real-estate";
+import {
+  OWNER_INTELLIGENCE_CAPABILITY_LABELS,
+  OWNER_INTELLIGENCE_UI_CAPABILITIES,
+  capabilityStatus,
+  hasValidTreatmentConsent,
+  intelligenceErrorMessage,
+} from "@/product/owner-intelligence-ui";
 // AJUSTE-FUNCIONAL-03 (2026-09-11): reaproveita o mesmo uploader/StoredFile
 // já usado na listagem de proprietários (nunca cria um path paralelo) e o
 // mesmo helper de URL pública já usado nos cards de /app/imoveis — nenhuma
@@ -38,6 +47,10 @@ function OwnerDashboardPage() {
   const [profile, setProfile] = useState<OwnerProfile | null>(null);
   const [profileTab, setProfileTab] = useState("identity");
   const [profileBusy, setProfileBusy] = useState(false);
+  const [intelligenceChecks, setIntelligenceChecks] = useState<OwnerCheck[]>([]);
+  const [intelligenceBusy, setIntelligenceBusy] = useState(false);
+  const [intelligenceMessage, setIntelligenceMessage] = useState<string | null>(null);
+  const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
   const [updateRequests, setUpdateRequests] = useState<OwnerPropertyUpdateRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +76,14 @@ function OwnerDashboardPage() {
       setDashboard(nextDashboard);
       setUpdateRequests(nextRequests.requests);
       setProfile(nextProfile.profile);
+      try {
+        const nextChecks = await listOwnerChecks(ownerId);
+        setIntelligenceChecks(nextChecks.checks);
+      } catch {
+        // A user without sensitive-view permission can still use the owner
+        // dashboard; the query action remains protected by the backend.
+        setIntelligenceChecks([]);
+      }
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível carregar o proprietário."); }
     finally { setLoading(false); }
@@ -129,13 +150,21 @@ function OwnerDashboardPage() {
     finally { setProfileBusy(false); }
   }
 
-  async function requestEnrichment() {
-    setProfileBusy(true);
+  async function requestIntelligence() {
+    if (!profile || !hasValidTreatmentConsent(profile) || intelligenceBusy) {
+      setIntelligenceError("É necessário registrar a autorização de tratamento de dados antes de realizar consultas.");
+      return;
+    }
+    setIntelligenceBusy(true);
+    setIntelligenceError(null);
+    setIntelligenceMessage(null);
     try {
-      await runOwnerEnrichment(ownerId, ["identity", "address", "professional"]);
-      setError("Enriquecimento registrado como não configurado neste ambiente; nenhum provedor externo foi acionado.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível solicitar enriquecimento."); }
-    finally { setProfileBusy(false); }
+      const response = await queryOwnerIntelligence(ownerId, [...OWNER_INTELLIGENCE_UI_CAPABILITIES]);
+      setIntelligenceChecks((current) => [response.check, ...current.filter((check) => check.id !== response.check.id)]);
+      setIntelligenceMessage(response.check.status === "NOT_CONFIGURED" ? "Fonte de dados ainda não configurada. Nenhum dado externo foi preenchido." : "Consulta concluída.");
+    } catch (cause) {
+      setIntelligenceError(intelligenceErrorMessage(cause));
+    } finally { setIntelligenceBusy(false); }
   }
 
   if (isSessionLoading || loading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando proprietário...</main>;
@@ -145,7 +174,8 @@ function OwnerDashboardPage() {
     {error ? <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
-      {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} onEnrich={() => void requestEnrichment()} /> : null}
+      {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} /> : null}
+      {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Panel title="Imóveis vinculados">
@@ -228,14 +258,13 @@ const profileTabs: Array<[string, string]> = [
   ["treatment_consent", "Consentimento LGPD"],
 ];
 
-function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, onSave, onEnrich }: {
+function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, onSave }: {
   profile: OwnerProfile;
   activeTab: string;
   onTabChange: (tab: string) => void;
   canManage: boolean;
   busy: boolean;
   onSave: (patch: Record<string, unknown>) => Promise<void>;
-  onEnrich: () => void;
 }) {
   const value = profile[activeTab as keyof OwnerProfile];
   const isObject = value && typeof value === "object" && !Array.isArray(value);
@@ -244,8 +273,7 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
   useEffect(() => { setDraft(JSON.stringify(isObject ? value : {}, null, 2)); }, [activeTab, profile]);
   return <section className="mt-4 rounded-lg border border-border bg-card p-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><p className="text-xs font-semibold uppercase text-muted-foreground">Cadastro inteligente</p><h2 className="text-lg font-semibold">Ficha cadastral e enriquecimento</h2></div>
-      <button type="button" onClick={onEnrich} disabled={!canManage || busy} className="rounded-md border border-border px-3 py-2 text-xs font-semibold">{busy ? "Processando..." : "Consultar enriquecimento"}</button>
+      <div><p className="text-xs font-semibold uppercase text-muted-foreground">Cadastro inteligente</p><h2 className="text-lg font-semibold">Ficha cadastral</h2></div>
     </div>
     <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
     <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
@@ -253,6 +281,41 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
       {canManage && !restricted ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
     </div>
     <p className="mt-3 text-xs text-muted-foreground">Valores preservam origem, confiança e consentimento LGPD. Consultas externas permanecem desativadas quando o provedor está NOT_CONFIGURED.</p>
+  </section>;
+}
+
+function OwnerIntelligencePanel({ profile, checks, busy, message, error, onQuery }: {
+  profile: OwnerProfile;
+  checks: OwnerCheck[];
+  busy: boolean;
+  message: string | null;
+  error: string | null;
+  onQuery: () => void;
+}) {
+  const consent = hasValidTreatmentConsent(profile);
+  const latest = checks.find((check) => check.check_type === "intelligence");
+  const checkedAt = latest?.checked_at ? new Date(latest.checked_at).toLocaleString("pt-BR") : null;
+  return <section id="inteligencia-cadastral" className="mt-4 rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <p className="text-xs font-semibold uppercase text-muted-foreground">Inteligência cadastral</p>
+        <h2 className="text-lg font-semibold">Consulta de identidade, endereço e dados civis</h2>
+        <p className="mt-1 text-xs text-muted-foreground">Consulta online controlada, sem preencher dados quando o provider não está configurado.</p>
+      </div>
+      <button type="button" onClick={onQuery} disabled={!consent || busy} className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50">
+        {busy ? "Buscando dados..." : latest ? "Atualizar dados" : "Buscar dados"}
+      </button>
+    </div>
+    {!consent ? <p className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800">É necessário registrar a autorização de tratamento de dados antes de realizar consultas. Registre-a na aba “Consentimento LGPD” acima.</p> : null}
+    {message ? <p role="status" className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-800">{message}</p> : null}
+    {error ? <p role="alert" className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p> : null}
+    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      {OWNER_INTELLIGENCE_UI_CAPABILITIES.map((capability) => {
+        const status = capabilityStatus(checks, capability);
+        return <div key={capability} className="rounded-md border border-border p-3"><p className="text-sm font-medium">{OWNER_INTELLIGENCE_CAPABILITY_LABELS[capability]}</p><p className="mt-1 text-xs text-muted-foreground">{status.label}</p></div>;
+      })}
+    </div>
+    <p className="mt-3 text-xs text-muted-foreground">Última tentativa: {checkedAt ?? "Não consultado"}</p>
   </section>;
 }
 
