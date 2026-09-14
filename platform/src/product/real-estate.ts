@@ -389,6 +389,15 @@ export async function runOwnerEnrichment(ownerId: string, sections: string[], id
   return apiRequest<{ check: OwnerCheck }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/enrich`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ sections }), token: getStoredToken() ?? undefined });
 }
 
+export async function queryOwnerIntelligence(ownerId: string, capabilities: string[], idempotencyKey = crypto.randomUUID()) {
+  return apiRequest<{ check: OwnerCheck }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/intelligence/query`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({ capabilities }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
 export async function listOwnerChecks(ownerId: string) {
   return apiRequest<{ checks: OwnerCheck[] }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/checks`, { token: getStoredToken() ?? undefined });
 }

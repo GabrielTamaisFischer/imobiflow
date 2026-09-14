@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
+import { notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
 
 export const OWNER_PROFILE_GROUPS = [
   "identity",
@@ -197,11 +198,20 @@ export type OwnerEnrichmentProvider = {
 };
 
 export const ownerEnrichmentProvider: OwnerEnrichmentProvider = {
-  name: "NOT_CONFIGURED",
-  async run() {
-    return { status: "NOT_CONFIGURED", summary: {}, warnings: ["Nenhum provedor de enriquecimento foi configurado para este ambiente."] };
+  name: notConfiguredOwnerProvider.name,
+  async run({ sections }) {
+    const result = await notConfiguredOwnerProvider.query({
+      document: null,
+      capabilities: sections.map((section) => section.toUpperCase()).filter((section): section is typeof notConfiguredOwnerProvider.capabilities[number] => notConfiguredOwnerProvider.capabilities.includes(section as typeof notConfiguredOwnerProvider.capabilities[number])),
+    });
+    return { status: "NOT_CONFIGURED", summary: result.values, warnings: result.warnings };
   },
 };
+
+// Keep the registry available to future providers without coupling consumers
+// to an external provider's payload shape. The default staging registry only
+// contains NOT_CONFIGURED, so no external request is made accidentally.
+export { ownerIntelligenceRegistry };
 
 export async function runOwnerEnrichment(options: {
   companyId: string;
@@ -240,6 +250,53 @@ export async function runOwnerEnrichment(options: {
     },
   });
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.enrichment.completed", "property_owner", options.ownerId, { status: result.status, provider: ownerEnrichmentProvider.name });
+  return serializeCheck(check);
+}
+
+/**
+ * Executes a capability-scoped intelligence query. The result is persisted in
+ * the existing OwnerCheck model, so provider availability and idempotency are
+ * visible without adding a parallel table or trusting client tenant fields.
+ */
+export async function runOwnerIntelligenceQuery(options: {
+  companyId: string;
+  ownerId: string;
+  actorUserId: string;
+  idempotencyKey: string;
+  capabilities: OwnerIntelligenceCapability[];
+}) {
+  const owner = await ensureOwner(options.companyId, options.ownerId);
+  const profile = await getPrisma().ownerProfile.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId } });
+  const consent = profile?.treatmentConsentJson as JsonRecord | null | undefined;
+  if (!consent || !consent.authorized_at || !consent.purpose) {
+    throw Object.assign(new Error("Consentimento LGPD de tratamento é obrigatório antes da consulta."), { statusCode: 422, code: "OWNER_TREATMENT_CONSENT_REQUIRED" });
+  }
+  const key = options.idempotencyKey.trim().slice(0, 160);
+  if (!key) throw Object.assign(new Error("Idempotency-Key é obrigatório."), { statusCode: 400, code: "IDEMPOTENCY_KEY_REQUIRED" });
+  const capabilities = [...new Set(options.capabilities)];
+  if (!capabilities.length) throw Object.assign(new Error("Informe ao menos uma capacidade de consulta."), { statusCode: 400, code: "OWNER_INTELLIGENCE_CAPABILITY_REQUIRED" });
+  const provider = capabilities.map((capability) => ownerIntelligenceRegistry.resolve(capability)).find(Boolean) ?? notConfiguredOwnerProvider;
+  const existing = await getPrisma().ownerCheck.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId, checkType: "intelligence", provider: provider.name, idempotencyKey: key } });
+  if (existing) return serializeCheck(existing);
+  await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.requested", "property_owner", options.ownerId, { provider: provider.name, capabilities });
+  const result = await provider.query({ document: owner.document, capabilities });
+  const check = await getPrisma().ownerCheck.create({
+    data: {
+      companyId: options.companyId,
+      ownerId: options.ownerId,
+      checkType: "intelligence",
+      provider: result.provider,
+      status: result.status.toUpperCase(),
+      inputFingerprint: createHash("sha256").update(`${owner.document ?? ""}:${capabilities.join(",")}`).digest("hex"),
+      idempotencyKey: key,
+      source: "provider",
+      summaryJson: jsonValue({ sections: result.sections, values: result.values }),
+      warningsJson: jsonValue(result.warnings),
+      requestedBy: options.actorUserId,
+      checkedAt: new Date(result.consultedAt),
+    },
+  });
+  await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capabilities });
   return serializeCheck(check);
 }
 

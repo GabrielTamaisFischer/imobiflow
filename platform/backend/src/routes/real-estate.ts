@@ -68,7 +68,8 @@ import {
 } from "../services/authorization.js";
 import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
-import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
+import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
+import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
 
 export const realEstateRouter = Router();
 
@@ -371,6 +372,25 @@ realEstateRouter.post("/owners/:id/enrich", requirePermission("owners.enrichment
     const sections = z.array(z.string().trim().min(1).max(40)).max(20).default([]).parse(req.body?.sections ?? []);
     const idempotencyKey = String(req.header("Idempotency-Key") ?? req.body?.idempotency_key ?? "");
     const check = await runOwnerEnrichment({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, idempotencyKey, sections });
+    res.status(201).json({ check });
+  } catch (error) { next(error); }
+});
+
+const ownerIntelligenceQuerySchema = z.object({
+  capabilities: z.array(z.enum(OWNER_INTELLIGENCE_CAPABILITIES)).min(1).max(10),
+});
+
+realEstateRouter.post("/owners/:id/intelligence/query", requirePermission("owners.enrichment.run"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = ownerIntelligenceQuerySchema.parse(req.body);
+    const idempotencyKey = String(req.header("Idempotency-Key") ?? req.body?.idempotency_key ?? "");
+    const check = await runOwnerIntelligenceQuery({
+      companyId: req.access!.company.id,
+      ownerId: String(req.params.id),
+      actorUserId: req.access!.appUser.id,
+      idempotencyKey,
+      capabilities: input.capabilities as OwnerIntelligenceCapability[],
+    });
     res.status(201).json({ check });
   } catch (error) { next(error); }
 });
