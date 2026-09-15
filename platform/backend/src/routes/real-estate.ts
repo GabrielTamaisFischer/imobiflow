@@ -395,21 +395,6 @@ realEstateRouter.post("/owners/:id/intelligence/query", requirePermission("owner
   } catch (error) { next(error); }
 });
 
-// Temporary staging-only QA harness. It is protected by the canonical
-// permission and intentionally returns only idempotency evidence; remove
-// before the cleanup commit after the runtime proof is captured.
-realEstateRouter.get("/qa/owner-intelligence-idempotency-a3", requirePermission("owners.enrichment.run"), async (req: RequestWithAccess, res, next) => {
-  try {
-    const ownerId = "31038282-8d39-4eb2-b0a9-9cbda488eb2e";
-    const idempotencyKey = "fase-b-final-idempotency-20260915";
-    const capabilities: OwnerIntelligenceCapability[] = ["IDENTITY", "ADDRESS", "CIVIL"];
-    const input = { companyId: req.access!.company.id, ownerId, actorUserId: req.access!.appUser.id, idempotencyKey, capabilities };
-    const first = await runOwnerIntelligenceQuery(input);
-    const second = await runOwnerIntelligenceQuery(input);
-    res.json({ first_check_id: first.id, second_check_id: second.id, first_status: first.status, second_status: second.status });
-  } catch (error) { next(error); }
-});
-
 realEstateRouter.get("/owners/:id/property-update-requests", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const status = typeof req.query.status === "string" && ["PENDING", "APPROVED", "REJECTED"].includes(req.query.status)
