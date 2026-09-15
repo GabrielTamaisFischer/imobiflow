@@ -36,6 +36,8 @@ import {
 import { OwnerDocumentsModal } from "@/components/real-estate/owner-documents-modal";
 import { getSiteSettings } from "@/product/sites";
 import { getPropertyDetailUrl } from "@/product/public-site-helpers";
+import { apiRequest } from "@/product/api";
+import { getStoredToken } from "@/product/auth";
 
 export const Route = createFileRoute("/app/proprietarios/$ownerId")({ component: OwnerDashboardPage });
 
@@ -63,6 +65,9 @@ function OwnerDashboardPage() {
   // jeito de resolver a URL do site da empresa.
   const [siteSlug, setSiteSlug] = useState<string | null>(null);
   const [isDocumentsOpen, setIsDocumentsOpen] = useState(false);
+  const [phaseCForeignOwnerId, setPhaseCForeignOwnerId] = useState("");
+  const [phaseCResult, setPhaseCResult] = useState<Record<string, unknown> | null>(null);
+  const [phaseCBusy, setPhaseCBusy] = useState(false);
   const canManageOwners = canManage(session?.access.appUser, "owners.manage");
 
   async function load() {
@@ -168,11 +173,38 @@ function OwnerDashboardPage() {
     } finally { setIntelligenceBusy(false); }
   }
 
+  async function runPhaseCVerification() {
+    if (!phaseCForeignOwnerId.trim()) return;
+    setPhaseCBusy(true);
+    setPhaseCResult(null);
+    try {
+      const response = await apiRequest<Record<string, unknown>>("/internal/phase-c-verification/run", {
+        method: "POST",
+        body: JSON.stringify({ owner_id: ownerId, foreign_owner_id: phaseCForeignOwnerId.trim() }),
+        token: getStoredToken() ?? undefined,
+      });
+      setPhaseCResult(response);
+    } catch (cause) {
+      setPhaseCResult({ error: cause instanceof Error ? cause.message : "Falha na verificação." });
+    } finally {
+      setPhaseCBusy(false);
+    }
+  }
+
   if (isSessionLoading || loading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando proprietário...</main>;
 
   return <ModulePage session={session} module={module}>
     <div className="mb-4 flex items-center justify-between gap-3"><Link to="/app/proprietarios" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />Proprietários</Link><button type="button" onClick={() => void load()} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Atualizar</button></div>
     {error ? <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
+    <section className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Harness temporário Fase C · staging</p>
+      <p className="mt-1 text-xs text-muted-foreground">Executa somente probes autenticados e sanitizados de masking, tenant isolation e contagens read-only.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <input aria-label="ID do proprietário do tenant oposto" value={phaseCForeignOwnerId} onChange={(event) => setPhaseCForeignOwnerId(event.target.value)} placeholder="ID do proprietário do tenant oposto" className="h-9 min-w-[20rem] rounded-md border border-border bg-background px-3 text-xs" />
+        <button type="button" disabled={phaseCBusy || !phaseCForeignOwnerId.trim()} onClick={() => void runPhaseCVerification()} className="rounded-md bg-amber-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{phaseCBusy ? "Executando..." : "Executar prova Fase C"}</button>
+      </div>
+      {phaseCResult ? <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-background p-3 text-[11px]">{JSON.stringify(phaseCResult, null, 2)}</pre> : null}
+    </section>
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} canViewCredit={canView(session?.access.appUser, "owners.credit.view")} busy={profileBusy} onSave={saveProfile} /> : null}
