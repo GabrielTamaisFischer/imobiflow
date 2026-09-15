@@ -18,7 +18,6 @@ import {
   queryOwnerIntelligence,
   type OwnerCheck,
   type OwnerProfile,
-  type OwnerProfileRuntimeDiagnostic,
   type OwnerPropertyUpdateRequest,
   type OwnerDashboard,
 } from "@/product/real-estate";
@@ -48,7 +47,6 @@ function OwnerDashboardPage() {
   const [profile, setProfile] = useState<OwnerProfile | null>(null);
   const [profileTab, setProfileTab] = useState("identity");
   const [profileBusy, setProfileBusy] = useState(false);
-  const [runtimeDiagnostic, setRuntimeDiagnostic] = useState<OwnerProfileRuntimeDiagnostic | null>(null);
   const [intelligenceChecks, setIntelligenceChecks] = useState<OwnerCheck[]>([]);
   const [intelligenceBusy, setIntelligenceBusy] = useState(false);
   const [intelligenceMessage, setIntelligenceMessage] = useState<string | null>(null);
@@ -148,7 +146,6 @@ function OwnerDashboardPage() {
     try {
       const response = await updateOwnerProfile(ownerId, patch);
       setProfile(response.profile);
-      setRuntimeDiagnostic(response.diagnostic ?? null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível salvar a ficha."); }
     finally { setProfileBusy(false); }
   }
@@ -178,7 +175,6 @@ function OwnerDashboardPage() {
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} /> : null}
-      {runtimeDiagnostic ? <section className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 text-xs"><h2 className="font-semibold">Diagnóstico staging</h2><dl className="mt-2 grid gap-1 sm:grid-cols-2"><DiagnosticValue label="revision" value={runtimeDiagnostic.revision} /><DiagnosticValue label="received_started_at" value={runtimeDiagnostic.received_started_at} /><DiagnosticValue label="normalized_started_at" value={runtimeDiagnostic.normalized_started_at} /><DiagnosticValue label="prisma_returned_started_at" value={runtimeDiagnostic.prisma_returned_started_at} /><DiagnosticValue label="reread_started_at" value={runtimeDiagnostic.reread_started_at} /><DiagnosticValue label="serialized_started_at" value={runtimeDiagnostic.serialized_started_at} /></dl></section> : null}
       {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} onOpenConsent={() => setProfileTab("treatment_consent")} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -330,10 +326,6 @@ function OwnerStructuredEditor({ kind, profile, canManage, busy, onSave }: {
     <section className="sm:col-span-2 rounded-md border border-border p-3"><div className="mb-2 flex items-center justify-between"><h3 className="text-xs font-semibold uppercase text-muted-foreground">Patrimônio</h3>{canManage ? <button type="button" onClick={() => setValue("assets", [...assets, { id: crypto.randomUUID(), type: "outro", label: "", declared_value: 0, verification_status: "DECLARADA", provenance: "OWNER_DECLARED" }])} className="text-xs font-semibold text-primary">Adicionar bem</button> : null}</div>{assets.length ? assets.map((asset, index) => <div key={String(asset.id ?? index)} className="grid gap-2 border-t border-border py-2 sm:grid-cols-3"><select value={String(asset.type ?? "outro")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "type", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs"><option value="imovel">Imóvel</option><option value="veiculo">Veículo</option><option value="participacao_societaria">Participação societária</option><option value="investimento">Investimento</option><option value="outro">Outro</option></select><input value={String(asset.label ?? "")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "label", event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-xs" placeholder="Descrição" /><input type="number" value={String(asset.declared_value ?? "")} disabled={!canManage} onChange={(event) => updateRow("assets", index, "declared_value", Number(event.target.value))} className="h-9 rounded-md border border-border bg-background px-2 text-xs" placeholder="Valor declarado" /></div>) : <p className="text-xs text-muted-foreground">Nenhum bem cadastrado.</p>}</section>
     <div className="sm:col-span-2 flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">Status: {String(draft.status ?? "PENDENTE")} · Capacidade: {String((draft.financial_capacity as Record<string, unknown> | undefined)?.status ?? "DATA_INSUFFICIENT")}</p>{canManage ? <button type="button" disabled={busy} onClick={save} className="rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar financeiro</button> : null}</div>
   </div>;
-}
-
-function DiagnosticValue({ label, value }: { label: string; value: string | null | undefined }) {
-  return <div><dt className="text-muted-foreground">{label}</dt><dd className="font-mono">{value ?? "null"}</dd></div>;
 }
 
 function Field({ label, value, onChange, type = "text", disabled }: { label: string; value: string; onChange: (value: string) => void; type?: string; disabled?: boolean }) {

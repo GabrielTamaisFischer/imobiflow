@@ -70,7 +70,6 @@ import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
 import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
 import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
-import { createOwnerProfileRuntimeDiagnostic } from "../services/runtime-diagnostics.js";
 
 export const realEstateRouter = Router();
 
@@ -359,11 +358,7 @@ realEstateRouter.get("/owners/:id/profile", requirePermission("owners.view"), as
 realEstateRouter.patch("/owners/:id/profile", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = ownerProfilePatchSchema.parse(req.body);
-    const diagnostic = createOwnerProfileRuntimeDiagnostic();
-    const profile = await updateOwnerProfile({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions, patch: input, diagnostic });
-    const response: Record<string, unknown> = { profile };
-    if (diagnostic.enabled && diagnostic.received_started_at !== undefined) response.diagnostic = diagnostic;
-    res.json(response);
+    res.json({ profile: await updateOwnerProfile({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions, patch: input }) });
   } catch (error) { next(error); }
 });
 

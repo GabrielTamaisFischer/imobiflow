@@ -9,11 +9,6 @@ import {
   normalizeOwnerFinancial,
   sanitizeEmploymentForPermissions,
 } from "./owner-financial.js";
-import {
-  isSyntheticQaOwner,
-  startedAtCheckpoint,
-  type OwnerProfileRuntimeDiagnostic,
-} from "./runtime-diagnostics.js";
 
 export const OWNER_PROFILE_GROUPS = [
   "identity",
@@ -176,20 +171,15 @@ export async function updateOwnerProfile(options: {
   actorUserId: string;
   patch: Record<string, unknown>;
   permissions: OwnerProfilePermissions;
-  diagnostic?: OwnerProfileRuntimeDiagnostic;
 }) {
-  const owner = await ensureOwner(options.companyId, options.ownerId);
-  const diagnostic = options.diagnostic;
-  if (diagnostic && (!diagnostic.enabled || !isSyntheticQaOwner(owner as Record<string, unknown>))) diagnostic.enabled = false;
+  await ensureOwner(options.companyId, options.ownerId);
   const current = await getPrisma().ownerProfile.findFirst({ where: { ownerId: options.ownerId, companyId: options.companyId } });
   const defaults = ownerProfileDefaults();
   const input = options.patch;
   const group = (key: string) => ensureBoundedJson(input[key], key);
   const currentProfessional = current?.professionalJson && typeof current.professionalJson === "object" && !Array.isArray(current.professionalJson) ? current.professionalJson as JsonRecord : defaults.professional;
   const professionalInput = input.professional === undefined ? null : group("professional");
-  if (diagnostic?.enabled && professionalInput) diagnostic.received_started_at = startedAtCheckpoint(professionalInput.started_at);
   const professionalPatch = professionalInput ? normalizeOwnerEmployment(mergeProfileGroup(currentProfessional, professionalInput)) : null;
-  if (diagnostic?.enabled && professionalPatch) diagnostic.normalized_started_at = startedAtCheckpoint(professionalPatch.started_at);
   const currentFinancial = current?.financialJson && typeof current.financialJson === "object" && !Array.isArray(current.financialJson) ? current.financialJson as JsonRecord : defaults.financial;
   const financialInput = input.financial === undefined ? null : group("financial");
   const financialPatch = financialInput ? normalizeOwnerFinancial(mergeProfileGroup(currentFinancial, financialInput)) : null;
@@ -248,19 +238,6 @@ export async function updateOwnerProfile(options: {
   const profile = current
     ? await getPrisma().ownerProfile.update({ where: { id: current.id }, data })
     : await getPrisma().ownerProfile.create({ data: { companyId: options.companyId, ownerId: options.ownerId, ...data } });
-  if (diagnostic?.enabled) {
-    diagnostic.prisma_returned_started_at = startedAtCheckpoint(
-      profile && typeof profile.professionalJson === "object" && profile.professionalJson !== null
-        ? (profile.professionalJson as Record<string, unknown>).started_at
-        : null,
-    );
-    const reread = await getPrisma().ownerProfile.findFirst({ where: { ownerId: options.ownerId, companyId: options.companyId } });
-    diagnostic.reread_started_at = startedAtCheckpoint(
-      reread && typeof reread.professionalJson === "object" && reread.professionalJson !== null
-        ? (reread.professionalJson as Record<string, unknown>).started_at
-        : null,
-    );
-  }
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.profile.updated", "property_owner", options.ownerId, {
     sections: Object.keys(input).filter((key) => OWNER_PROFILE_GROUPS.includes(key as OwnerProfileGroup)),
   });
@@ -287,9 +264,7 @@ export async function updateOwnerProfile(options: {
       });
     }
   }
-  const serialized = serializeProfile(profile, options.permissions);
-  if (diagnostic?.enabled) diagnostic.serialized_started_at = startedAtCheckpoint((serialized.professional as Record<string, unknown>).started_at);
-  return serialized;
+  return serializeProfile(profile, options.permissions);
 }
 
 export type OwnerEnrichmentProvider = {
