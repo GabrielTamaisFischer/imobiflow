@@ -359,8 +359,8 @@ export function normalizeOwnerLegal(input: Record<string, unknown>): OwnerLegalD
   const confidence = nullableCreditString(input.confidence);
   return {
     status,
-    has_records: nullableCreditBoolean(input.has_records ?? input.hasRecords) ?? (status === "NOT_CONFIGURED" || status === "NOT_AVAILABLE" ? null : status === "RECORDS_FOUND" || processes.length > 0),
-    process_count: processCount ?? (status === "NOT_CONFIGURED" || status === "NOT_AVAILABLE" ? null : processes.length),
+    has_records: nullableCreditBoolean(input.has_records ?? input.hasRecords) ?? (status === "NO_RECORDS_FOUND" ? false : status === "RECORDS_FOUND" || processes.length > 0 ? true : null),
+    process_count: processCount ?? (status === "NO_RECORDS_FOUND" ? 0 : processes.length > 0 ? processes.length : null),
     active_process_count: activeProcessCount,
     processes,
     certificates,

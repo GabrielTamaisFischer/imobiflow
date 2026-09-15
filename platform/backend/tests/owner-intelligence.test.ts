@@ -125,6 +125,7 @@ describe("Owner Intelligence 360 foundation", () => {
   it("keeps NOT_CONFIGURED distinct from no-records legal results", () => {
     expect(normalizeOwnerLegal({ status: "NOT_CONFIGURED" })).toMatchObject({ status: "NOT_CONFIGURED", has_records: null, process_count: null, processes: [] });
     expect(normalizeOwnerLegal({ status: "NO_RECORDS_FOUND" })).toMatchObject({ status: "NO_RECORDS_FOUND", has_records: false, process_count: 0 });
+    expect(normalizeOwnerLegal({ status: "ERROR" })).toMatchObject({ status: "ERROR", has_records: null, process_count: null });
   });
 
   it("derives credit status from the canonical intelligence check", () => {
