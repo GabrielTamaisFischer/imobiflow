@@ -12,7 +12,7 @@ vi.mock("./auth", () => ({
   isPreviewToken: () => false,
 }));
 
-import { buildPropertyListQuery, listAllProperties, listProperties } from "./real-estate";
+import { buildPropertyListQuery, listAllProperties, listProperties, updateOwnerProfile } from "./real-estate";
 
 describe("paginated property client", () => {
   beforeEach(() => apiRequest.mockReset());
@@ -65,6 +65,13 @@ describe("paginated property client", () => {
     expect(result.properties.map((property) => property.id)).toEqual(["property-a", "property-b"]);
     expect(apiRequest).toHaveBeenCalledTimes(2);
     expect(apiRequest.mock.calls.every(([url]) => String(url).includes("page_size=100"))).toBe(true);
+  });
+
+  it("sends owner professional started_at unchanged", async () => {
+    apiRequest.mockResolvedValue({ profile: { professional: { started_at: "2024-02-20" } } });
+    await updateOwnerProfile("owner-started-at", { professional: { profession: "Analista", started_at: "2024-02-20" } });
+    const [, options] = apiRequest.mock.calls.at(-1) as [string, { body: string }];
+    expect(JSON.parse(options.body)).toEqual({ professional: { profession: "Analista", started_at: "2024-02-20" } });
   });
 });
 

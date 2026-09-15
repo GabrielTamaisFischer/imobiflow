@@ -381,8 +381,18 @@ export async function getOwnerProfile(ownerId: string) {
   return apiRequest<{ profile: OwnerProfile }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/profile`, { token: getStoredToken() ?? undefined });
 }
 
+export type OwnerProfileRuntimeDiagnostic = {
+  revision: string | null;
+  environment?: string | null;
+  received_started_at?: string | null;
+  normalized_started_at?: string | null;
+  prisma_returned_started_at?: string | null;
+  reread_started_at?: string | null;
+  serialized_started_at?: string | null;
+};
+
 export async function updateOwnerProfile(ownerId: string, patch: Record<string, unknown>) {
-  return apiRequest<{ profile: OwnerProfile }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/profile`, { method: "PATCH", body: JSON.stringify(patch), token: getStoredToken() ?? undefined });
+  return apiRequest<{ profile: OwnerProfile; diagnostic?: OwnerProfileRuntimeDiagnostic }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/profile`, { method: "PATCH", body: JSON.stringify(patch), token: getStoredToken() ?? undefined });
 }
 
 export async function runOwnerEnrichment(ownerId: string, sections: string[], idempotencyKey = crypto.randomUUID()) {

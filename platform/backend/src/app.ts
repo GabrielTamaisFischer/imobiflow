@@ -27,6 +27,7 @@ import { publicInspectionsRouter } from "./routes/public-inspections.js";
 import { publicPortalsRouter } from "./routes/public-portals.js";
 import { publicSitesRouter } from "./routes/public-sites.js";
 import { realEstateRouter } from "./routes/real-estate.js";
+import { runtimeDiagnosticsRouter } from "./routes/runtime-diagnostics.js";
 import { mysqlPortalRouter } from "./routes/portal-mysql.js";
 import { mysqlFinanceRouter } from "./routes/finance-mysql.js";
 import { mysqlProposalsRouter } from "./routes/proposals-mysql.js";
@@ -141,6 +142,8 @@ export function createApp() {
   app.use("/real-estate/finance", mysqlFinanceRouter);
   app.use("/real-estate/proposals", mysqlProposalsRouter);
   app.use("/real-estate", realEstateRouter);
+  // Temporário: checkpoints não sensíveis para diagnosticar o runtime do staging.
+  app.use("/internal", runtimeDiagnosticsRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);
   app.use("/test-lab", testLabRouter);
