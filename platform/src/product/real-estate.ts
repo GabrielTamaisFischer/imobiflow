@@ -398,6 +398,30 @@ export async function queryOwnerIntelligence(ownerId: string, capabilities: stri
   });
 }
 
+export type OwnerIntelligenceReplayResult = {
+  idempotency_key: string;
+  count_before: number;
+  ids_before: string[];
+  first_check_id: string;
+  count_after_first: number;
+  ids_after_first: string[];
+  second_check_id: string;
+  count_after_second: number;
+  ids_after_second: string[];
+  same_check: boolean;
+  duplicated: boolean;
+  audit_requested_count: number;
+  audit_completed_count: number;
+};
+
+export async function runOwnerIntelligenceIdempotencyReplay(ownerId: string) {
+  return apiRequest<OwnerIntelligenceReplayResult>("/internal/qa/owner-intelligence-idempotency", {
+    method: "POST",
+    body: JSON.stringify({ ownerId }),
+    token: getStoredToken() ?? undefined,
+  });
+}
+
 export async function listOwnerChecks(ownerId: string) {
   return apiRequest<{ checks: OwnerCheck[] }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/checks`, { token: getStoredToken() ?? undefined });
 }
