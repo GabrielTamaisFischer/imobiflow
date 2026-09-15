@@ -7,6 +7,7 @@ import {
   normalizeOwnerAddress,
   normalizeOwnerCivil,
   normalizeOwnerCredit,
+  normalizeOwnerLegal,
   normalizeOwnerIdentity,
   ownerIntelligenceRegistry,
 } from "../src/services/owner-intelligence.js";
@@ -107,9 +108,33 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(clear.restriction_count).toBe(0);
   });
 
+  it("normalizes factual legal processes and certificates without inferring liability", () => {
+    const legal = normalizeOwnerLegal({
+      status: "RECORDS_FOUND",
+      processes: [{ process_number: "0001234-56.2026.8.26.0001", tribunal: "TJSP", procedural_class: "Ação cível", subject: "Cobrança", person_role: "réu", case_value: "1200.50", sealed: false, opposing_parties: ["Parte QA"] }],
+      certificates: [{ type: "distribuição cível", issuing_authority: "TJSP", result_status: "NO_RECORDS_FOUND", expires_at: "2027-01-01" }],
+      provider: "LEGAL_PROVIDER_QA",
+    });
+    expect(legal.status).toBe("RECORDS_FOUND");
+    expect(legal.process_count).toBe(1);
+    expect(legal.processes[0]).toMatchObject({ process_number: "0001234-56.2026.8.26.0001", person_role: "réu", case_value: 1200.5, sealed: false });
+    expect(legal.certificates[0]).toMatchObject({ type: "distribuição cível", result_status: "NO_RECORDS_FOUND" });
+    expect(legal.confidence).toBe("unknown");
+  });
+
+  it("keeps NOT_CONFIGURED distinct from no-records legal results", () => {
+    expect(normalizeOwnerLegal({ status: "NOT_CONFIGURED" })).toMatchObject({ status: "NOT_CONFIGURED", has_records: null, process_count: null, processes: [] });
+    expect(normalizeOwnerLegal({ status: "NO_RECORDS_FOUND" })).toMatchObject({ status: "NO_RECORDS_FOUND", has_records: false, process_count: 0 });
+  });
+
   it("derives credit status from the canonical intelligence check", () => {
     expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "NOT_CONFIGURED", summary: { sections: ["CREDIT"] } }] }).credit).toBe("not_configured");
     expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "CLEAR", summary: { sections: ["CREDIT"], values: { has_restrictions: false } } }] }).credit).toBe("clear");
     expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "HAS_RESTRICTIONS", summary: { sections: ["CREDIT"], values: { has_restrictions: true } } }] }).credit).toBe("has_restrictions");
+  });
+
+  it("derives legal status from an intelligence check scoped to LEGAL", () => {
+    expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "NOT_CONFIGURED", summary: { sections: ["LEGAL"] } }] }).legal).toBe("not_configured");
+    expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "RECORDS_FOUND", summary: { sections: ["LEGAL"] } }] }).legal).toBe("records_found");
   });
 });

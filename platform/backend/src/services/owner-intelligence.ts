@@ -107,6 +107,58 @@ export type OwnerCreditData = {
   confidence: OwnerIntelligenceConfidence;
 };
 
+export type OwnerLegalStatus = "NOT_CHECKED" | "NOT_CONFIGURED" | "NO_RECORDS_FOUND" | "RECORDS_FOUND" | "NOT_AVAILABLE" | "EXPIRED" | "PARTIAL" | "ERROR";
+export type OwnerLegalProcess = {
+  process_number: string | null;
+  court: string | null;
+  tribunal: string | null;
+  jurisdiction: string | null;
+  state: string | null;
+  city: string | null;
+  court_unit: string | null;
+  procedural_class: string | null;
+  subject: string | null;
+  person_role: string | null;
+  opposing_parties: string[];
+  filing_date: string | null;
+  last_movement_date: string | null;
+  status: string | null;
+  case_value: number | null;
+  secrecy_level: string | null;
+  sealed: boolean | null;
+  source: string | null;
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+};
+export type OwnerLegalCertificate = {
+  type: string | null;
+  jurisdiction: string | null;
+  issuing_authority: string | null;
+  result_status: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  protocol: string | null;
+  document_record_id: string | null;
+  provider: string | null;
+  provenance: OwnerIntelligenceSource;
+  confidence: OwnerIntelligenceConfidence;
+};
+export type OwnerLegalData = {
+  status: OwnerLegalStatus;
+  has_records: boolean | null;
+  process_count: number | null;
+  active_process_count: number | null;
+  processes: OwnerLegalProcess[];
+  certificates: OwnerLegalCertificate[];
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: OwnerIntelligenceSource;
+  confidence: OwnerIntelligenceConfidence;
+};
+
 export type OwnerIntelligenceProviderResult = {
   status: OwnerIntelligenceStatus;
   provider: string;
@@ -225,6 +277,10 @@ function normalizeCreditStatus(value: unknown): OwnerCreditStatus {
   const status = String(value ?? "").trim().toUpperCase();
   return ["NOT_CHECKED", "NOT_CONFIGURED", "CURRENT", "EXPIRED", "PARTIAL", "CLEAR", "HAS_RESTRICTIONS", "ERROR"].includes(status) ? status as OwnerCreditStatus : "NOT_CHECKED";
 }
+function normalizeLegalStatus(value: unknown): OwnerLegalStatus {
+  const status = String(value ?? "").trim().toUpperCase();
+  return ["NOT_CHECKED", "NOT_CONFIGURED", "NO_RECORDS_FOUND", "RECORDS_FOUND", "NOT_AVAILABLE", "EXPIRED", "PARTIAL", "ERROR"].includes(status) ? status as OwnerLegalStatus : "NOT_CHECKED";
+}
 function nullableCreditString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function nullableCreditNumber(value: unknown) { const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : null; return n !== null && Number.isFinite(n) ? n : null; }
 function nullableCreditBoolean(value: unknown) { return typeof value === "boolean" ? value : null; }
@@ -255,13 +311,75 @@ export function normalizeOwnerCredit(input: Record<string, unknown>): OwnerCredi
   };
 }
 
+export function normalizeOwnerLegal(input: Record<string, unknown>): OwnerLegalData {
+  const status = normalizeLegalStatus(input.status);
+  const processes = creditRows(input.processes).map((row) => ({
+    process_number: nullableCreditString(row.process_number ?? row.processNumber ?? row.case_number),
+    court: nullableCreditString(row.court),
+    tribunal: nullableCreditString(row.tribunal),
+    jurisdiction: nullableCreditString(row.jurisdiction),
+    state: nullableCreditString(row.state ?? row.uf),
+    city: nullableCreditString(row.city),
+    court_unit: nullableCreditString(row.court_unit ?? row.courtUnit),
+    procedural_class: nullableCreditString(row.procedural_class ?? row.proceduralClass ?? row.case_class),
+    subject: nullableCreditString(row.subject),
+    person_role: nullableCreditString(row.person_role ?? row.personRole ?? row.role),
+    opposing_parties: Array.isArray(row.opposing_parties ?? row.opposingParties) ? ((row.opposing_parties ?? row.opposingParties) as unknown[]).filter((party): party is string => typeof party === "string" && party.trim().length > 0).map((party) => party.trim()) : [],
+    filing_date: nullableCreditString(row.filing_date ?? row.filingDate),
+    last_movement_date: nullableCreditString(row.last_movement_date ?? row.lastMovementDate),
+    status: nullableCreditString(row.status),
+    case_value: nullableCreditNumber(row.case_value ?? row.caseValue ?? row.value),
+    secrecy_level: nullableCreditString(row.secrecy_level ?? row.secrecyLevel),
+    sealed: nullableCreditBoolean(row.sealed ?? row.is_sealed),
+    source: nullableCreditString(row.source),
+    provider: nullableCreditString(row.provider),
+    protocol: nullableCreditString(row.protocol),
+    checked_at: nullableCreditString(row.checked_at ?? row.checkedAt),
+  }));
+  const certificates = creditRows(input.certificates).map((row) => {
+    const provenance = nullableCreditString(row.provenance);
+    const confidence = nullableCreditString(row.confidence);
+    return {
+      type: nullableCreditString(row.type),
+      jurisdiction: nullableCreditString(row.jurisdiction),
+      issuing_authority: nullableCreditString(row.issuing_authority ?? row.issuingAuthority),
+      result_status: nullableCreditString(row.result_status ?? row.resultStatus ?? row.status),
+      issued_at: nullableCreditString(row.issued_at ?? row.issuedAt),
+      expires_at: nullableCreditString(row.expires_at ?? row.expiresAt),
+      protocol: nullableCreditString(row.protocol),
+      document_record_id: nullableCreditString(row.document_record_id ?? row.documentRecordId),
+      provider: nullableCreditString(row.provider),
+      provenance: provenance === "provider" || provenance === "manual" || provenance === "declared" || provenance === "document" || provenance === "system" ? provenance : "system",
+      confidence: confidence === "high" || confidence === "medium" || confidence === "low" || confidence === "unknown" ? confidence : "unknown",
+    } satisfies OwnerLegalCertificate;
+  });
+  const processCount = nullableCreditNumber(input.process_count ?? input.processCount);
+  const activeProcessCount = nullableCreditNumber(input.active_process_count ?? input.activeProcessCount);
+  const provenance = nullableCreditString(input.provenance);
+  const confidence = nullableCreditString(input.confidence);
+  return {
+    status,
+    has_records: nullableCreditBoolean(input.has_records ?? input.hasRecords) ?? (status === "NOT_CONFIGURED" || status === "NOT_AVAILABLE" ? null : status === "RECORDS_FOUND" || processes.length > 0),
+    process_count: processCount ?? (status === "NOT_CONFIGURED" || status === "NOT_AVAILABLE" ? null : processes.length),
+    active_process_count: activeProcessCount,
+    processes,
+    certificates,
+    provider: nullableCreditString(input.provider),
+    protocol: nullableCreditString(input.protocol),
+    checked_at: nullableCreditString(input.checked_at ?? input.checkedAt),
+    expires_at: nullableCreditString(input.expires_at ?? input.expiresAt),
+    provenance: provenance === "provider" || provenance === "manual" || provenance === "declared" || provenance === "document" || provenance === "system" ? provenance : "system",
+    confidence: confidence === "high" || confidence === "medium" || confidence === "low" || confidence === "unknown" ? confidence : "unknown",
+  };
+}
+
 export type Owner360Status = {
   identity: "complete" | "pending";
   address: "verified" | "declared" | "pending";
   documents: { verified: number; total: number };
   income: "verified" | "declared" | "pending";
   credit: "current" | "expired" | "not_consulted" | "not_configured" | "partial" | "clear" | "has_restrictions";
-  legal: "current" | "expired" | "pending";
+  legal: "current" | "expired" | "pending" | "not_configured" | "partial" | "records_found" | "no_records_found";
   fiscal: "complete" | "pending";
   patrimonial: "informed" | "not_informed";
   consent: "valid" | "absent" | "expired";
@@ -307,13 +425,30 @@ export function buildOwner360Status(input: {
   const identityComplete = [identity.cpf, identity.full_name ?? identity.fullName, identity.birth_date ?? identity.birthDate].every(Boolean);
   const addressDeclared = Object.values(address).some(Boolean);
   const income = financial.income_verified || financial.verified_income ? "verified" : Object.values(financial).some(Boolean) ? "declared" : "pending";
+  const legalCheck = checks.find((check) => {
+    const type = check.check_type ?? check.checkType;
+    if (type === "legal") return true;
+    if (type !== "intelligence") return false;
+    const sections = objectValue(check.summary).sections;
+    return Array.isArray(sections) && sections.includes("LEGAL");
+  });
+  const legalStatus = (() => {
+    if (!legalCheck) return "pending" as const;
+    const status = String(legalCheck.status ?? "").toUpperCase();
+    if (status === "NOT_CONFIGURED") return "not_configured" as const;
+    if (status === "EXPIRED") return "expired" as const;
+    if (status === "PARTIAL") return "partial" as const;
+    if (status === "RECORDS_FOUND") return "records_found" as const;
+    if (status === "NO_RECORDS_FOUND") return "no_records_found" as const;
+    return "current" as const;
+  })();
   return {
     identity: identityComplete ? "complete" : "pending",
     address: address.current_status === "verified" || address.status === "verified" ? "verified" : addressDeclared ? "declared" : "pending",
     documents: { verified: (input.documentRecords ?? []).filter((document) => document.verified === true).length, total: (input.documentRecords ?? []).length },
     income,
     credit: creditStatus,
-    legal: latest("legal") ? (checkStatus("legal", "current") === "expired" ? "expired" : "current") : "pending",
+    legal: legalStatus,
     fiscal: Object.values(objectValue(profile.fiscal)).some(Boolean) ? "complete" : "pending",
     patrimonial: Object.values(objectValue(profile.financial)).some((entry) => Boolean(entry)) ? "informed" : "not_informed",
     consent: consent.authorized_at && consent.purpose ? "valid" : "absent",

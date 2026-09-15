@@ -88,7 +88,7 @@ export type OwnerProfile = {
   professional: Record<string, unknown>;
   financial: Record<string, unknown> | null;
   credit: OwnerCreditData | null;
-  legal: Record<string, unknown> | null;
+  legal: OwnerLegalData | null;
   fiscal: Record<string, unknown> | null;
   provenance: Record<string, unknown>;
   confidence: Record<string, unknown>;
@@ -112,6 +112,21 @@ export type OwnerCreditData = {
   debts: Array<Record<string, unknown>>;
   protests: Array<Record<string, unknown>>;
   negative_listings: Array<Record<string, unknown>>;
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: string;
+  confidence: string;
+};
+
+export type OwnerLegalData = {
+  status: "NOT_CHECKED" | "NOT_CONFIGURED" | "NO_RECORDS_FOUND" | "RECORDS_FOUND" | "NOT_AVAILABLE" | "EXPIRED" | "PARTIAL" | "ERROR";
+  has_records: boolean | null;
+  process_count: number | null;
+  active_process_count: number | null;
+  processes: Array<Record<string, unknown>>;
+  certificates: Array<Record<string, unknown>>;
   provider: string | null;
   protocol: string | null;
   checked_at: string | null;
