@@ -2,10 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
-import { notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
+import { normalizeOwnerCredit, notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
 import {
   calculateInformativeFinancialCapacity,
-  normalizeOwnerCredit,
   normalizeOwnerEmployment,
   normalizeOwnerFinancial,
   sanitizeEmploymentForPermissions,
