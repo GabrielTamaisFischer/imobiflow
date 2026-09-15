@@ -16,8 +16,6 @@ import {
   updateOwnerProfile,
   listOwnerChecks,
   queryOwnerIntelligence,
-  runOwnerIntelligenceIdempotencyReplay,
-  type OwnerIntelligenceReplayResult,
   type OwnerCheck,
   type OwnerProfile,
   type OwnerPropertyUpdateRequest,
@@ -53,8 +51,6 @@ function OwnerDashboardPage() {
   const [intelligenceBusy, setIntelligenceBusy] = useState(false);
   const [intelligenceMessage, setIntelligenceMessage] = useState<string | null>(null);
   const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
-  const [qaReplayBusy, setQaReplayBusy] = useState(false);
-  const [qaReplayResult, setQaReplayResult] = useState<OwnerIntelligenceReplayResult | null>(null);
   const [updateRequests, setUpdateRequests] = useState<OwnerPropertyUpdateRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -171,18 +167,6 @@ function OwnerDashboardPage() {
     } finally { setIntelligenceBusy(false); }
   }
 
-  async function runQaReplay() {
-    if (qaReplayBusy) return;
-    setQaReplayBusy(true);
-    setQaReplayResult(null);
-    setIntelligenceError(null);
-    try {
-      setQaReplayResult(await runOwnerIntelligenceIdempotencyReplay(ownerId));
-    } catch (cause) {
-      setIntelligenceError(cause instanceof Error ? cause.message : "Não foi possível executar a prova QA.");
-    } finally { setQaReplayBusy(false); }
-  }
-
   if (isSessionLoading || loading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando proprietário...</main>;
 
   return <ModulePage session={session} module={module}>
@@ -192,7 +176,6 @@ function OwnerDashboardPage() {
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} /> : null}
       {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} onOpenConsent={() => setProfileTab("treatment_consent")} /> : null}
-      {profile && canManageOwners && typeof window !== "undefined" && window.location.hostname === "imobiflow-staging.vercel.app" ? <section className="mt-4 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/5 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase text-amber-700">QA temporário de staging</p><p className="text-sm text-muted-foreground">Replay server-side da idempotência Owner Intelligence.</p></div><button type="button" onClick={() => void runQaReplay()} disabled={qaReplayBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-500/50 px-3 text-xs font-semibold text-amber-800">{qaReplayBusy ? "Executando..." : "Executar QA de idempotência"}</button></div>{qaReplayResult ? <pre className="mt-3 max-h-72 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(qaReplayResult, null, 2)}</pre> : null}</section> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
         <Panel title="Imóveis vinculados">
