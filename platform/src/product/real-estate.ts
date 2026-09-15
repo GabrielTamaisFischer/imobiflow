@@ -87,13 +87,37 @@ export type OwnerProfile = {
   address: Record<string, unknown>;
   professional: Record<string, unknown>;
   financial: Record<string, unknown> | null;
-  credit: Record<string, unknown> | null;
+  credit: OwnerCreditData | null;
   legal: Record<string, unknown> | null;
   fiscal: Record<string, unknown> | null;
   provenance: Record<string, unknown>;
   confidence: Record<string, unknown>;
   treatment_consent: Record<string, unknown>;
   updated_at: string;
+};
+
+export type OwnerCreditData = {
+  status: "NOT_CHECKED" | "NOT_CONFIGURED" | "CURRENT" | "EXPIRED" | "PARTIAL" | "CLEAR" | "HAS_RESTRICTIONS" | "ERROR";
+  score: number | null;
+  score_range: string | null;
+  score_scale: string | null;
+  has_restrictions: boolean | null;
+  has_negative_listings: boolean | null;
+  restriction_count: number | null;
+  debt_count: number | null;
+  total_debt_amount: number | null;
+  protest_count: number | null;
+  negative_listing_count: number | null;
+  restrictions: Array<Record<string, unknown>>;
+  debts: Array<Record<string, unknown>>;
+  protests: Array<Record<string, unknown>>;
+  negative_listings: Array<Record<string, unknown>>;
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: string;
+  confidence: string;
 };
 
 export type OwnerCheck = {

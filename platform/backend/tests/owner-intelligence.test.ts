@@ -6,6 +6,7 @@ import {
   buildFinancingApplicantData,
   normalizeOwnerAddress,
   normalizeOwnerCivil,
+  normalizeOwnerCredit,
   normalizeOwnerIdentity,
   ownerIntelligenceRegistry,
 } from "../src/services/owner-intelligence.js";
@@ -72,5 +73,43 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(data).toMatchObject({ name: "Pessoa QA", cpf: "52998224725", rg: "QA-1", profession: "Arquiteta", maritalStatus: "solteira", employment: { type: "PJ", employer: "Empresa QA", role: "Sócia" } });
     expect(data.income).toMatchObject({ declaredMonthly: 5000, provenMonthly: 4000 });
     expect(data.address).toEqual({ city: "São Paulo", state: "SP" });
+  });
+
+  it("normalizes factual credit data without inventing provider scale or details", () => {
+    const credit = normalizeOwnerCredit({
+      status: "CURRENT",
+      score: "742",
+      score_range: "701-800",
+      score_scale: "0-1000",
+      has_restrictions: false,
+      restriction_count: 0,
+      debts: [{ creditor: "Credor QA", amount: "1200.50", status: "OPEN" }],
+      protests: [{ city: "São Paulo", state: "SP" }],
+      provider: "CREDIT_BUREAU_QA",
+    });
+    expect(credit.status).toBe("CURRENT");
+    expect(credit.score).toBe(742);
+    expect(credit.score_range).toBe("701-800");
+    expect(credit.score_scale).toBe("0-1000");
+    expect(credit.restriction_count).toBe(0);
+    expect(credit.debts[0]).toMatchObject({ amount: 1200.5, creditor: "Credor QA" });
+    expect(credit.protests[0]).toMatchObject({ city: "São Paulo", state: "SP" });
+    expect(credit.negative_listing_count).toBeNull();
+  });
+
+  it("keeps NOT_CONFIGURED distinct from a real clear result", () => {
+    const notConfigured = normalizeOwnerCredit({ status: "not_configured" });
+    const clear = normalizeOwnerCredit({ status: "CLEAR", has_restrictions: false, restriction_count: 0, debt_count: 0, protest_count: 0, negative_listing_count: 0 });
+    expect(notConfigured.status).toBe("NOT_CONFIGURED");
+    expect(notConfigured.confidence).toBe("unknown");
+    expect(notConfigured.restriction_count).toBeNull();
+    expect(clear.status).toBe("CLEAR");
+    expect(clear.restriction_count).toBe(0);
+  });
+
+  it("derives credit status from the canonical intelligence check", () => {
+    expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "NOT_CONFIGURED", summary: { sections: ["CREDIT"] } }] }).credit).toBe("not_configured");
+    expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "CLEAR", summary: { sections: ["CREDIT"], values: { has_restrictions: false } } }] }).credit).toBe("clear");
+    expect(buildOwner360Status({ profile: {}, checks: [{ check_type: "intelligence", status: "HAS_RESTRICTIONS", summary: { sections: ["CREDIT"], values: { has_restrictions: true } } }] }).credit).toBe("has_restrictions");
   });
 });

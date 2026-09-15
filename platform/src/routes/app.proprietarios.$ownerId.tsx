@@ -3,7 +3,7 @@ import { ArrowLeft, CalendarPlus, ExternalLink, FileUp, Loader2, Mail, MessageCi
 import { useEffect, useState } from "react";
 import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
-import { canManage } from "@/product/app-access";
+import { canManage, canView } from "@/product/app-access";
 import { useSessionGuard } from "@/product/use-session-guard";
 import {
   archiveOwner,
@@ -17,6 +17,7 @@ import {
   listOwnerChecks,
   queryOwnerIntelligence,
   type OwnerCheck,
+  type OwnerCreditData,
   type OwnerProfile,
   type OwnerPropertyUpdateRequest,
   type OwnerDashboard,
@@ -174,7 +175,7 @@ function OwnerDashboardPage() {
     {error ? <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
-      {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} busy={profileBusy} onSave={saveProfile} /> : null}
+      {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} canViewCredit={canView(session?.access.appUser, "owners.credit.view")} busy={profileBusy} onSave={saveProfile} /> : null}
       {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} onOpenConsent={() => setProfileTab("treatment_consent")} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -258,11 +259,12 @@ const profileTabs: Array<[string, string]> = [
   ["treatment_consent", "Consentimento LGPD"],
 ];
 
-function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, onSave }: {
+function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, canViewCredit, busy, onSave }: {
   profile: OwnerProfile;
   activeTab: string;
   onTabChange: (tab: string) => void;
   canManage: boolean;
+  canViewCredit: boolean;
   busy: boolean;
   onSave: (patch: Record<string, unknown>) => Promise<void>;
 }) {
@@ -277,11 +279,29 @@ function OwnerProfilePanel({ profile, activeTab, onTabChange, canManage, busy, o
     </div>
     <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{profileTabs.map(([key, label]) => <button key={key} id={key === "treatment_consent" ? "consentimento-lgpd" : undefined} type="button" onClick={() => onTabChange(key)} className={`whitespace-nowrap rounded-md px-3 py-2 text-xs font-semibold ${activeTab === key ? "bg-primary text-primary-foreground" : "border border-border"}`}>{label}{key !== "identity" && key !== "contact" && key !== "address" && key !== "professional" && value === null ? " · restrito" : ""}</button>)}</div>
     <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
-      <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : activeTab === "professional" || activeTab === "financial" ? <OwnerStructuredEditor kind={activeTab} profile={profile} canManage={canManage} busy={busy} onSave={onSave} /> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
-      {canManage && !restricted && activeTab !== "professional" && activeTab !== "financial" ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
+      <div>{restricted ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados restritos pela permissão do usuário.</p> : activeTab === "professional" || activeTab === "financial" ? <OwnerStructuredEditor kind={activeTab} profile={profile} canManage={canManage} busy={busy} onSave={onSave} /> : activeTab === "credit" && canViewCredit ? <OwnerCreditViewer credit={profile.credit} /> : activeTab === "credit" ? <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">Dados de crédito restritos pela permissão do usuário.</p> : <textarea aria-label={`Dados ${activeTab}`} value={draft} onChange={(event) => setDraft(event.target.value)} readOnly={!canManage} className="min-h-32 w-full rounded-md border border-border bg-background p-3 font-mono text-xs" />}</div>
+      {canManage && !restricted && activeTab !== "professional" && activeTab !== "financial" && activeTab !== "credit" ? <button type="button" disabled={busy} onClick={() => { try { void onSave({ [activeTab]: JSON.parse(draft) }); } catch { /* validação amigável fica no backend */ } }} className="self-start rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">Salvar ficha</button> : null}
     </div>
     <p className="mt-3 text-xs text-muted-foreground">Valores preservam origem, confiança e consentimento LGPD. Consultas externas permanecem desativadas quando o provedor está NOT_CONFIGURED.</p>
   </section>;
+}
+
+function OwnerCreditViewer({ credit }: { credit: OwnerCreditData | null }) {
+  const status = credit?.status ?? "NOT_CHECKED";
+  const statusLabel: Record<string, string> = { NOT_CHECKED: "Não consultado", NOT_CONFIGURED: "Provider não configurado", CURRENT: "Atual", EXPIRED: "Expirado", PARTIAL: "Parcial", CLEAR: "Sem restrições", HAS_RESTRICTIONS: "Com restrições", ERROR: "Erro na consulta" };
+  if (!credit || status === "NOT_CHECKED" || status === "NOT_CONFIGURED") {
+    return <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground"><p className="font-medium text-foreground">{statusLabel[status]}</p><p className="mt-1">{status === "NOT_CONFIGURED" ? "Fonte de crédito ainda não configurada." : "Execute uma consulta autorizada para obter dados de crédito."}</p></div>;
+  }
+  const restrictions = Array.isArray(credit.restrictions) ? credit.restrictions : [];
+  const debts = Array.isArray(credit.debts) ? credit.debts : [];
+  const negativeListings = Array.isArray(credit.negative_listings) ? credit.negative_listings : [];
+  const protests = Array.isArray(credit.protests) ? credit.protests : [];
+  const count = (value: number | null, fallback: number) => value == null ? fallback : value;
+  return <div className="space-y-4">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Info label="Status da consulta" value={statusLabel[status] ?? status} /><Info label="Score" value={credit.score == null ? null : String(credit.score)} /><Info label="Faixa / escala" value={credit.score_range || credit.score_scale ? [credit.score_range, credit.score_scale].filter(Boolean).join(" · ") : null} /><Info label="Fonte" value={credit.provider} /></div>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Restrições" value={count(credit.restriction_count, restrictions.length)} /><Metric label="Dívidas" value={count(credit.debt_count, debts.length)} /><Metric label="Negativações" value={count(credit.negative_listing_count, negativeListings.length)} /><Metric label="Protestos" value={count(credit.protest_count, protests.length)} /></div>
+    <p className="text-xs text-muted-foreground">Última consulta: {credit.checked_at ? new Date(credit.checked_at).toLocaleString("pt-BR") : "Não informado"}{credit.expires_at ? ` · Validade: ${new Date(credit.expires_at).toLocaleDateString("pt-BR")}` : ""}</p>
+  </div>;
 }
 
 type StructuredEditorKind = "professional" | "financial";

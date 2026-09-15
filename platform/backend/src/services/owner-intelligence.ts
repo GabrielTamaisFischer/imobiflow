@@ -78,6 +78,35 @@ export type OwnerCivilDTO = {
   evidenceDocumentId: ProvenancedValue<string>;
 };
 
+export type OwnerCreditStatus = "NOT_CHECKED" | "NOT_CONFIGURED" | "CURRENT" | "EXPIRED" | "PARTIAL" | "CLEAR" | "HAS_RESTRICTIONS" | "ERROR";
+export type OwnerCreditRestriction = { id: string | null; type: string | null; description: string | null; creditor: string | null; amount: number | null; occurrence_date: string | null; status: string | null; source: string | null; checked_at: string | null; protocol: string | null };
+export type OwnerCreditDebt = { id: string | null; creditor: string | null; amount: number | null; due_date: string | null; origin: string | null; status: string | null; source: string | null; protocol: string | null };
+export type OwnerCreditProtest = { id: string | null; registry_office: string | null; city: string | null; state: string | null; amount: number | null; occurrence_date: string | null; status: string | null; source: string | null; protocol: string | null };
+export type OwnerCreditNegativeListing = { id: string | null; source: string | null; creditor: string | null; amount: number | null; occurrence_date: string | null; status: string | null; checked_at: string | null; protocol: string | null };
+export type OwnerCreditData = {
+  status: OwnerCreditStatus;
+  score: number | null;
+  score_range: string | null;
+  score_scale: string | null;
+  has_restrictions: boolean | null;
+  has_negative_listings: boolean | null;
+  restriction_count: number | null;
+  debt_count: number | null;
+  total_debt_amount: number | null;
+  protest_count: number | null;
+  negative_listing_count: number | null;
+  restrictions: OwnerCreditRestriction[];
+  debts: OwnerCreditDebt[];
+  protests: OwnerCreditProtest[];
+  negative_listings: OwnerCreditNegativeListing[];
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: OwnerIntelligenceSource;
+  confidence: OwnerIntelligenceConfidence;
+};
+
 export type OwnerIntelligenceProviderResult = {
   status: OwnerIntelligenceStatus;
   provider: string;
@@ -192,12 +221,46 @@ export function normalizeOwnerCivil(input: Record<string, unknown>): OwnerCivilD
   };
 }
 
+function normalizeCreditStatus(value: unknown): OwnerCreditStatus {
+  const status = String(value ?? "").trim().toUpperCase();
+  return ["NOT_CHECKED", "NOT_CONFIGURED", "CURRENT", "EXPIRED", "PARTIAL", "CLEAR", "HAS_RESTRICTIONS", "ERROR"].includes(status) ? status as OwnerCreditStatus : "NOT_CHECKED";
+}
+function nullableCreditString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : null; }
+function nullableCreditNumber(value: unknown) { const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : null; return n !== null && Number.isFinite(n) ? n : null; }
+function nullableCreditBoolean(value: unknown) { return typeof value === "boolean" ? value : null; }
+function creditRows(value: unknown) { return Array.isArray(value) ? value.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object" && !Array.isArray(row)) : []; }
+
+export function normalizeOwnerCredit(input: Record<string, unknown>): OwnerCreditData {
+  const restrictions = creditRows(input.restrictions).map((row) => ({
+    id: nullableCreditString(row.id ?? row.provider_reference), type: nullableCreditString(row.type), description: nullableCreditString(row.description), creditor: nullableCreditString(row.creditor), amount: nullableCreditNumber(row.amount), occurrence_date: nullableCreditString(row.occurrence_date ?? row.occurrenceDate), status: nullableCreditString(row.status), source: nullableCreditString(row.source ?? row.provider), checked_at: nullableCreditString(row.checked_at ?? row.checkedAt), protocol: nullableCreditString(row.protocol),
+  }));
+  const debts = creditRows(input.debts).map((row) => ({
+    id: nullableCreditString(row.id ?? row.provider_reference), creditor: nullableCreditString(row.creditor), amount: nullableCreditNumber(row.amount), due_date: nullableCreditString(row.due_date ?? row.dueDate), origin: nullableCreditString(row.origin), status: nullableCreditString(row.status), source: nullableCreditString(row.source ?? row.provider), protocol: nullableCreditString(row.protocol),
+  }));
+  const protests = creditRows(input.protests).map((row) => ({
+    id: nullableCreditString(row.id ?? row.provider_reference), registry_office: nullableCreditString(row.registry_office ?? row.registryOffice), city: nullableCreditString(row.city), state: nullableCreditString(row.state ?? row.uf), amount: nullableCreditNumber(row.amount), occurrence_date: nullableCreditString(row.occurrence_date ?? row.occurrenceDate), status: nullableCreditString(row.status), source: nullableCreditString(row.source ?? row.provider), protocol: nullableCreditString(row.protocol),
+  }));
+  const negativeListings = creditRows(input.negative_listings ?? input.negativeListings).map((row) => ({
+    id: nullableCreditString(row.id ?? row.provider_reference), source: nullableCreditString(row.source ?? row.provider), creditor: nullableCreditString(row.creditor), amount: nullableCreditNumber(row.amount), occurrence_date: nullableCreditString(row.occurrence_date ?? row.occurrenceDate), status: nullableCreditString(row.status), checked_at: nullableCreditString(row.checked_at ?? row.checkedAt), protocol: nullableCreditString(row.protocol),
+  }));
+  const provenance = nullableCreditString(input.provenance);
+  const confidence = nullableCreditString(input.confidence);
+  return {
+    status: normalizeCreditStatus(input.status), score: nullableCreditNumber(input.score), score_range: nullableCreditString(input.score_range ?? input.scoreRange), score_scale: nullableCreditString(input.score_scale ?? input.scoreScale),
+    has_restrictions: nullableCreditBoolean(input.has_restrictions ?? input.hasRestrictions), has_negative_listings: nullableCreditBoolean(input.has_negative_listings ?? input.hasNegativeListings),
+    restriction_count: nullableCreditNumber(input.restriction_count ?? input.restrictionCount), debt_count: nullableCreditNumber(input.debt_count ?? input.debtCount), total_debt_amount: nullableCreditNumber(input.total_debt_amount ?? input.totalDebtAmount), protest_count: nullableCreditNumber(input.protest_count ?? input.protestCount), negative_listing_count: nullableCreditNumber(input.negative_listing_count ?? input.negativeListingCount),
+    restrictions, debts, protests, negative_listings: negativeListings, provider: nullableCreditString(input.provider), protocol: nullableCreditString(input.protocol), checked_at: nullableCreditString(input.checked_at ?? input.checkedAt), expires_at: nullableCreditString(input.expires_at ?? input.expiresAt),
+    provenance: provenance === "provider" || provenance === "manual" || provenance === "declared" || provenance === "document" || provenance === "system" ? provenance : "system",
+    confidence: confidence === "high" || confidence === "medium" || confidence === "low" || confidence === "unknown" ? confidence : "unknown",
+  };
+}
+
 export type Owner360Status = {
   identity: "complete" | "pending";
   address: "verified" | "declared" | "pending";
   documents: { verified: number; total: number };
   income: "verified" | "declared" | "pending";
-  credit: "current" | "expired" | "not_consulted";
+  credit: "current" | "expired" | "not_consulted" | "not_configured" | "partial" | "clear" | "has_restrictions";
   legal: "current" | "expired" | "pending";
   fiscal: "complete" | "pending";
   patrimonial: "informed" | "not_informed";
@@ -223,6 +286,24 @@ export function buildOwner360Status(input: {
     if (expiresAt && Date.parse(expiresAt) <= Date.now()) return "expired";
     return "current";
   };
+  const creditCheck = checks.find((check) => {
+    const type = check.check_type ?? check.checkType;
+    if (type === "credit") return true;
+    if (type !== "intelligence") return false;
+    const summary = objectValue(check.summary);
+    return Array.isArray(summary.sections) && summary.sections.includes("CREDIT");
+  });
+  const creditStatus = (() => {
+    if (!creditCheck) return "not_consulted" as const;
+    const status = String(creditCheck.status ?? "").toUpperCase();
+    if (status === "NOT_CONFIGURED") return "not_configured" as const;
+    if (status === "EXPIRED") return "expired" as const;
+    if (status === "PARTIAL") return "partial" as const;
+    const values = objectValue(objectValue(creditCheck.summary).values);
+    if (status === "CLEAR" || values.has_restrictions === false) return "clear" as const;
+    if (status === "HAS_RESTRICTIONS" || values.has_restrictions === true) return "has_restrictions" as const;
+    return "current" as const;
+  })();
   const identityComplete = [identity.cpf, identity.full_name ?? identity.fullName, identity.birth_date ?? identity.birthDate].every(Boolean);
   const addressDeclared = Object.values(address).some(Boolean);
   const income = financial.income_verified || financial.verified_income ? "verified" : Object.values(financial).some(Boolean) ? "declared" : "pending";
@@ -231,7 +312,7 @@ export function buildOwner360Status(input: {
     address: address.current_status === "verified" || address.status === "verified" ? "verified" : addressDeclared ? "declared" : "pending",
     documents: { verified: (input.documentRecords ?? []).filter((document) => document.verified === true).length, total: (input.documentRecords ?? []).length },
     income,
-    credit: checkStatus("credit", "not_consulted"),
+    credit: creditStatus,
     legal: latest("legal") ? (checkStatus("legal", "current") === "expired" ? "expired" : "current") : "pending",
     fiscal: Object.values(objectValue(profile.fiscal)).some(Boolean) ? "complete" : "pending",
     patrimonial: Object.values(objectValue(profile.financial)).some((entry) => Boolean(entry)) ? "informed" : "not_informed",
@@ -262,7 +343,7 @@ export type OwnerContractData = {
 };
 
 export type OwnerInspectionData = { name: string | null; cpf: string | null; contact: Record<string, unknown>; property: Record<string, unknown>; relationship: string | null };
-export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; professional: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: Record<string, unknown>; documents: Array<Record<string, unknown>> };
+export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; professional: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: OwnerCreditData; documents: Array<Record<string, unknown>> };
 export type FinancingApplicantData = InsuranceApplicantData & { civil: Record<string, unknown>; patrimony: Record<string, unknown> };
 
 export function buildOwnerContractData(input: { owner: Record<string, unknown>; profile: Record<string, unknown> }): OwnerContractData {
@@ -312,7 +393,7 @@ export function buildInsuranceApplicantData(input: { owner: Record<string, unkno
     professional: objectValue(input.profile.professional),
     income: contract.income,
     relationship: input.relationship ?? null,
-    credit: objectValue(input.profile.credit),
+    credit: normalizeOwnerCredit(objectValue(input.profile.credit)),
     documents: Array.isArray(input.profile.documents) ? input.profile.documents.filter((document): document is Record<string, unknown> => Boolean(document) && typeof document === "object" && !Array.isArray(document)) : [],
   };
 }

@@ -1,12 +1,13 @@
 import type { OwnerCheck, OwnerProfile } from "./real-estate";
 
-export const OWNER_INTELLIGENCE_UI_CAPABILITIES = ["IDENTITY", "ADDRESS", "CIVIL"] as const;
+export const OWNER_INTELLIGENCE_UI_CAPABILITIES = ["IDENTITY", "ADDRESS", "CIVIL", "CREDIT"] as const;
 export type OwnerIntelligenceUiCapability = (typeof OWNER_INTELLIGENCE_UI_CAPABILITIES)[number];
 
 export const OWNER_INTELLIGENCE_CAPABILITY_LABELS: Record<OwnerIntelligenceUiCapability, string> = {
   IDENTITY: "Identidade",
   ADDRESS: "Endereço",
   CIVIL: "Dados civis",
+  CREDIT: "Crédito",
 };
 
 export function hasValidTreatmentConsent(profile: OwnerProfile | null | undefined) {

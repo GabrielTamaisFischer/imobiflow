@@ -383,6 +383,9 @@ const ownerIntelligenceQuerySchema = z.object({
 realEstateRouter.post("/owners/:id/intelligence/query", requirePermission("owners.enrichment.run"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = ownerIntelligenceQuerySchema.parse(req.body);
+    if (input.capabilities.includes("CREDIT") && !req.access!.appUser.permissions.includes("owners.credit.view")) {
+      throw Object.assign(new Error("Permissão de visualização de crédito necessária."), { statusCode: 403, code: "OWNER_CREDIT_PERMISSION_REQUIRED" });
+    }
     const idempotencyKey = String(req.header("Idempotency-Key") ?? req.body?.idempotency_key ?? "");
     const check = await runOwnerIntelligenceQuery({
       companyId: req.access!.company.id,

@@ -23,6 +23,7 @@ describe("owner intelligence UI rules", () => {
     expect(capabilityStatus([], "IDENTITY").label).toBe("Não consultado");
     expect(capabilityStatus([check("NOT_CONFIGURED")], "ADDRESS").label).toBe("Provider não configurado");
     expect(latestIntelligenceCheck([check("NOT_CONFIGURED")])?.summary).toEqual({ sections: ["IDENTITY", "ADDRESS", "CIVIL"] });
+    expect(capabilityStatus([check("NOT_CONFIGURED", { sections: ["CREDIT"] })], "CREDIT").label).toBe("Provider não configurado");
   });
 
   it("keeps provider and consent errors visible", () => {

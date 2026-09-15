@@ -5,6 +5,7 @@ import { writeAuthAudit } from "./mysql-auth.js";
 import { notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
 import {
   calculateInformativeFinancialCapacity,
+  normalizeOwnerCredit,
   normalizeOwnerEmployment,
   normalizeOwnerFinancial,
   sanitizeEmploymentForPermissions,
@@ -354,7 +355,17 @@ export async function runOwnerIntelligenceQuery(options: {
   const existing = await getPrisma().ownerCheck.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId, checkType: "intelligence", provider: provider.name, idempotencyKey: key } });
   if (existing) return serializeCheck(existing);
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.requested", "property_owner", options.ownerId, { provider: provider.name, capabilities });
+  const creditRequested = capabilities.includes("CREDIT");
+  if (creditRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.credit.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "CREDIT" });
   const result = await provider.query({ document: owner.document, capabilities });
+  const summaryValues = creditRequested ? normalizeOwnerCredit({
+    ...result.values,
+    status: result.status,
+    provider: result.provider,
+    checked_at: result.consultedAt,
+    provenance: result.status === "not_configured" ? "system" : "provider",
+    confidence: result.status === "not_configured" ? "unknown" : "high",
+  }) : result.values;
   const check = await getPrisma().ownerCheck.create({
     data: {
       companyId: options.companyId,
@@ -365,13 +376,20 @@ export async function runOwnerIntelligenceQuery(options: {
       inputFingerprint: createHash("sha256").update(`${owner.document ?? ""}:${capabilities.join(",")}`).digest("hex"),
       idempotencyKey: key,
       source: "provider",
-      summaryJson: jsonValue({ sections: result.sections, values: result.values }),
+      summaryJson: jsonValue({ sections: result.sections, values: summaryValues }),
       warningsJson: jsonValue(result.warnings),
       requestedBy: options.actorUserId,
       checkedAt: new Date(result.consultedAt),
     },
   });
+  if (creditRequested) {
+    await getPrisma().ownerProfile.updateMany({
+      where: { companyId: options.companyId, ownerId: options.ownerId },
+      data: { creditJson: jsonValue(summaryValues) },
+    });
+  }
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capabilities });
+  if (creditRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.credit.query.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capability: "CREDIT" });
   return serializeCheck(check);
 }
 
