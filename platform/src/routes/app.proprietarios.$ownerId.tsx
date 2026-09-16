@@ -175,7 +175,8 @@ function OwnerDashboardPage() {
   async function runQaHarness() {
     setQaHarnessBusy(true);
     try {
-      const response = await fetch("/api/internal/qa/fase-e/final", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const token = window.localStorage.getItem("imobiflow.access_token");
+      const response = await fetch("/api/internal/qa/fase-e/final", { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: "{}" });
       setQaHarnessResult(await response.json().catch(() => ({ status: response.status })));
     } catch (cause) { setQaHarnessResult({ error: cause instanceof Error ? cause.message : "qa harness failed" }); }
     finally { setQaHarnessBusy(false); }
