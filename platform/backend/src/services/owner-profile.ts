@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
-import { normalizeOwnerCredit, normalizeOwnerLegal, notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
+import { normalizeOwnerCredit, normalizeOwnerFiscal, normalizeOwnerLegal, notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
 import {
   calculateInformativeFinancialCapacity,
   normalizeOwnerEmployment,
@@ -356,8 +356,10 @@ export async function runOwnerIntelligenceQuery(options: {
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.requested", "property_owner", options.ownerId, { provider: provider.name, capabilities });
   const creditRequested = capabilities.includes("CREDIT");
   const legalRequested = capabilities.includes("LEGAL");
+  const fiscalRequested = capabilities.includes("FISCAL");
   if (creditRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.credit.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "CREDIT" });
   if (legalRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.legal.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "LEGAL" });
+  if (fiscalRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.fiscal.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "FISCAL" });
   const result = await provider.query({ document: owner.document, capabilities });
   const normalizedCredit = creditRequested ? normalizeOwnerCredit({
     ...result.values,
@@ -375,9 +377,20 @@ export async function runOwnerIntelligenceQuery(options: {
     provenance: result.status === "not_configured" ? "system" : "provider",
     confidence: result.status === "not_configured" ? "unknown" : "high",
   }) : null;
-  const summaryValues = creditRequested && legalRequested
-    ? { ...result.values, credit: normalizedCredit, legal: normalizedLegal }
-    : normalizedCredit ?? normalizedLegal ?? result.values;
+  const normalizedFiscal = fiscalRequested ? normalizeOwnerFiscal({
+    ...result.values,
+    status: result.status,
+    provider: result.provider,
+    checked_at: result.consultedAt,
+    provenance: result.status === "not_configured" ? "system" : "provider",
+    confidence: result.status === "not_configured" ? "unknown" : "high",
+  }) : null;
+  const normalizedValues = {
+    ...(creditRequested ? { credit: normalizedCredit } : {}),
+    ...(legalRequested ? { legal: normalizedLegal } : {}),
+    ...(fiscalRequested ? { fiscal: normalizedFiscal } : {}),
+  };
+  const summaryValues = Object.keys(normalizedValues).length > 1 ? { ...result.values, ...normalizedValues } : Object.values(normalizedValues)[0] ?? result.values;
   const check = await getPrisma().ownerCheck.create({
     data: {
       companyId: options.companyId,
@@ -406,10 +419,19 @@ export async function runOwnerIntelligenceQuery(options: {
       data: { legalJson: jsonValue(normalizedLegal) },
     });
   }
+  if (fiscalRequested) {
+    await getPrisma().ownerProfile.updateMany({
+      where: { companyId: options.companyId, ownerId: options.ownerId },
+      data: { fiscalJson: jsonValue(normalizedFiscal) },
+    });
+  }
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capabilities });
   if (creditRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.credit.query.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capability: "CREDIT" });
   if (legalRequested) {
     await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.legal.query.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capability: "LEGAL" });
+  }
+  if (fiscalRequested) {
+    await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.fiscal.query.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capability: "FISCAL" });
   }
   return serializeCheck(check);
 }

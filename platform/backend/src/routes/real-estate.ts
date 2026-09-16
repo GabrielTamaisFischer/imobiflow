@@ -389,6 +389,9 @@ realEstateRouter.post("/owners/:id/intelligence/query", requirePermission("owner
     if (input.capabilities.includes("LEGAL") && !req.access!.appUser.permissions.includes("owners.legal.view")) {
       throw Object.assign(new Error("Permissão de visualização jurídica necessária."), { statusCode: 403, code: "OWNER_LEGAL_PERMISSION_REQUIRED" });
     }
+    if (input.capabilities.includes("FISCAL") && !req.access!.appUser.permissions.includes("owners.fiscal.view")) {
+      throw Object.assign(new Error("Permissão de visualização fiscal necessária."), { statusCode: 403, code: "OWNER_FISCAL_PERMISSION_REQUIRED" });
+    }
     const idempotencyKey = String(req.header("Idempotency-Key") ?? req.body?.idempotency_key ?? "");
     const check = await runOwnerIntelligenceQuery({
       companyId: req.access!.company.id,

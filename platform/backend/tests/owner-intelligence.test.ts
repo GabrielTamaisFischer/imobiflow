@@ -7,6 +7,7 @@ import {
   normalizeOwnerAddress,
   normalizeOwnerCivil,
   normalizeOwnerCredit,
+  normalizeOwnerFiscal,
   normalizeOwnerLegal,
   normalizeOwnerIdentity,
   ownerIntelligenceRegistry,
@@ -17,6 +18,7 @@ describe("Owner Intelligence 360 foundation", () => {
     const provider = ownerIntelligenceRegistry.resolve("IDENTITY");
     expect(provider?.name).toBe("NOT_CONFIGURED");
     expect(ownerIntelligenceRegistry.list()[0]?.capabilities).toContain("ADDRESS");
+    expect(ownerIntelligenceRegistry.list()[0]?.capabilities).toContain("FISCAL");
     await expect(provider?.query({ document: "52998224725", capabilities: ["IDENTITY"] })).resolves.toMatchObject({
       status: "not_configured",
       values: {},
@@ -53,6 +55,13 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(status.credit).toBe("not_consulted");
     expect(status.legal).toBe("pending");
     expect(status.consent).toBe("valid");
+  });
+
+  it("derives fiscal 360 status from factual persisted fiscal data", () => {
+    expect(buildOwner360Status({ profile: { fiscal: { status: "NOT_CONFIGURED" } } }).fiscal).toBe("not_configured");
+    expect(buildOwner360Status({ profile: { fiscal: { status: "REGULAR" } } }).fiscal).toBe("regular");
+    expect(buildOwner360Status({ profile: { fiscal: { status: "PENDING" } } }).fiscal).toBe("irregular");
+    expect(buildOwner360Status({ profile: { fiscal: { status: "EXPIRED" } } }).fiscal).toBe("expired");
   });
 
   it("builds contract, insurance and financing DTOs from the same owner profile source", () => {
@@ -126,6 +135,24 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(normalizeOwnerLegal({ status: "NOT_CONFIGURED" })).toMatchObject({ status: "NOT_CONFIGURED", has_records: null, process_count: null, processes: [] });
     expect(normalizeOwnerLegal({ status: "NO_RECORDS_FOUND" })).toMatchObject({ status: "NO_RECORDS_FOUND", has_records: false, process_count: 0 });
     expect(normalizeOwnerLegal({ status: "ERROR" })).toMatchObject({ status: "ERROR", has_records: null, process_count: null });
+  });
+
+  it("normalizes factual fiscal status, declarations, certificates and debt without inventing values", () => {
+    const fiscal = normalizeOwnerFiscal({
+      status: "REGULAR",
+      registration_status: "ATIVA",
+      tax_regular: true,
+      tax_pending: false,
+      declarations: [{ year: "2025", status: "RECEIVED", received_at: "2026-04-01" }],
+      certificates: [{ type: "federal", issuing_authority: "RFB", jurisdiction: "federal", result_status: "NEGATIVE", expires_at: "2026-12-31" }],
+      active_debt: { has_active_debt: false, active_debt_count: 0 },
+      provider: "FISCAL_PROVIDER_QA",
+    });
+    expect(fiscal).toMatchObject({ status: "REGULAR", registration_status: "ATIVA", tax_regular: true, tax_pending: false, provider: "FISCAL_PROVIDER_QA" });
+    expect(fiscal.declarations[0]).toMatchObject({ year: "2025", status: "RECEIVED" });
+    expect(fiscal.certificates[0]).toMatchObject({ type: "federal", result_status: "NEGATIVE" });
+    expect(fiscal.active_debt).toMatchObject({ has_active_debt: false, active_debt_count: 0 });
+    expect(normalizeOwnerFiscal({ status: "NOT_CONFIGURED" })).toMatchObject({ status: "NOT_CONFIGURED", registration_status: null, tax_regular: null, tax_pending: null, declarations: [], certificates: [], pending_items: [] });
   });
 
   it("derives credit status from the canonical intelligence check", () => {

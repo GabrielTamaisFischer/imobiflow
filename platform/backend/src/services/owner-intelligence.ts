@@ -159,6 +159,65 @@ export type OwnerLegalData = {
   confidence: OwnerIntelligenceConfidence;
 };
 
+export type OwnerFiscalDeclaration = {
+  year: string | null;
+  status: string | null;
+  received_at: string | null;
+  source: string | null;
+  provider: string | null;
+  protocol: string | null;
+};
+export type OwnerFiscalCertificate = {
+  type: string | null;
+  issuing_authority: string | null;
+  jurisdiction: string | null;
+  result_status: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  protocol: string | null;
+  document_record_id: string | null;
+  provider: string | null;
+  provenance: OwnerIntelligenceSource;
+  confidence: OwnerIntelligenceConfidence;
+};
+export type OwnerFiscalPendingItem = {
+  type: string | null;
+  authority: string | null;
+  reference: string | null;
+  status: string | null;
+  amount: number | null;
+  checked_at: string | null;
+  source: string | null;
+  provider: string | null;
+  protocol: string | null;
+};
+export type OwnerFiscalActiveDebt = {
+  has_active_debt: boolean | null;
+  active_debt_count: number | null;
+  amount: number | null;
+  authority: string | null;
+  reference: string | null;
+  status: string | null;
+  checked_at: string | null;
+};
+export type OwnerFiscalStatus = "NOT_CHECKED" | "NOT_CONFIGURED" | "REGULAR" | "IRREGULAR" | "PENDING" | "NOT_AVAILABLE" | "PARTIAL" | "EXPIRED" | "ERROR";
+export type OwnerFiscalData = {
+  status: OwnerFiscalStatus;
+  registration_status: string | null;
+  tax_regular: boolean | null;
+  tax_pending: boolean | null;
+  declarations: OwnerFiscalDeclaration[];
+  certificates: OwnerFiscalCertificate[];
+  active_debt: OwnerFiscalActiveDebt;
+  pending_items: OwnerFiscalPendingItem[];
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: OwnerIntelligenceSource;
+  confidence: OwnerIntelligenceConfidence;
+};
+
 export type OwnerIntelligenceProviderResult = {
   status: OwnerIntelligenceStatus;
   provider: string;
@@ -281,6 +340,10 @@ function normalizeLegalStatus(value: unknown): OwnerLegalStatus {
   const status = String(value ?? "").trim().toUpperCase();
   return ["NOT_CHECKED", "NOT_CONFIGURED", "NO_RECORDS_FOUND", "RECORDS_FOUND", "NOT_AVAILABLE", "EXPIRED", "PARTIAL", "ERROR"].includes(status) ? status as OwnerLegalStatus : "NOT_CHECKED";
 }
+function normalizeFiscalStatus(value: unknown): OwnerFiscalStatus {
+  const status = String(value ?? "").trim().toUpperCase();
+  return ["NOT_CHECKED", "NOT_CONFIGURED", "REGULAR", "IRREGULAR", "PENDING", "NOT_AVAILABLE", "PARTIAL", "EXPIRED", "ERROR"].includes(status) ? status as OwnerFiscalStatus : "NOT_CHECKED";
+}
 function nullableCreditString(value: unknown) { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function nullableCreditNumber(value: unknown) { const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : null; return n !== null && Number.isFinite(n) ? n : null; }
 function nullableCreditBoolean(value: unknown) { return typeof value === "boolean" ? value : null; }
@@ -373,6 +436,72 @@ export function normalizeOwnerLegal(input: Record<string, unknown>): OwnerLegalD
   };
 }
 
+export function normalizeOwnerFiscal(input: Record<string, unknown>): OwnerFiscalData {
+  const declarations = creditRows(input.declarations).map((row) => ({
+    year: nullableCreditString(row.year ?? row.exercise ?? row.tax_year),
+    status: nullableCreditString(row.status),
+    received_at: nullableCreditString(row.received_at ?? row.receivedAt),
+    source: nullableCreditString(row.source),
+    provider: nullableCreditString(row.provider),
+    protocol: nullableCreditString(row.protocol),
+  }));
+  const certificates = creditRows(input.certificates).map((row) => {
+    const provenance = nullableCreditString(row.provenance);
+    const confidence = nullableCreditString(row.confidence);
+    return {
+      type: nullableCreditString(row.type),
+      issuing_authority: nullableCreditString(row.issuing_authority ?? row.issuingAuthority),
+      jurisdiction: nullableCreditString(row.jurisdiction),
+      result_status: nullableCreditString(row.result_status ?? row.resultStatus ?? row.status),
+      issued_at: nullableCreditString(row.issued_at ?? row.issuedAt),
+      expires_at: nullableCreditString(row.expires_at ?? row.expiresAt),
+      protocol: nullableCreditString(row.protocol),
+      document_record_id: nullableCreditString(row.document_record_id ?? row.documentRecordId),
+      provider: nullableCreditString(row.provider),
+      provenance: provenance === "provider" || provenance === "manual" || provenance === "declared" || provenance === "document" || provenance === "system" ? provenance : "system",
+      confidence: confidence === "high" || confidence === "medium" || confidence === "low" || confidence === "unknown" ? confidence : "unknown",
+    } satisfies OwnerFiscalCertificate;
+  });
+  const pendingItems = creditRows(input.pending_items ?? input.pendingItems).map((row) => ({
+    type: nullableCreditString(row.type),
+    authority: nullableCreditString(row.authority),
+    reference: nullableCreditString(row.reference),
+    status: nullableCreditString(row.status),
+    amount: nullableCreditNumber(row.amount),
+    checked_at: nullableCreditString(row.checked_at ?? row.checkedAt),
+    source: nullableCreditString(row.source),
+    provider: nullableCreditString(row.provider),
+    protocol: nullableCreditString(row.protocol),
+  }));
+  const activeDebtInput = input.active_debt && typeof input.active_debt === "object" && !Array.isArray(input.active_debt) ? input.active_debt as Record<string, unknown> : {};
+  const provenance = nullableCreditString(input.provenance);
+  const confidence = nullableCreditString(input.confidence);
+  return {
+    status: normalizeFiscalStatus(input.status),
+    registration_status: nullableCreditString(input.registration_status ?? input.registrationStatus),
+    tax_regular: nullableCreditBoolean(input.tax_regular ?? input.taxRegular),
+    tax_pending: nullableCreditBoolean(input.tax_pending ?? input.taxPending),
+    declarations,
+    certificates,
+    active_debt: {
+      has_active_debt: nullableCreditBoolean(activeDebtInput.has_active_debt ?? activeDebtInput.hasActiveDebt ?? input.has_active_debt ?? input.hasActiveDebt),
+      active_debt_count: nullableCreditNumber(activeDebtInput.active_debt_count ?? activeDebtInput.activeDebtCount ?? input.active_debt_count ?? input.activeDebtCount),
+      amount: nullableCreditNumber(activeDebtInput.amount),
+      authority: nullableCreditString(activeDebtInput.authority),
+      reference: nullableCreditString(activeDebtInput.reference),
+      status: nullableCreditString(activeDebtInput.status),
+      checked_at: nullableCreditString(activeDebtInput.checked_at ?? activeDebtInput.checkedAt),
+    },
+    pending_items: pendingItems,
+    provider: nullableCreditString(input.provider),
+    protocol: nullableCreditString(input.protocol),
+    checked_at: nullableCreditString(input.checked_at ?? input.checkedAt),
+    expires_at: nullableCreditString(input.expires_at ?? input.expiresAt),
+    provenance: provenance === "provider" || provenance === "manual" || provenance === "declared" || provenance === "document" || provenance === "system" ? provenance : "system",
+    confidence: confidence === "high" || confidence === "medium" || confidence === "low" || confidence === "unknown" ? confidence : "unknown",
+  };
+}
+
 export type Owner360Status = {
   identity: "complete" | "pending";
   address: "verified" | "declared" | "pending";
@@ -380,7 +509,7 @@ export type Owner360Status = {
   income: "verified" | "declared" | "pending";
   credit: "current" | "expired" | "not_consulted" | "not_configured" | "partial" | "clear" | "has_restrictions";
   legal: "current" | "expired" | "pending" | "not_configured" | "partial" | "records_found" | "no_records_found";
-  fiscal: "complete" | "pending";
+  fiscal: "complete" | "pending" | "not_configured" | "regular" | "irregular" | "partial" | "expired";
   patrimonial: "informed" | "not_informed";
   consent: "valid" | "absent" | "expired";
 };
@@ -449,7 +578,16 @@ export function buildOwner360Status(input: {
     income,
     credit: creditStatus,
     legal: legalStatus,
-    fiscal: Object.values(objectValue(profile.fiscal)).some(Boolean) ? "complete" : "pending",
+    fiscal: (() => {
+      const fiscal = objectValue(profile.fiscal);
+      const fiscalStatus = String(fiscal.status ?? "").toUpperCase();
+      if (fiscalStatus === "NOT_CONFIGURED") return "not_configured" as const;
+      if (fiscalStatus === "EXPIRED") return "expired" as const;
+      if (fiscalStatus === "IRREGULAR" || fiscalStatus === "PENDING") return "irregular" as const;
+      if (fiscalStatus === "PARTIAL") return "partial" as const;
+      if (fiscalStatus === "REGULAR") return "regular" as const;
+      return Object.values(fiscal).some(Boolean) ? "complete" as const : "pending" as const;
+    })(),
     patrimonial: Object.values(objectValue(profile.financial)).some((entry) => Boolean(entry)) ? "informed" : "not_informed",
     consent: consent.authorized_at && consent.purpose ? "valid" : "absent",
   };

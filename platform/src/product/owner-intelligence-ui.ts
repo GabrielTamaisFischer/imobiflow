@@ -1,6 +1,6 @@
 import type { OwnerCheck, OwnerProfile } from "./real-estate";
 
-export const OWNER_INTELLIGENCE_UI_CAPABILITIES = ["IDENTITY", "ADDRESS", "CIVIL", "CREDIT", "LEGAL"] as const;
+export const OWNER_INTELLIGENCE_UI_CAPABILITIES = ["IDENTITY", "ADDRESS", "CIVIL", "CREDIT", "LEGAL", "FISCAL"] as const;
 export type OwnerIntelligenceUiCapability = (typeof OWNER_INTELLIGENCE_UI_CAPABILITIES)[number];
 
 export const OWNER_INTELLIGENCE_CAPABILITY_LABELS: Record<OwnerIntelligenceUiCapability, string> = {
@@ -9,6 +9,7 @@ export const OWNER_INTELLIGENCE_CAPABILITY_LABELS: Record<OwnerIntelligenceUiCap
   CIVIL: "Dados civis",
   CREDIT: "Crédito",
   LEGAL: "Jurídico",
+  FISCAL: "Fiscal",
 };
 
 export function hasValidTreatmentConsent(profile: OwnerProfile | null | undefined) {
@@ -37,6 +38,7 @@ export function capabilityStatus(checks: OwnerCheck[], capability: OwnerIntellig
 export function intelligenceErrorMessage(error: unknown) {
   const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
   if (code === "OWNER_TREATMENT_CONSENT_REQUIRED") return "É necessário registrar a autorização de tratamento de dados antes de realizar consultas.";
+  if (code === "OWNER_FISCAL_PERMISSION_REQUIRED") return "Você não possui permissão para consultar dados fiscais.";
   if (error instanceof Error && error.message) return error.message;
   return "Não foi possível consultar a inteligência cadastral. Tente novamente.";
 }

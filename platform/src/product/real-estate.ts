@@ -89,7 +89,7 @@ export type OwnerProfile = {
   financial: Record<string, unknown> | null;
   credit: OwnerCreditData | null;
   legal: OwnerLegalData | null;
-  fiscal: Record<string, unknown> | null;
+  fiscal: OwnerFiscalData | null;
   provenance: Record<string, unknown>;
   confidence: Record<string, unknown>;
   treatment_consent: Record<string, unknown>;
@@ -127,6 +127,23 @@ export type OwnerLegalData = {
   active_process_count: number | null;
   processes: Array<Record<string, unknown>>;
   certificates: Array<Record<string, unknown>>;
+  provider: string | null;
+  protocol: string | null;
+  checked_at: string | null;
+  expires_at: string | null;
+  provenance: string;
+  confidence: string;
+};
+
+export type OwnerFiscalData = {
+  status: "NOT_CHECKED" | "NOT_CONFIGURED" | "REGULAR" | "IRREGULAR" | "PENDING" | "NOT_AVAILABLE" | "PARTIAL" | "EXPIRED" | "ERROR";
+  registration_status: string | null;
+  tax_regular: boolean | null;
+  tax_pending: boolean | null;
+  declarations: Array<Record<string, unknown>>;
+  certificates: Array<Record<string, unknown>>;
+  active_debt: { has_active_debt: boolean | null; active_debt_count: number | null; amount: number | null; authority: string | null; reference: string | null; status: string | null; checked_at: string | null };
+  pending_items: Array<Record<string, unknown>>;
   provider: string | null;
   protocol: string | null;
   checked_at: string | null;
