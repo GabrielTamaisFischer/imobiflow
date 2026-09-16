@@ -65,6 +65,8 @@ function OwnerDashboardPage() {
   // jeito de resolver a URL do site da empresa.
   const [siteSlug, setSiteSlug] = useState<string | null>(null);
   const [isDocumentsOpen, setIsDocumentsOpen] = useState(false);
+  const [qaHarnessResult, setQaHarnessResult] = useState<unknown>(null);
+  const [qaHarnessBusy, setQaHarnessBusy] = useState(false);
   const canManageOwners = canManage(session?.access.appUser, "owners.manage");
 
   async function load() {
@@ -170,12 +172,22 @@ function OwnerDashboardPage() {
     } finally { setIntelligenceBusy(false); }
   }
 
+  async function runQaHarness() {
+    setQaHarnessBusy(true);
+    try {
+      const response = await fetch("/api/internal/qa/fase-e/final", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      setQaHarnessResult(await response.json().catch(() => ({ status: response.status })));
+    } catch (cause) { setQaHarnessResult({ error: cause instanceof Error ? cause.message : "qa harness failed" }); }
+    finally { setQaHarnessBusy(false); }
+  }
+
 
   if (isSessionLoading || loading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando proprietário...</main>;
 
   return <ModulePage session={session} module={module}>
     <div className="mb-4 flex items-center justify-between gap-3"><Link to="/app/proprietarios" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" />Proprietários</Link><button type="button" onClick={() => void load()} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Atualizar</button></div>
     {error ? <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
+    {typeof window !== "undefined" && window.location.search.includes("qa=phase-e") ? <section className="mb-4 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/5 p-4"><p className="text-xs font-semibold uppercase text-amber-800">QA staging Fase E</p><button type="button" onClick={() => void runQaHarness()} disabled={qaHarnessBusy} className="mt-2 rounded-md border border-amber-600/40 px-3 py-2 text-xs font-semibold">{qaHarnessBusy ? "Executando…" : "Executar verificação QA"}</button>{qaHarnessResult ? <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-[11px]">{JSON.stringify(qaHarnessResult, null, 2)}</pre> : null}</section> : null}
     {!dashboard ? <p className="text-sm text-muted-foreground">Proprietário não encontrado.</p> : <>
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} canViewCredit={canView(session?.access.appUser, "owners.credit.view")} canViewLegal={canView(session?.access.appUser, "owners.legal.view")} canViewFiscal={canView(session?.access.appUser, "owners.fiscal.view")} busy={profileBusy} onSave={saveProfile} /> : null}
