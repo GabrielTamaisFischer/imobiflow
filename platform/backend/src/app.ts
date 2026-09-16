@@ -36,6 +36,7 @@ import { testLabRouter } from "./routes/test-lab.js";
 import { usageCostsRouter } from "./routes/usage-costs.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { websiteBuilderRouter } from "./routes/website-builder.js";
+import { qaFaseDBrokerRouter } from "./routes/qa-fase-d-broker.js";
 import { buildAppBootstrap } from "./services/app-bootstrap.js";
 import { getStorageProviderName } from "./services/storage/index.js";
 import { localUploadsRoot } from "./services/storage/local-storage-provider.js";
@@ -147,6 +148,7 @@ export function createApp() {
   app.use("/usage-costs", usageCostsRouter);
   app.use("/webhooks", webhooksRouter);
   app.use("/website-builder", websiteBuilderRouter);
+  app.use("/internal/qa/fase-d", qaFaseDBrokerRouter);
 
   app.get("/me/authorization", requireAuth, requireCompany, (req: RequestWithAccess, res) => {
     res.json({ access: req.access });
