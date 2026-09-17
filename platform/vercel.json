@@ -9,6 +9,10 @@
     {
       "source": "/api/:path*",
       "destination": "/api"
+    },
+    {
+      "source": "/app/qa/fase-f/run",
+      "destination": "/api/qa/fase-f"
     }
   ]
 }
