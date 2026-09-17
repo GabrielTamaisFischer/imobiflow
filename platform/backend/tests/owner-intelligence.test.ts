@@ -85,6 +85,14 @@ describe("Owner Intelligence 360 foundation", () => {
     expect(data.address).toEqual({ city: "São Paulo", state: "SP" });
   });
 
+  it("carries persisted conflict metadata into downstream applicant DTOs", () => {
+    const conflicts = [{ id: "conflict-qa", domain: "financial", field: "income_declared_monthly", status: "OPEN" }];
+    const input = { owner: { name: "Pessoa QA" }, profile: { identity: {}, address: {}, professional: {}, financial: {} }, conflicts };
+    expect(buildOwnerContractData(input)).toMatchObject({ conflicts, requiresReview: true });
+    expect(buildInsuranceApplicantData(input)).toMatchObject({ conflicts, requiresReview: true });
+    expect(buildFinancingApplicantData(input)).toMatchObject({ conflicts, requiresReview: true });
+  });
+
   it("normalizes factual credit data without inventing provider scale or details", () => {
     const credit = normalizeOwnerCredit({
       status: "CURRENT",

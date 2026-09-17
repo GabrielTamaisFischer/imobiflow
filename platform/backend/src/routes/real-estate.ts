@@ -70,6 +70,7 @@ import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
 import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
 import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
+import { detectOwnerConflict, getOwner360Data, resolveOwnerConflict } from "../services/owner-360.js";
 
 export const realEstateRouter = Router();
 
@@ -355,6 +356,34 @@ realEstateRouter.get("/owners/:id/profile", requirePermission("owners.view"), as
   } catch (error) { next(error); }
 });
 
+realEstateRouter.get("/owners/:id/360", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const data = await getOwner360Data({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions });
+    res.json({ owner360: data });
+  } catch (error) { next(error); }
+});
+
+const ownerConflictDetectionSchema = z.object({
+  domain: z.string().trim().min(1).max(40),
+  field: z.string().trim().min(1).max(100),
+  candidates: z.array(z.object({ value: z.unknown(), source: z.string().trim().min(1).max(80), confidence: z.string().max(20).optional(), provider: z.string().max(100).optional().nullable(), checked_at: z.string().datetime().optional().nullable() })).min(2).max(20),
+});
+
+realEstateRouter.post("/owners/:id/conflicts/detect", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = ownerConflictDetectionSchema.parse(req.body);
+    res.status(201).json({ result: await detectOwnerConflict({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, ...input }) });
+  } catch (error) { next(error); }
+});
+
+realEstateRouter.patch("/owners/:id/conflicts/:conflictId", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = z.object({ selected_value: z.unknown(), source: z.string().trim().min(1).max(80), reason: z.string().trim().max(1000).optional() }).parse(req.body);
+    const conflict = await resolveOwnerConflict({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, conflictId: String(req.params.conflictId), selectedValue: input.selected_value, source: input.source, reason: input.reason });
+    res.json({ conflict: { id: conflict.id, status: conflict.status, canonical_value: conflict.canonicalValueJson, canonical_source: conflict.canonicalSource, resolved_at: conflict.resolvedAt?.toISOString() ?? null } });
+  } catch (error) { next(error); }
+});
+
 realEstateRouter.patch("/owners/:id/profile", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = ownerProfilePatchSchema.parse(req.body);
@@ -545,6 +574,15 @@ const ownerDocumentUploadSchema = z.object({
   content_base64: z.string().min(1),
   property_id: z.string().uuid().optional(),
   document_type: z.string().trim().min(1).max(60).default("owner_document"),
+  title: z.string().trim().max(240).optional().or(z.literal("")),
+  source: z.string().trim().max(80).optional().or(z.literal("")),
+  provider: z.string().trim().max(100).optional().or(z.literal("")),
+  issued_at: z.string().datetime().optional(),
+  document_number: z.string().trim().max(120).optional().or(z.literal("")),
+  linked_domain: z.string().trim().max(40).optional().or(z.literal("")),
+  provenance: z.string().trim().max(40).optional().or(z.literal("")),
+  confidence: z.string().trim().max(20).optional().or(z.literal("")),
+  content_hash: z.string().trim().max(128).optional().or(z.literal("")),
   expires_at: z.string().datetime().optional(),
   notes: z.string().max(4000).optional().or(z.literal("")),
 });
@@ -620,6 +658,15 @@ realEstateRouter.post(
               ownerId,
               storedFileId: record.id,
               documentType: input.document_type,
+              title: input.title || null,
+              source: input.source || null,
+              provider: input.provider || null,
+              issuedAt: input.issued_at ? new Date(input.issued_at) : null,
+              documentNumber: input.document_number || null,
+              linkedDomain: input.linked_domain || null,
+              provenance: input.provenance || null,
+              confidence: input.confidence || null,
+              contentHash: input.content_hash || null,
               expiresAt: input.expires_at ? new Date(input.expires_at) : null,
               notes: input.notes || null,
             },
@@ -652,6 +699,13 @@ realEstateRouter.post(
           created_at: record.createdAt.toISOString(),
           property_id: propertyId,
           document_type: documentRecord.documentType,
+          title: documentRecord.title ?? null,
+          source: documentRecord.source ?? null,
+          provider: documentRecord.provider ?? null,
+          issued_at: documentRecord.issuedAt?.toISOString() ?? null,
+          linked_domain: documentRecord.linkedDomain ?? null,
+          provenance: documentRecord.provenance ?? null,
+          confidence: documentRecord.confidence ?? null,
           status: documentRecord.status,
           verified: documentRecord.verified,
           expires_at: documentRecord.expiresAt?.toISOString() ?? null,
@@ -668,11 +722,11 @@ realEstateRouter.patch(
   requirePermission("owners.manage"),
   async (req: RequestWithAccess, res, next) => {
     try {
-      const input = z.object({ document_type: z.string().trim().min(1).max(60).optional(), status: z.string().trim().min(1).max(30).optional(), verified: z.boolean().optional(), expires_at: z.string().datetime().nullable().optional(), notes: z.string().max(4000).nullable().optional() }).parse(req.body);
-      const { document_type, expires_at, ...metadata } = input;
+      const input = z.object({ document_type: z.string().trim().min(1).max(60).optional(), title: z.string().trim().max(240).nullable().optional(), source: z.string().trim().max(80).nullable().optional(), provider: z.string().trim().max(100).nullable().optional(), issued_at: z.string().datetime().nullable().optional(), document_number: z.string().trim().max(120).nullable().optional(), linked_domain: z.string().trim().max(40).nullable().optional(), provenance: z.string().trim().max(40).nullable().optional(), confidence: z.string().trim().max(20).nullable().optional(), content_hash: z.string().trim().max(128).nullable().optional(), status: z.string().trim().min(1).max(30).optional(), verified: z.boolean().optional(), expires_at: z.string().datetime().nullable().optional(), notes: z.string().max(4000).nullable().optional() }).parse(req.body);
+      const { document_type, issued_at, expires_at, document_number, linked_domain, content_hash, ...metadata } = input;
       const result = await getPrisma().ownerDocumentRecord.updateMany({
         where: { id: String(req.params.documentId), ownerId: String(req.params.id), companyId: req.access!.company.id },
-        data: { ...metadata, documentType: document_type, expiresAt: expires_at === undefined ? undefined : expires_at ? new Date(expires_at) : null, verifiedBy: input.verified === true ? req.access!.appUser.id : undefined, verifiedAt: input.verified === true ? new Date() : undefined },
+        data: { ...metadata, documentType: document_type, issuedAt: issued_at === undefined ? undefined : issued_at ? new Date(issued_at) : null, documentNumber: document_number, linkedDomain: linked_domain, contentHash: content_hash, expiresAt: expires_at === undefined ? undefined : expires_at ? new Date(expires_at) : null, verifiedBy: input.verified === true ? req.access!.appUser.id : undefined, verifiedAt: input.verified === true ? new Date() : undefined },
       });
       if (!result.count) throw Object.assign(new Error("Documento não encontrado."), { statusCode: 404, code: "OWNER_DOCUMENT_NOT_FOUND" });
       await writeAuthAudit(getPrisma(), req.access!.company.id, req.access!.appUser.id, "owner.document_metadata_updated", "property_owner", String(req.params.id), { documentId: String(req.params.documentId) });

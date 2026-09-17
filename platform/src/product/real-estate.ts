@@ -164,6 +164,35 @@ export type OwnerCheck = {
   created_at: string;
 };
 
+export type Owner360Document = {
+  id: string;
+  owner_id: string;
+  document_type: string;
+  title: string | null;
+  source: string | null;
+  provider: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  uploaded_at: string;
+  document_number: string | null;
+  linked_domain: string | null;
+  provenance: string | null;
+  confidence: string | null;
+  status: string;
+  verified: boolean;
+  verified_at: string | null;
+  content_hash: string | null;
+  stored_file_id: string;
+};
+
+export type Owner360Data = {
+  owner_id: string;
+  profile: Record<string, unknown>;
+  documents: Owner360Document[];
+  status: Record<string, { status: string; completeness: number | null; freshness: string; conflicts: number; last_checked_at: string | null }>;
+  conflicts: { total_conflicts: number; critical_conflicts: number; unresolved_conflicts: number; items: Array<Record<string, unknown>> };
+};
+
 export type OwnerPropertyUpdateRequest = {
   id: string;
   company_id: string;
@@ -456,6 +485,19 @@ export async function queryOwnerIntelligence(ownerId: string, capabilities: stri
 
 export async function listOwnerChecks(ownerId: string) {
   return apiRequest<{ checks: OwnerCheck[] }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/checks`, { token: getStoredToken() ?? undefined });
+}
+
+export async function getOwner360(ownerId: string) {
+  if (isPreviewRealEstate()) return { owner360: null as Owner360Data | null };
+  return apiRequest<{ owner360: Owner360Data }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/360`, { token: getStoredToken() ?? undefined });
+}
+
+export async function detectOwnerConflict(ownerId: string, input: { domain: string; field: string; candidates: Array<{ value: unknown; source: string; confidence?: string; provider?: string | null }> }) {
+  return apiRequest<{ result: { conflict: boolean; item?: Record<string, unknown> } }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/conflicts/detect`, { method: "POST", body: JSON.stringify(input), token: getStoredToken() ?? undefined });
+}
+
+export async function resolveOwnerConflict(ownerId: string, conflictId: string, input: { selected_value: unknown; source: string; reason?: string }) {
+  return apiRequest<{ conflict: Record<string, unknown> }>(`/real-estate/owners/${encodeURIComponent(ownerId)}/conflicts/${encodeURIComponent(conflictId)}`, { method: "PATCH", body: JSON.stringify(input), token: getStoredToken() ?? undefined });
 }
 
 export async function listOwnerPropertyUpdateRequests(ownerId: string, status?: OwnerPropertyUpdateRequest["status"]) {

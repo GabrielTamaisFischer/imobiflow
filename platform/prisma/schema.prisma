@@ -62,6 +62,7 @@ model Company {
   ownerProfiles   OwnerProfile[]
   ownerChecks     OwnerCheck[]
   ownerDocuments  OwnerDocumentRecord[]
+  ownerConflicts   OwnerConflict[]
 
   @@index([status])
   @@map("companies")
@@ -93,6 +94,7 @@ model AppUser {
   authAuditLogs AuthAuditLog[] @relation("AuthAuditActor")
   ownerChecksRequested OwnerCheck[] @relation("OwnerCheckRequestedBy")
   ownerDocumentsVerified OwnerDocumentRecord[] @relation("OwnerDocumentVerifiedBy")
+  ownerConflictsResolved OwnerConflict[] @relation("OwnerConflictResolvedBy")
   activatedProvisionings AccountProvisioning[] @relation("ProvisioningOwner")
   routingMemberships CrmRoutingMember[]
   assignedLeads Lead[] @relation("LeadAssignee")
@@ -419,6 +421,7 @@ model PropertyOwner {
   profile                OwnerProfile?
   checks                OwnerCheck[]
   documentRecords       OwnerDocumentRecord[]
+  conflicts             OwnerConflict[]
 
   @@index([companyId, status])
   @@index([companyId, document])
@@ -487,6 +490,16 @@ model OwnerDocumentRecord {
   ownerId      String         @map("owner_id") @db.Char(36)
   storedFileId String         @unique @map("stored_file_id") @db.Char(36)
   documentType String         @map("document_type") @db.VarChar(60)
+  title        String?        @db.VarChar(240)
+  source       String?        @db.VarChar(80)
+  provider     String?        @db.VarChar(100)
+  issuedAt     DateTime?      @map("issued_at")
+  documentNumber String?      @map("document_number") @db.VarChar(120)
+  linkedDomain String?        @map("linked_domain") @db.VarChar(40)
+  provenance   String?        @db.VarChar(40)
+  confidence   String?        @db.VarChar(20)
+  contentHash  String?        @map("content_hash") @db.VarChar(128)
+  metadataJson Json?         @map("metadata_json")
   status       String         @default("PENDING") @db.VarChar(30)
   verified     Boolean        @default(false)
   verifiedBy   String?        @map("verified_by") @db.Char(36)
@@ -502,7 +515,35 @@ model OwnerDocumentRecord {
 
   @@index([companyId, ownerId, documentType])
   @@index([companyId, status, expiresAt])
+  @@index([companyId, ownerId, linkedDomain, status])
   @@map("owner_document_records")
+}
+
+model OwnerConflict {
+  id                 String        @id @default(uuid()) @db.Char(36)
+  companyId          String        @map("company_id") @db.Char(36)
+  ownerId            String        @map("owner_id") @db.Char(36)
+  domain             String        @db.VarChar(40)
+  field              String        @db.VarChar(100)
+  valuesJson         Json          @map("values_json")
+  sourcesJson        Json          @map("sources_json")
+  canonicalValueJson Json?         @map("canonical_value_json")
+  canonicalSource    String?       @map("canonical_source") @db.VarChar(80)
+  status             String        @default("OPEN") @db.VarChar(30)
+  detectedAt         DateTime      @default(now()) @map("detected_at")
+  resolvedAt         DateTime?     @map("resolved_at")
+  resolvedBy         String?       @map("resolved_by") @db.Char(36)
+  resolutionNote     String?       @map("resolution_note") @db.VarChar(1000)
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  company            Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner              PropertyOwner @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  resolver           AppUser?      @relation("OwnerConflictResolvedBy", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, ownerId, status])
+  @@index([companyId, ownerId, domain, field])
+  @@index([companyId, detectedAt])
+  @@map("owner_conflicts")
 }
 
 model Property {

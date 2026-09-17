@@ -904,6 +904,16 @@ export type OwnerDocumentSummary = {
   mime_type: string;
   created_at: string;
   property_id: string | null;
+  document_type?: string;
+  title?: string | null;
+  source?: string | null;
+  issued_at?: string | null;
+  expires_at?: string | null;
+  linked_domain?: string | null;
+  provenance?: string | null;
+  confidence?: string | null;
+  status?: string;
+  verified?: boolean;
 };
 
 function ownerDocumentCategory(mimeType: string): OwnerDocumentSummary["category"] {
@@ -915,12 +925,13 @@ function ownerDocumentCategory(mimeType: string): OwnerDocumentSummary["category
 function toOwnerDocumentDto(
   record: { id: string; originalFilename: string; mimeType: string; createdAt: Date; metadataJson: unknown },
   ownedPropertyIds: Set<string>,
-  _metadataRecord?: { documentType: string; status: string; verified: boolean; expiresAt: Date | null },
+  metadataRecord?: { documentType: string; title: string | null; source: string | null; provider: string | null; issuedAt: Date | null; status: string; verified: boolean; expiresAt: Date | null; linkedDomain: string | null; provenance: string | null; confidence: string | null },
+  includeMetadata = false,
 ): OwnerDocumentSummary {
   const metadata =
     record.metadataJson && typeof record.metadataJson === "object" ? (record.metadataJson as Record<string, unknown>) : null;
   const rawPropertyId = metadata && typeof metadata.property_id === "string" ? metadata.property_id : null;
-  return {
+  const base: OwnerDocumentSummary = {
     id: record.id,
     // originalFilename já é o nome que o próprio usuário/portal enviou —
     // nunca publicId/storage path (que nunca chegam nesta função).
@@ -930,6 +941,8 @@ function toOwnerDocumentDto(
     created_at: record.createdAt.toISOString(),
     property_id: rawPropertyId && ownedPropertyIds.has(rawPropertyId) ? rawPropertyId : null,
   };
+  if (!includeMetadata) return base;
+  return { ...base, document_type: metadataRecord?.documentType ?? "owner_document", title: metadataRecord?.title ?? null, source: metadataRecord?.source ?? null, issued_at: metadataRecord?.issuedAt?.toISOString() ?? null, expires_at: metadataRecord?.expiresAt?.toISOString() ?? null, linked_domain: metadataRecord?.linkedDomain ?? null, provenance: metadataRecord?.provenance ?? null, confidence: metadataRecord?.confidence ?? null, status: metadataRecord?.status ?? "PENDING", verified: metadataRecord?.verified ?? false };
 }
 
 /** Confirma que o proprietário existe e é desta empresa (404 tenant-safe se não). */
@@ -944,11 +957,11 @@ export async function listMysqlOwnerDocuments(companyId: string, ownerId: string
   const [records, properties, metadataRecords] = await Promise.all([
     findStoredFilesForEntity(companyId, "property_owner", ownerId, "owner_document"),
     prisma().property.findMany({ where: { companyId, ownerId }, select: { id: true } }),
-    ownerDocumentRecordModel?.findMany ? ownerDocumentRecordModel.findMany({ where: { companyId, ownerId }, select: { storedFileId: true, documentType: true, status: true, verified: true, expiresAt: true } }) : Promise.resolve([]),
+    ownerDocumentRecordModel?.findMany ? ownerDocumentRecordModel.findMany({ where: { companyId, ownerId }, select: { storedFileId: true, documentType: true, title: true, source: true, provider: true, issuedAt: true, status: true, verified: true, expiresAt: true, linkedDomain: true, provenance: true, confidence: true } }) : Promise.resolve([]),
   ]);
   const ownedPropertyIds = new Set(properties.map((property) => property.id));
   const metadataByFile = new Map(metadataRecords.map((record) => [record.storedFileId, record]));
-  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds, metadataByFile.get(record.id)));
+  return records.map((record) => toOwnerDocumentDto(record, ownedPropertyIds, metadataByFile.get(record.id), true));
 }
 
 /**

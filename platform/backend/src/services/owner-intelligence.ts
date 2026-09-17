@@ -613,13 +613,15 @@ export type OwnerContractData = {
   propertyRegime: string | null;
   spouseName: string | null;
   address: Record<string, unknown>;
+  conflicts: Array<Record<string, unknown>>;
+  requiresReview: boolean;
 };
 
 export type OwnerInspectionData = { name: string | null; cpf: string | null; contact: Record<string, unknown>; property: Record<string, unknown>; relationship: string | null };
-export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; professional: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: OwnerCreditData; documents: Array<Record<string, unknown>> };
+export type InsuranceApplicantData = { identity: Record<string, unknown>; address: Record<string, unknown>; professional: Record<string, unknown>; income: Record<string, unknown>; relationship: string | null; credit: OwnerCreditData; documents: Array<Record<string, unknown>>; conflicts: Array<Record<string, unknown>>; requiresReview: boolean };
 export type FinancingApplicantData = InsuranceApplicantData & { civil: Record<string, unknown>; patrimony: Record<string, unknown> };
 
-export function buildOwnerContractData(input: { owner: Record<string, unknown>; profile: Record<string, unknown> }): OwnerContractData {
+export function buildOwnerContractData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; conflicts?: Array<Record<string, unknown>> }): OwnerContractData {
   const identity = objectValue(input.profile.identity);
   const civil = normalizeOwnerCivil(objectValue(input.profile.identity));
   const address = objectValue(input.profile.address);
@@ -655,10 +657,12 @@ export function buildOwnerContractData(input: { owner: Record<string, unknown>; 
     propertyRegime: civil.propertyRegime.value,
     spouseName: civil.spouseName.value,
     address,
+    conflicts: input.conflicts ?? [],
+    requiresReview: (input.conflicts ?? []).length > 0,
   };
 }
 
-export function buildInsuranceApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null }): InsuranceApplicantData {
+export function buildInsuranceApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null; conflicts?: Array<Record<string, unknown>> }): InsuranceApplicantData {
   const contract = buildOwnerContractData(input);
   return {
     identity: objectValue(input.profile.identity),
@@ -668,10 +672,12 @@ export function buildInsuranceApplicantData(input: { owner: Record<string, unkno
     relationship: input.relationship ?? null,
     credit: normalizeOwnerCredit(objectValue(input.profile.credit)),
     documents: Array.isArray(input.profile.documents) ? input.profile.documents.filter((document): document is Record<string, unknown> => Boolean(document) && typeof document === "object" && !Array.isArray(document)) : [],
+    conflicts: contract.conflicts,
+    requiresReview: contract.requiresReview,
   };
 }
 
-export function buildFinancingApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null }): FinancingApplicantData {
+export function buildFinancingApplicantData(input: { owner: Record<string, unknown>; profile: Record<string, unknown>; relationship?: string | null; conflicts?: Array<Record<string, unknown>> }): FinancingApplicantData {
   const applicant = buildInsuranceApplicantData(input);
   const identity = objectValue(input.profile.identity);
   return {
