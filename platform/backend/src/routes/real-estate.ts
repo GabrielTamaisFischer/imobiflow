@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import {
@@ -69,7 +70,7 @@ import {
 import { writeAuthAudit } from "../services/mysql-auth.js";
 import type { RequestWithAccess } from "../types/access.js";
 import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
-import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
+import { OWNER_INTELLIGENCE_CAPABILITIES, buildFinancingApplicantData, buildInsuranceApplicantData, buildOwnerContractData, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
 import { detectOwnerConflict, getOwner360Data, resolveOwnerConflict } from "../services/owner-360.js";
 
 export const realEstateRouter = Router();
@@ -381,6 +382,65 @@ realEstateRouter.patch("/owners/:id/conflicts/:conflictId", requirePermission("o
     const input = z.object({ selected_value: z.unknown(), source: z.string().trim().min(1).max(80), reason: z.string().trim().max(1000).optional() }).parse(req.body);
     const conflict = await resolveOwnerConflict({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, conflictId: String(req.params.conflictId), selectedValue: input.selected_value, source: input.source, reason: input.reason });
     res.json({ conflict: { id: conflict.id, status: conflict.status, canonical_value: conflict.canonicalValueJson, canonical_source: conflict.canonicalSource, resolved_at: conflict.resolvedAt?.toISOString() ?? null } });
+  } catch (error) { next(error); }
+});
+
+// Temporary staging-only verification harness for Fase F. Remove after the
+// authenticated runtime gate; it is intentionally protected by the same auth,
+// company and permission middleware as the canonical owner mutations.
+realEstateRouter.get("/owners/:id/fase-f-harness", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    if (!req.hostname.includes("imobiflow-staging.vercel.app") && !req.hostname.includes("localhost")) throw Object.assign(new Error("Harness indisponível."), { statusCode: 404, code: "NOT_FOUND" });
+    const db = getPrisma() as any;
+    const companyId = req.access!.company.id;
+    const ownerId = String(req.params.id);
+    const actorUserId = req.access!.appUser.id;
+    const action = String(req.query.action ?? "prepare");
+    const marker = "Fase F runtime QA synthetic";
+    const owner = await db.propertyOwner.findFirst({ where: { id: ownerId, companyId }, select: { id: true, name: true, document: true } });
+    if (!owner) throw Object.assign(new Error("Proprietário não encontrado."), { statusCode: 404, code: "OWNER_NOT_FOUND" });
+
+    if (action === "prepare") {
+      const detection = await detectOwnerConflict({ companyId, ownerId, actorUserId, domain: "civil", field: "marital_status", candidates: [
+        { value: "SOLTEIRO", source: "declared", confidence: "high" },
+        { value: "CASADO", source: "provider", confidence: "medium", provider: "TEST_SYNTHETIC_PROVIDER" },
+      ] });
+      const conflict = await db.ownerConflict.findFirst({ where: { companyId, ownerId, domain: "civil", field: "marital_status" }, orderBy: { detectedAt: "desc" } });
+      let document = await db.ownerDocumentRecord.findFirst({ where: { companyId, ownerId, title: marker }, orderBy: { createdAt: "desc" } });
+      let storedFileId = document?.storedFileId ?? null;
+      if (!document) {
+        storedFileId = randomUUID();
+        await db.storedFile.create({ data: { id: storedFileId, companyId, entityType: "property_owner", entityId: ownerId, provider: "test", publicId: `fase-f-runtime/${storedFileId}`, resourceType: "raw", secureUrl: "https://example.invalid/fase-f-runtime", originalFilename: "fase-f-runtime-qa.pdf", mimeType: "application/pdf", sizeBytes: 0, uploadedBy: actorUserId, isTestData: true, testBatchId: "fase-f-runtime", purpose: "owner_document", metadataJson: { marker } } });
+        document = await db.ownerDocumentRecord.create({ data: { id: randomUUID(), companyId, ownerId, storedFileId, documentType: "PROOF_OF_ADDRESS", title: marker, source: "TEST_SYNTHETIC_SOURCE", provider: "TEST_SYNTHETIC_PROVIDER", issuedAt: new Date("2026-09-01T00:00:00.000Z"), documentNumber: "QA-FASE-F-001", linkedDomain: "address", provenance: "document", confidence: "high", contentHash: "qa-fase-f-hash", metadataJson: { marker, synthetic: true }, status: "VERIFIED", verified: true, verifiedBy: actorUserId, verifiedAt: new Date(), expiresAt: new Date("2026-10-01T00:00:00.000Z"), notes: marker } });
+      }
+      const profile = await db.ownerProfile.findFirst({ where: { companyId, ownerId } });
+      const profileInput = { identity: profile?.identityJson ?? {}, address: profile?.addressJson ?? {}, professional: profile?.professionalJson ?? {}, financial: profile?.financialJson ?? {}, credit: profile?.creditJson ?? {}, documents: [{ document_type: document.documentType, title: document.title, provenance: document.provenance }], conflicts: conflict ? [{ id: conflict.id, domain: conflict.domain, field: conflict.field, status: conflict.status }] : [] };
+      const dtoInput = { owner: { name: owner.name, document: owner.document }, profile: profileInput, conflicts: profileInput.conflicts };
+      return res.json({ action, synthetic: true, conflict: { detected: Boolean(detection.conflict), id: conflict?.id ?? null, domain: conflict?.domain ?? null, field: conflict?.field ?? null, values: conflict?.valuesJson ?? null, sources: conflict?.sourcesJson ?? null, canonical_value: conflict?.canonicalValueJson ?? null, canonical_source: conflict?.canonicalSource ?? null, status: conflict?.status ?? null }, document: { id: document.id, stored_file_id: document.storedFileId, document_type: document.documentType, title: document.title, source: document.source, provider: document.provider, issued_at: document.issuedAt?.toISOString() ?? null, expires_at: document.expiresAt?.toISOString() ?? null, linked_domain: document.linkedDomain, provenance: document.provenance, confidence: document.confidence, content_hash: document.contentHash, status: document.status }, dtos: { contract: buildOwnerContractData(dtoInput), insurance: buildInsuranceApplicantData(dtoInput), financing: buildFinancingApplicantData(dtoInput) }, ids: { conflict_id: conflict?.id ?? null, document_id: document.id, stored_file_id: storedFileId } });
+    }
+
+    if (action === "resolve") {
+      const conflictId = String(req.query.conflict_id ?? "");
+      const documentId = String(req.query.document_id ?? "");
+      if (!conflictId || !documentId) throw Object.assign(new Error("IDs de QA ausentes."), { statusCode: 400, code: "QA_IDS_REQUIRED" });
+      const resolved = await resolveOwnerConflict({ companyId, ownerId, actorUserId, conflictId, selectedValue: "CASADO", source: "manual", reason: "Resolução sintética Fase F." });
+      const updated = await db.ownerDocumentRecord.updateMany({ where: { id: documentId, companyId, ownerId }, data: { title: marker, source: "TEST_SYNTHETIC_SOURCE_UPDATED", provider: "TEST_SYNTHETIC_PROVIDER", issuedAt: new Date("2026-09-01T00:00:00.000Z"), documentNumber: "QA-FASE-F-001", linkedDomain: "address", provenance: "document", confidence: "high", contentHash: "qa-fase-f-hash-updated", metadataJson: { marker, synthetic: true, updated: true }, status: "VERIFIED", verified: true, verifiedBy: actorUserId, verifiedAt: new Date(), expiresAt: new Date("2026-10-01T00:00:00.000Z") } });
+      if (!updated.count) throw Object.assign(new Error("Documento QA não encontrado."), { statusCode: 404, code: "QA_DOCUMENT_NOT_FOUND" });
+      const conflict = await db.ownerConflict.findUnique({ where: { id: conflictId } });
+      const document = await db.ownerDocumentRecord.findUnique({ where: { id: documentId } });
+      return res.json({ action, synthetic: true, conflict: { id: conflict?.id ?? null, status: conflict?.status ?? null, canonical_value: conflict?.canonicalValueJson ?? null, canonical_source: conflict?.canonicalSource ?? null, resolved_by: conflict?.resolvedBy ?? null, resolved_at: conflict?.resolvedAt?.toISOString() ?? null }, document: { id: document?.id ?? null, document_type: document?.documentType ?? null, title: document?.title ?? null, source: document?.source ?? null, provider: document?.provider ?? null, issued_at: document?.issuedAt?.toISOString() ?? null, expires_at: document?.expiresAt?.toISOString() ?? null, linked_domain: document?.linkedDomain ?? null, provenance: document?.provenance ?? null, confidence: document?.confidence ?? null, content_hash: document?.contentHash ?? null, status: document?.status ?? null }, owner360: await getOwner360Data({ companyId, ownerId, actorUserId, permissions: req.access!.appUser.permissions }) });
+    }
+
+    if (action === "cleanup") {
+      const conflictId = String(req.query.conflict_id ?? "");
+      const documentId = String(req.query.document_id ?? "");
+      const document = documentId ? await db.ownerDocumentRecord.findFirst({ where: { id: documentId, companyId, ownerId, title: marker }, select: { storedFileId: true } }) : null;
+      const conflicts = conflictId ? await db.ownerConflict.deleteMany({ where: { id: conflictId, companyId, ownerId } }) : { count: 0 };
+      const documents = documentId ? await db.ownerDocumentRecord.deleteMany({ where: { id: documentId, companyId, ownerId, title: marker } }) : { count: 0 };
+      const files = document?.storedFileId ? await db.storedFile.deleteMany({ where: { id: document.storedFileId, companyId, entityType: "property_owner", entityId: ownerId, purpose: "owner_document", isTestData: true, testBatchId: "fase-f-runtime" } }) : { count: 0 };
+      return res.json({ action, synthetic: true, removed: { conflicts: conflicts.count, documents: documents.count, stored_files: files.count }, audit_retained: true });
+    }
+    throw Object.assign(new Error("Ação de harness inválida."), { statusCode: 400, code: "QA_ACTION_INVALID" });
   } catch (error) { next(error); }
 });
 
