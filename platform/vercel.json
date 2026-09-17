@@ -7,10 +7,6 @@
   },
   "rewrites": [
     {
-      "source": "/app/qa/fase-f-final",
-      "destination": "/api"
-    },
-    {
       "source": "/api/:path*",
       "destination": "/api"
     }
