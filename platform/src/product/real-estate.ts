@@ -459,6 +459,28 @@ export async function getOwnerDashboard(ownerId: string) {
   });
 }
 
+export type OwnerDownstreamReadiness = {
+  ready: boolean;
+  missing_fields: string[];
+  conflicting_fields: string[];
+  expired_documents: string[];
+  pending_documents: string[];
+  requires_review: boolean;
+};
+
+export type OwnerDownstreamData = {
+  owner_id: string;
+  contract: { party: { owner_id: string; full_name: string | null; document: string | null; rg: string | null; nationality: string | null; birth_date: string | null; birthplace: string | null; marital_status: string | null; profession: string | null; current_address: Record<string, unknown>; email: string | null; phone: string | null; spouse_name: string | null; source: "owner360"; provenance: Record<string, string>; readiness: OwnerDownstreamReadiness }; readiness: OwnerDownstreamReadiness };
+  inspection: { readiness: OwnerDownstreamReadiness };
+  insurance: { readiness: OwnerDownstreamReadiness; applicant: { credit: { status: string; available: boolean } | null } };
+  financing: { readiness: OwnerDownstreamReadiness; applicant: { credit: { status: string; available: boolean } | null } };
+  proposal: { readiness: OwnerDownstreamReadiness };
+};
+
+export async function getOwnerDownstream(ownerId: string) {
+  return apiRequest<{ downstream: OwnerDownstreamData }>(`/real-estate/owners/${ownerId}/downstream`, { token: getStoredToken() ?? undefined });
+}
+
 export async function getOwnerProfile(ownerId: string) {
   if (isPreviewRealEstate()) {
     return { profile: { id: `preview-${ownerId}`, company_id: "preview", owner_id: ownerId, identity: {}, contact: {}, address: {}, professional: {}, financial: null, credit: null, legal: null, fiscal: null, provenance: {}, confidence: {}, treatment_consent: {}, updated_at: new Date().toISOString() } satisfies OwnerProfile };

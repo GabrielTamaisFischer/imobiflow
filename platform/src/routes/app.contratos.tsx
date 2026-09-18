@@ -26,7 +26,7 @@ import {
 } from "@/product/contracts";
 import { getModuleByKey } from "@/product/app-modules";
 import { createNotificationEvent, type NotificationChannel } from "@/product/notifications";
-import { listAllProperties, type Property, type PropertySummary } from "@/product/real-estate";
+import { getOwnerDownstream, listAllProperties, listOwners, type Property, type PropertyOwner, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/contratos")({
@@ -56,6 +56,7 @@ function ContractsPage() {
   const module = getModuleByKey("contracts");
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [properties, setProperties] = useState<PropertySummary[]>([]);
+  const [owners, setOwners] = useState<PropertyOwner[]>([]);
   const [isContractsLoading, setIsContractsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,12 +69,14 @@ function ContractsPage() {
     setError(null);
 
     try {
-      const [contractsResponse, propertiesResponse] = await Promise.all([
+      const [contractsResponse, propertiesResponse, ownersResponse] = await Promise.all([
         listContracts(),
         listAllProperties(),
+        listOwners(),
       ]);
       setContracts(contractsResponse.contracts);
       setProperties(propertiesResponse.properties);
+      setOwners(ownersResponse.owners);
     } catch (contractsError) {
       setError(
         contractsError instanceof Error
@@ -121,6 +124,7 @@ function ContractsPage() {
       {showForm ? (
         <ContractForm
           properties={properties}
+          owners={owners}
           onCancel={() => setShowForm(false)}
           onCreated={(contract) => {
             setContracts((current) => [contract, ...current]);
@@ -170,16 +174,19 @@ function ContractsPage() {
 
 function ContractForm({
   properties,
+  owners,
   onCancel,
   onCreated,
 }: {
   properties: PropertySummary[];
+  owners: PropertyOwner[];
   onCancel: () => void;
   onCreated: (contract: Contract) => void;
 }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [parties, setParties] = useState<Array<{ party_type: ContractParty["party_type"]; name: string; document: string; email: string; phone: string }>>([]);
+  const [parties, setParties] = useState<Array<{ party_type: ContractParty["party_type"]; owner_id?: string; name: string; document: string; email: string; phone: string; provenance?: string; readiness?: string }>>([]);
+  const [prefillBusy, setPrefillBusy] = useState<number | null>(null);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,7 +207,7 @@ function ContractForm({
       monthly_amount_cents: parseMoneyToCents(String(form.get("monthly_amount") ?? "")),
       deposit_cents: parseMoneyToCents(String(form.get("deposit") ?? "")),
       notes: String(form.get("notes") ?? ""),
-      parties: parties.filter((party) => party.name.trim()).map((party) => ({ ...party, signature_required: true })),
+      parties: parties.filter((party) => party.name.trim()).map(({ owner_id: _ownerId, provenance: _provenance, readiness: _readiness, ...party }) => ({ ...party, signature_required: true })),
     };
 
     try {
@@ -274,12 +281,14 @@ function ContractForm({
 
       <div className="mt-4 rounded-md border border-border bg-background p-3">
         <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold">Partes do contrato</p><p className="text-xs text-muted-foreground">Adicione proprietários, compradores, inquilinos, fiadores ou outras partes.</p></div><button type="button" onClick={() => setParties((current) => [...current, { party_type: "tenant", name: "", document: "", email: "", phone: "" }])} className="h-9 rounded-md border border-border px-3 text-xs font-semibold">Adicionar parte</button></div>
-        <div className="mt-3 space-y-3">{parties.map((party, index) => <div key={index} className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-5">
+        <div className="mt-3 space-y-3">{parties.map((party, index) => <div key={index} className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-6">
           <select aria-label={`Tipo da parte ${index + 1}`} value={party.party_type} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, party_type: event.target.value as ContractParty["party_type"] } : item))} className="h-10 rounded-md border border-input bg-background px-2 text-sm"><option value="owner">Proprietário</option><option value="buyer">Comprador</option><option value="tenant">Inquilino</option><option value="seller">Vendedor</option><option value="guarantor">Fiador</option><option value="other">Outra parte</option></select>
+          <select aria-label={`Cadastro 360 da parte ${index + 1}`} value={party.owner_id ?? ""} disabled={prefillBusy === index} onChange={(event) => { const ownerId = event.target.value; if (!ownerId) return; setPrefillBusy(index); void getOwnerDownstream(ownerId).then(({ downstream }) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, owner_id: ownerId, name: downstream.contract.party.full_name ?? "", document: downstream.contract.party.document ?? "", email: downstream.contract.party.email ?? "", phone: downstream.contract.party.phone ?? "", provenance: "Cadastro Owner 360", readiness: downstream.contract.readiness.ready ? "Pronto" : `Pendente: ${[...downstream.contract.readiness.missing_fields, ...downstream.contract.readiness.conflicting_fields, ...downstream.contract.readiness.expired_documents].join(", ")}` } : item))).catch(() => undefined).finally(() => setPrefillBusy(null)); }} className="h-10 rounded-md border border-input bg-background px-2 text-sm"><option value="">Prefill Owner 360</option>{owners.map((owner) => <option key={owner.id} value={owner.id}>{owner.name}</option>)}</select>
           <input aria-label={`Nome da parte ${index + 1}`} value={party.name} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} placeholder="Nome" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
           <input aria-label={`Documento da parte ${index + 1}`} value={party.document} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, document: event.target.value } : item))} placeholder="CPF/CNPJ" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
           <input aria-label={`E-mail da parte ${index + 1}`} value={party.email} onChange={(event) => setParties((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, email: event.target.value } : item))} placeholder="E-mail" type="email" className="h-10 rounded-md border border-input bg-background px-3 text-sm" />
           <button type="button" onClick={() => setParties((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="h-10 rounded-md border border-destructive/40 px-3 text-sm text-destructive">Remover</button>
+          {party.provenance ? <p className="col-span-full text-xs text-muted-foreground">{party.provenance} · {party.readiness}</p> : null}
         </div>)}</div>
       </div>
 

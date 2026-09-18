@@ -16,6 +16,7 @@ import {
   updateOwnerProfile,
   listOwnerChecks,
   getOwner360,
+  getOwnerDownstream,
   resolveOwnerConflict,
   queryOwnerIntelligence,
   type OwnerCheck,
@@ -55,6 +56,7 @@ function OwnerDashboardPage() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [intelligenceChecks, setIntelligenceChecks] = useState<OwnerCheck[]>([]);
   const [owner360, setOwner360] = useState<Owner360Data | null>(null);
+  const [downstream, setDownstream] = useState<Awaited<ReturnType<typeof getOwnerDownstream>>["downstream"] | null>(null);
   const [intelligenceBusy, setIntelligenceBusy] = useState(false);
   const [intelligenceMessage, setIntelligenceMessage] = useState<string | null>(null);
   const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
@@ -84,6 +86,7 @@ function OwnerDashboardPage() {
       setUpdateRequests(nextRequests.requests);
       setProfile(nextProfile.profile);
       try { setOwner360((await getOwner360(ownerId)).owner360); } catch { setOwner360(null); }
+      try { setDownstream((await getOwnerDownstream(ownerId)).downstream); } catch { setDownstream(null); }
       try {
         const nextChecks = await listOwnerChecks(ownerId);
         setIntelligenceChecks(nextChecks.checks);
@@ -187,6 +190,7 @@ function OwnerDashboardPage() {
       <header className="rounded-lg border border-border bg-card p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Ficha completa do proprietário</p><h1 className="mt-1 text-2xl font-semibold">{dashboard.owner.name}</h1><p className="mt-1 text-sm text-muted-foreground">{dashboard.owner.owner_type === "company" ? "Pessoa jurídica" : "Pessoa física"} · {dashboard.owner.status}</p></div><div className="flex flex-wrap gap-2">{canManageOwners ? <><button type="button" onClick={() => void togglePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold">{dashboard.owner.portal_enabled ? <ShieldOff className="h-3.5 w-3.5" /> : <ShieldCheck className="h-3.5 w-3.5" />}{dashboard.owner.portal_enabled ? "Desativar portal" : "Ativar portal"}</button><button type="button" onClick={() => void regeneratePortal()} disabled={portalBusy} className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-xs font-semibold"><RefreshCw className="h-3.5 w-3.5" />Regenerar link</button><button type="button" onClick={() => void archive()} className="inline-flex h-9 items-center gap-2 rounded-md border border-destructive/30 px-3 text-xs font-semibold text-destructive">Arquivar</button></> : null}</div></div><div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4"><Info label="Documento" value={dashboard.owner.document} /><Info label="Telefone" value={dashboard.owner.phone} /><Info label="WhatsApp" value={dashboard.owner.whatsapp} /><Info label="E-mail" value={dashboard.owner.email} /></div><div className="mt-4 flex flex-wrap gap-3 text-sm">{dashboard.owner.phone ? <a href={`tel:${dashboard.owner.phone.replace(/\D/g, "")}`} className="inline-flex items-center gap-1 text-primary"><Phone className="h-4 w-4" />Ligar</a> : null}{dashboard.owner.whatsapp ? <a href={`https://wa.me/${dashboard.owner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary"><MessageCircle className="h-4 w-4" />WhatsApp</a> : null}{dashboard.owner.email ? <a href={`mailto:${dashboard.owner.email}`} className="inline-flex items-center gap-1 text-primary"><Mail className="h-4 w-4" />Enviar e-mail</a> : null}{dashboard.owner.portal_token && dashboard.owner.portal_enabled ? <button type="button" onClick={() => void copyPortalLink()} className="text-primary">{copied ? "Link copiado" : "Copiar link do portal"}</button> : null}</div></header>
       {profile ? <OwnerProfilePanel profile={profile} activeTab={profileTab} onTabChange={setProfileTab} canManage={canManageOwners} canViewCredit={canView(session?.access.appUser, "owners.credit.view")} canViewLegal={canView(session?.access.appUser, "owners.legal.view")} canViewFiscal={canView(session?.access.appUser, "owners.fiscal.view")} busy={profileBusy} onSave={saveProfile} /> : null}
       {owner360 ? <Owner360Panel owner360={owner360} canManage={canManageOwners} onResolve={async (conflictId, selectedValue, source) => { await resolveOwnerConflict(ownerId, conflictId, { selected_value: selectedValue, source }); await load(); }} /> : null}
+      {downstream ? <OwnerAutomationPanel downstream={downstream} /> : null}
       {profile ? <OwnerIntelligencePanel profile={profile} checks={intelligenceChecks} busy={intelligenceBusy} message={intelligenceMessage} error={intelligenceError} onQuery={() => void requestIntelligence()} onOpenConsent={() => setProfileTab("treatment_consent")} /> : null}
       <section className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Metric label="Imóveis" value={dashboard.counts.total} /><Metric label="Ativos" value={dashboard.counts.active} /><Metric label="Publicados" value={dashboard.counts.published} /><Metric label="Arquivados" value={dashboard.counts.archived} /><Metric label="Responsáveis" value={dashboard.responsible_users.length} /></section>
       <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -262,6 +266,18 @@ function OwnerDashboardPage() {
       ) : null}
     </>}
   </ModulePage>;
+}
+
+function OwnerAutomationPanel({ downstream }: { downstream: Awaited<ReturnType<typeof getOwnerDownstream>>["downstream"] }) {
+  const cards = [
+    ["Contrato", downstream.contract.readiness],
+    ["Vistoria", downstream.inspection.readiness],
+    ["Seguro", downstream.insurance.readiness],
+    ["Financiamento", downstream.financing.readiness],
+    ["Proposta", downstream.proposal.readiness],
+  ] as const;
+  const label = (readiness: (typeof cards)[number][1]) => readiness.ready ? "Pronto" : readiness.conflicting_fields.length ? "Conflitos pendentes" : readiness.expired_documents.length ? "Documentos vencidos" : "Dados incompletos";
+  return <section className="mt-4 rounded-lg border border-border bg-card p-4" aria-label="Automações Owner 360"><div><p className="text-xs font-semibold uppercase text-muted-foreground">Automações</p><h2 className="text-lg font-semibold">Dados reutilizáveis nos módulos</h2><p className="mt-1 text-xs text-muted-foreground">Readiness factual; não representa aprovação comercial ou jurídica.</p></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{cards.map(([title, readiness]) => <article key={title} className="rounded-md border border-border p-3"><p className="text-sm font-semibold">{title}</p><p className={`mt-2 text-xs font-semibold ${readiness.ready ? "text-emerald-700" : "text-amber-700"}`}>{label(readiness)}</p>{readiness.missing_fields.length ? <p className="mt-1 text-xs text-muted-foreground">Faltantes: {readiness.missing_fields.join(", ")}</p> : null}{readiness.conflicting_fields.length ? <p className="mt-1 text-xs text-amber-700">Conflitos: {readiness.conflicting_fields.join(", ")}</p> : null}{readiness.expired_documents.length ? <p className="mt-1 text-xs text-destructive">Vencidos: {readiness.expired_documents.join(", ")}</p> : null}</article>)}</div></section>;
 }
 
 function Owner360Panel({ owner360, canManage, onResolve }: { owner360: Owner360Data; canManage: boolean; onResolve: (conflictId: string, selectedValue: unknown, source: string) => Promise<void> }) {

@@ -71,6 +71,7 @@ import type { RequestWithAccess } from "../types/access.js";
 import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
 import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
 import { detectOwnerConflict, getOwner360Data, resolveOwnerConflict } from "../services/owner-360.js";
+import { getOwnerDownstreamData } from "../services/owner-downstream.js";
 
 export const realEstateRouter = Router();
 
@@ -360,6 +361,16 @@ realEstateRouter.get("/owners/:id/360", requirePermission("owners.view"), async 
   try {
     const data = await getOwner360Data({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions });
     res.json({ owner360: data });
+  } catch (error) { next(error); }
+});
+
+// Fase G: canonical, permission-aware read model for downstream automations.
+// It is intentionally read-only; contract/inspection persistence remains in
+// the canonical module and receives only the DTO returned here.
+realEstateRouter.get("/owners/:id/downstream", requirePermission("owners.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const downstream = await getOwnerDownstreamData({ companyId: req.access!.company.id, ownerId: String(req.params.id), actorUserId: req.access!.appUser.id, permissions: req.access!.appUser.permissions, resourceFilter: buildPropertyScopeFilter(req.access!, "properties.view", "VIEW") });
+    res.json({ downstream });
   } catch (error) { next(error); }
 });
 
