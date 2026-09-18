@@ -50,6 +50,7 @@ import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquil
 import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
 import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
+import { Route as AppQaFaseFRouteImport } from './routes/app.qa.fase-f'
 import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
 import { Route as AppImoveisNovoRouteImport } from './routes/app.imoveis_.novo'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
@@ -265,6 +266,11 @@ const AppSiteBuilderRoute = AppSiteBuilderRouteImport.update({
   path: '/builder',
   getParentRoute: () => AppSiteRoute,
 } as any)
+const AppQaFaseFRoute = AppQaFaseFRouteImport.update({
+  id: '/qa/fase-f',
+  path: '/qa/fase-f',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
   id: '/$ownerId',
   path: '/$ownerId',
@@ -350,6 +356,7 @@ export interface FileRoutesByFullPath {
   '/app/': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
+  '/app/qa/fase-f': typeof AppQaFaseFRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -399,6 +406,7 @@ export interface FileRoutesByTo {
   '/app': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
+  '/app/qa/fase-f': typeof AppQaFaseFRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -451,6 +459,7 @@ export interface FileRoutesById {
   '/app/': typeof AppIndexRoute
   '/app/imoveis_/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
+  '/app/qa/fase-f': typeof AppQaFaseFRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -504,6 +513,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
+    | '/app/qa/fase-f'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -553,6 +563,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
+    | '/app/qa/fase-f'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -604,6 +615,7 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/imoveis_/novo'
     | '/app/proprietarios/$ownerId'
+    | '/app/qa/fase-f'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -931,6 +943,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteBuilderRouteImport
       parentRoute: typeof AppSiteRoute
     }
+    '/app/qa/fase-f': {
+      id: '/app/qa/fase-f'
+      path: '/qa/fase-f'
+      fullPath: '/app/qa/fase-f'
+      preLoaderRoute: typeof AppQaFaseFRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/proprietarios/$ownerId': {
       id: '/app/proprietarios/$ownerId'
       path: '/$ownerId'
@@ -1089,6 +1108,7 @@ interface AppRouteChildren {
   AppVistoriasRoute: typeof AppVistoriasRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
   AppImoveisNovoRoute: typeof AppImoveisNovoRoute
+  AppQaFaseFRoute: typeof AppQaFaseFRoute
   AppImoveisPropertyIdEditarRoute: typeof AppImoveisPropertyIdEditarRoute
 }
 
@@ -1111,6 +1131,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppVistoriasRoute: AppVistoriasRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
   AppImoveisNovoRoute: AppImoveisNovoRoute,
+  AppQaFaseFRoute: AppQaFaseFRoute,
   AppImoveisPropertyIdEditarRoute: AppImoveisPropertyIdEditarRoute,
 }
 
