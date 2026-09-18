@@ -9,10 +9,6 @@
     {
       "source": "/api/:path*",
       "destination": "/api"
-    },
-    {
-      "source": "/internal-qa/:path*",
-      "destination": "/api"
     }
   ]
 }
