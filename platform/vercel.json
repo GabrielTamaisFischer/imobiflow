@@ -12,7 +12,7 @@
     },
     {
       "source": "/internal-qa/:path*",
-      "destination": "/api/internal-qa/:path*"
+      "destination": "/api"
     }
   ]
 }
