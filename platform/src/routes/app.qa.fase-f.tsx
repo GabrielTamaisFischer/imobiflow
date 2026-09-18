@@ -1,10 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { ModulePage } from "@/components/app/module-page";
-import { getModuleByKey } from "@/product/app-modules";
 import { apiRequest } from "@/product/api";
 import { getStoredToken } from "@/product/auth";
-import { useSessionGuard } from "@/product/use-session-guard";
 
 type TransportResult = { received: boolean; authenticated: boolean; authorized: boolean };
 type PhaseFResult = Record<string, unknown> & { transport_ok?: boolean; already_executed?: boolean; five_xx_count?: number };
@@ -16,7 +13,6 @@ function BridgeResult({ result }: { result: Record<string, unknown> }) {
 }
 
 function PhaseFBridgePage() {
-  const { session, isLoading } = useSessionGuard();
   const [busy, setBusy] = useState(false);
   const [transport, setTransport] = useState<TransportResult | null>(null);
   const [result, setResult] = useState<PhaseFResult | null>(null);
@@ -39,10 +35,7 @@ function PhaseFBridgePage() {
     } finally { setBusy(false); }
   }
 
-  if (isLoading) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Validando acesso...</main>;
-  if (!session) return <main className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Sessão necessária.</main>;
-  return <ModulePage session={session} module={getModuleByKey("owners")}>
-    <section className="mx-auto max-w-3xl space-y-4 rounded-lg border border-border bg-card p-6">
+  return <main className="min-h-screen bg-background p-6"><section className="mx-auto max-w-3xl space-y-4 rounded-lg border border-border bg-card p-6">
       <p className="text-xs font-semibold uppercase text-muted-foreground">QA staging-only</p>
       <h1 className="text-2xl font-semibold">Fase F — bridge autenticado</h1>
       <p className="text-sm text-muted-foreground">Usa o cliente autenticado oficial e exibe somente indicadores sanitizados.</p>
@@ -50,6 +43,5 @@ function PhaseFBridgePage() {
       {transport ? <BridgeResult result={transport} /> : null}
       {error ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p> : null}
       {result ? <BridgeResult result={result} /> : null}
-    </section>
-  </ModulePage>;
+    </section></main>;
 }
