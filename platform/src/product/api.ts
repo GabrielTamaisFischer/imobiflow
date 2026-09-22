@@ -49,8 +49,7 @@ export async function apiRequest<T>(
   let response: Response;
 
   try {
-    const requestUrl = /^https?:\/\//i.test(path) ? path : `${API_URL}${path}`;
-    response = await fetch(requestUrl, {
+    response = await fetch(`${API_URL}${path}`, {
       ...options,
       headers,
     });
