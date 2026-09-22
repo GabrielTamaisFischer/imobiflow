@@ -66,12 +66,13 @@ async function findSyntheticOwner(db: any, companyId: string, foreign = false) {
 }
 
 async function runDownstream(req: RequestWithAccess, owner: { id: string; companyId: string }) {
+  const isBroker = String(req.access!.appUser.role).toUpperCase() === "BROKER";
   return getOwnerDownstreamData({
     companyId: req.access!.company.id,
     ownerId: owner.id,
     actorUserId: req.access!.appUser.id,
     permissions: req.access!.appUser.permissions,
-    resourceFilter: buildPropertyScopeFilter(req.access!, "properties.view", "VIEW"),
+    resourceFilter: isBroker ? buildPropertyScopeFilter(req.access!, "properties.view", "VIEW") : undefined,
   });
 }
 
