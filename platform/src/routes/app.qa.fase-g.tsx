@@ -17,7 +17,7 @@ function PhaseGVerifierPage() {
     setError(null);
     setResult(null);
     const token = getStoredToken() ?? undefined;
-    const bridge = `${window.location.origin}/api/internal-qa`;
+    const bridge = `${window.location.origin}/internal-qa`;
     try {
       const smoke = await apiRequest<Result>(`${bridge}/fase-g-auth-smoke`, { token });
       if (!smoke.authenticated || !smoke.authorized) throw new Error("Transporte autenticado não confirmado.");
