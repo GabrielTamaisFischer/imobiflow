@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskOwnerDocument, mergeProfileGroup, ownerEnrichmentProvider, ownerProfileDefaults } from "../src/services/owner-profile.js";
+import { maskOwnerDocument, mergeProfileGroup, ownerEnrichmentProvider, ownerProfileDefaults, reconcileProviderIdentity } from "../src/services/owner-profile.js";
 
 describe("owner profile/enrichment foundation", () => {
   it("creates all canonical profile groups empty", () => {
@@ -19,5 +19,12 @@ describe("owner profile/enrichment foundation", () => {
   it("uses the safe NOT_CONFIGURED provider without external calls", async () => {
     expect(ownerEnrichmentProvider.name).toBe("NOT_CONFIGURED");
     await expect(ownerEnrichmentProvider.run({ ownerId: "qa", document: null, sections: ["identity"] })).resolves.toMatchObject({ status: "NOT_CONFIGURED" });
+  });
+
+  it("reconciles provider identity additively and surfaces conflicting fields", () => {
+    const result = reconcileProviderIdentity({ full_name: "Nome canônico", birth_date: "1980-01-01" }, { full_name: "Nome divergente", birth_date: "1980-01-01", parentage: ["Mãe QA"] });
+    expect(result.accepted).toEqual(["birth_date", "parentage"]);
+    expect(result.conflicts).toEqual([{ field: "full_name", current: "Nome canônico", incoming: "Nome divergente" }]);
+    expect(result.merged).toEqual({ full_name: "Nome canônico", birth_date: "1980-01-01", parentage: ["Mãe QA"] });
   });
 });

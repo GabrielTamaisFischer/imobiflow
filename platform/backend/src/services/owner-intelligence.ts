@@ -1,3 +1,5 @@
+import { createBigDataCorpProvider } from "./bigdatacorp-provider.js";
+
 /**
  * Owner Intelligence 360 foundation.
  *
@@ -223,12 +225,13 @@ export type OwnerFiscalData = {
 };
 
 export type OwnerIntelligenceProviderResult = {
-  status: OwnerIntelligenceStatus;
+  status: OwnerIntelligenceStatus | OwnerProviderQueryStatus;
   provider: string;
   consultedAt: string;
   sections: OwnerIntelligenceCapability[];
   values: Record<string, unknown>;
   warnings: string[];
+  protocol?: string | null;
 };
 
 export type OwnerProviderSubjectType = "PERSON" | "COMPANY";
@@ -406,7 +409,7 @@ function createNotConfiguredProvider(input: {
 }
 
 export const ownerProviderAdapters: readonly OwnerProviderAdapter[] = [
-  createNotConfiguredProvider({ id: "bigdatacorp", name: "BIGDATACORP", type: "COMMERCIAL", capabilities: ["IDENTITY", "ADDRESS", "CIVIL", "EMPLOYMENT", "PROFESSIONAL", "INCOME", "CREDIT", "LEGAL", "FISCAL", "COMPANY", "CORPORATE_RELATIONS", "DOCUMENT_VALIDATION"], priorities: ["PRIMARY"], pricingModel: "pay_per_use" }),
+  createBigDataCorpProvider(),
   createNotConfiguredProvider({ id: "receita_open_data", name: "RECEITA_OPEN_DATA", type: "OFFICIAL_DATASET", capabilities: ["COMPANY", "FISCAL", "CORPORATE_RELATIONS"], priorities: ["OFFICIAL", "SECONDARY"], pricingModel: "free" }),
   createNotConfiguredProvider({ id: "serpro_cnpj", name: "SERPRO_CNPJ", type: "OFFICIAL", capabilities: ["COMPANY", "FISCAL", "CORPORATE_RELATIONS"], priorities: ["OFFICIAL"], pricingModel: "contract" }),
   createNotConfiguredProvider({ id: "datajud_cnj", name: "DATAJUD_CNJ", type: "OFFICIAL", capabilities: ["LEGAL"], priorities: ["OFFICIAL"], pricingModel: "free" }),

@@ -44,7 +44,9 @@ export type OwnerProviderAuditEvent = {
   provider: string;
   capability?: OwnerIntelligenceCapability;
   status?: OwnerProviderQueryStatus;
-  reason?: "NOT_CONFIGURED" | "UNSUPPORTED" | "SKIPPED_FRESH" | "SKIPPED_COST" | "RATE_LIMITED" | "TIMEOUT" | "AUTH_ERROR" | "PROVIDER_ERROR";
+  reason?: OwnerProviderQueryStatus;
+  protocol?: string | null;
+  durationMs?: number;
 };
 
 export type OwnerProviderOrchestrationResult = {
@@ -64,7 +66,7 @@ export const OWNER_PROVIDER_CAPABILITIES = [...OWNER_INTELLIGENCE_CAPABILITIES] 
 
 const forbiddenKeys = /^(?:cpf|cnpj|document|password|token|secret|api[_-]?key|raw|payload|biometric|health|religion|political|sexual|race|ethnicity|creditor|debt|amount)$/i;
 const capabilityAllowlist: Record<OwnerIntelligenceCapability, Set<string>> = {
-  IDENTITY: new Set(["full_name", "fullName", "name", "registration_status", "registrationStatus", "birth_date", "birthDate", "occupation", "profession", "status"]),
+  IDENTITY: new Set(["full_name", "fullName", "name", "registration_status", "registrationStatus", "birth_date", "birthDate", "occupation", "profession", "status", "parentage", "mother_name"]),
   ADDRESS: new Set(["postal_code", "cep", "street", "address", "number", "complement", "neighborhood", "district", "city", "state", "uf", "country", "current"]),
   CIVIL: new Set(["marital_status", "maritalStatus", "property_regime", "propertyRegime"]),
   EMPLOYMENT: new Set(["employment_type", "current_employer", "employer", "role", "position", "status", "history"]),
@@ -207,17 +209,18 @@ export class OwnerProviderOrchestrator {
         this.audit({ event: "owner.provider.query.skipped", companyId: context.companyId, actorUserId: context.actorUserId, provider: provider.name, capability, status: "SKIPPED_COST", reason: "SKIPPED_COST" });
         return emptyProviderResult(provider, capability, "SKIPPED_COST", "Consulta paga requer confirmação explícita.");
       }
+      const startedAt = Date.now();
       try {
         const raw = await provider.query({ document: subject.document, capabilities: [capability] });
         const status = mapProviderStatus(raw.status);
         const data = status === "SUCCESS" || status === "PARTIAL" ? filterProviderData(raw.values, capability) : {};
-        const result: OwnerProviderResult = { provider: provider.name, capability, status, protocol: null, queriedAt: raw.consultedAt, freshUntil: null, estimatedCost: provider.costProfile.estimatedCost, source: providerSource(provider), confidence: status === "SUCCESS" ? "high" : "unknown", data: provider.normalize(data, capability), errors: [], warnings: raw.warnings };
+        const result: OwnerProviderResult = { provider: provider.name, capability, status, protocol: raw.protocol ?? null, queriedAt: raw.consultedAt, freshUntil: null, estimatedCost: provider.costProfile.estimatedCost, source: providerSource(provider), confidence: status === "SUCCESS" ? "high" : "unknown", data: provider.normalize(data, capability), errors: [], warnings: raw.warnings };
         if (["NOT_FOUND", "TIMEOUT", "RATE_LIMITED", "PROVIDER_ERROR"].includes(status) && chain.length > 1) continue;
-        this.audit({ event: status === "SUCCESS" || status === "PARTIAL" ? "owner.provider.query.completed" : "owner.provider.query.failed", companyId: context.companyId, actorUserId: context.actorUserId, provider: provider.name, capability, status, reason: status === "AUTH_ERROR" ? "AUTH_ERROR" : undefined });
+        this.audit({ event: status === "SUCCESS" || status === "PARTIAL" ? "owner.provider.query.completed" : "owner.provider.query.failed", companyId: context.companyId, actorUserId: context.actorUserId, provider: provider.name, capability, status, reason: status === "AUTH_ERROR" ? "AUTH_ERROR" : undefined, protocol: raw.protocol ?? null, durationMs: Date.now() - startedAt });
         return result;
       } catch (error) {
         const status = classifyProviderError(error);
-        this.audit({ event: "owner.provider.query.failed", companyId: context.companyId, actorUserId: context.actorUserId, provider: provider.name, capability, status, reason: status });
+        this.audit({ event: "owner.provider.query.failed", companyId: context.companyId, actorUserId: context.actorUserId, provider: provider.name, capability, status, reason: status, durationMs: Date.now() - startedAt });
         if (chain.length > 1 && ["TIMEOUT", "RATE_LIMITED", "PROVIDER_ERROR"].includes(status)) continue;
         return emptyProviderResult(provider, capability, status, "Provider query failed.");
       }

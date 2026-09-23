@@ -4,6 +4,7 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
 import { normalizeOwnerCredit, normalizeOwnerFiscal, normalizeOwnerLegal, notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
 import { createOwnerProviderOrchestrator, detectOwnerSubject } from "./owner-provider-orchestrator.js";
+import { detectOwnerConflict } from "./owner-360.js";
 import {
   calculateInformativeFinancialCapacity,
   normalizeOwnerEmployment,
@@ -383,6 +384,9 @@ export async function runOwnerIntelligenceQuery(options: {
       warnings: orchestration.warnings,
     }
     : await provider.query({ document: owner.document, capabilities });
+  if (capabilities.includes("IDENTITY") && (result.status === "success" || result.status === "partial") && result.values && typeof result.values === "object") {
+    await persistProviderIdentity({ companyId: options.companyId, ownerId: options.ownerId, actorUserId: options.actorUserId, profile, values: result.values as JsonRecord, provider: result.provider, checkedAt: result.consultedAt });
+  }
   const normalizedCredit = creditRequested ? normalizeOwnerCredit({
     ...result.values,
     status: result.status,
@@ -456,6 +460,38 @@ export async function runOwnerIntelligenceQuery(options: {
     await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.fiscal.query.completed", "property_owner", options.ownerId, { provider: result.provider, status: result.status, capability: "FISCAL" });
   }
   return serializeCheck(check);
+}
+
+export function reconcileProviderIdentity(current: JsonRecord, incomingValues: JsonRecord) {
+  const incoming = Object.fromEntries(["full_name", "birth_date", "parentage"].filter((field) => incomingValues[field] !== undefined).map((field) => [field, incomingValues[field]]));
+  const merged = { ...current };
+  const conflicts: Array<{ field: string; current: unknown; incoming: unknown }> = [];
+  const accepted: string[] = [];
+  for (const [field, value] of Object.entries(incoming)) {
+    const existing = current[field];
+    if (existing !== undefined && existing !== null && JSON.stringify(existing) !== JSON.stringify(value)) {
+      conflicts.push({ field, current: existing, incoming: value });
+      continue;
+    }
+    merged[field] = value;
+    accepted.push(field);
+  }
+  return { merged, conflicts, accepted };
+}
+
+async function persistProviderIdentity(options: { companyId: string; ownerId: string; actorUserId: string; profile: any; values: JsonRecord; provider: string; checkedAt: string }) {
+  const current = options.profile?.identityJson && typeof options.profile.identityJson === "object" && !Array.isArray(options.profile.identityJson) ? options.profile.identityJson as JsonRecord : {};
+  const reconciled = reconcileProviderIdentity(current, options.values);
+  if (!reconciled.accepted.length && !reconciled.conflicts.length) return;
+  const provenance = options.profile?.provenanceJson && typeof options.profile.provenanceJson === "object" && !Array.isArray(options.profile.provenanceJson) ? options.profile.provenanceJson as JsonRecord : {};
+  const identityProvenance = provenance.identity && typeof provenance.identity === "object" && !Array.isArray(provenance.identity) ? provenance.identity as JsonRecord : {};
+  for (const conflict of reconciled.conflicts) {
+    await detectOwnerConflict({ companyId: options.companyId, ownerId: options.ownerId, actorUserId: options.actorUserId, domain: "identity", field: conflict.field, candidates: [{ value: conflict.current, source: "OWNER_PROFILE" }, { value: conflict.incoming, source: options.provider, provider: options.provider, checked_at: options.checkedAt }] });
+  }
+  for (const field of reconciled.accepted) {
+    identityProvenance[field] = { provider: options.provider, source: "provider", checkedAt: options.checkedAt };
+  }
+  if (reconciled.accepted.length) await getPrisma().ownerProfile.update({ where: { id: options.profile.id }, data: { identityJson: jsonValue(reconciled.merged), provenanceJson: jsonValue({ ...provenance, identity: identityProvenance }) } });
 }
 
 function serializeCheck(check: any) {
