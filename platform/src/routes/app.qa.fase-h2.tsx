@@ -26,7 +26,11 @@ function PhaseH2VerifierPage() {
       }
       setResult(await apiRequest<Record<string, unknown>>(`${bridge}/fase-h2/run`, { token }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Falha na verificação H2.");
+      const failure = cause as Error & { status?: number; code?: string };
+      const detail = [failure.status ? `HTTP ${failure.status}` : null, failure.code ?? null]
+        .filter(Boolean)
+        .join(" ");
+      setError(`${failure.message || "Falha na verificação H2."}${detail ? ` (${detail})` : ""}`);
     } finally {
       setBusy(false);
     }
