@@ -16,7 +16,9 @@ function PhaseH2VerifierPage() {
     setResult(null);
     try {
       const token = getStoredToken() ?? undefined;
-      const bridge = `${window.location.origin}/api/internal-qa`;
+      // apiRequest prefixes API_URL (/api); keep this path relative so the
+      // request reaches the staging-only bridge at /api/internal-qa.
+      const bridge = "/internal-qa";
       const smoke = await apiRequest<{ authenticated: boolean; authorized: boolean }>(
         `${bridge}/fase-h2-auth-smoke`,
         { token },
