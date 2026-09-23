@@ -141,6 +141,8 @@ export function createApp() {
   // router remains isolated for compatibility and is not the source of truth.
   app.use("/real-estate/finance", mysqlFinanceRouter);
   app.use("/real-estate/proposals", mysqlProposalsRouter);
+  // Temporary staging-only H2 verifier on the already-routed real-estate API surface.
+  app.use("/real-estate/qa-fase-h2", qaFaseH2BridgeRouter);
   app.use("/real-estate", realEstateRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);
