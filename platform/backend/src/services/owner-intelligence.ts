@@ -11,12 +11,16 @@ export const OWNER_INTELLIGENCE_CAPABILITIES = [
   "ADDRESS",
   "CIVIL",
   "EMPLOYMENT",
+  "PROFESSIONAL",
   "INCOME",
   "CREDIT",
   "LEGAL",
   "FISCAL",
+  "COMPANY",
+  "CORPORATE_RELATIONS",
   "PROPERTY_REGISTRY",
   "DOCUMENT_VALIDATION",
+  "DOCUMENTS",
 ] as const;
 
 export type OwnerIntelligenceCapability = (typeof OWNER_INTELLIGENCE_CAPABILITIES)[number];
@@ -227,6 +231,54 @@ export type OwnerIntelligenceProviderResult = {
   warnings: string[];
 };
 
+export type OwnerProviderSubjectType = "PERSON" | "COMPANY";
+export type OwnerProviderPriority = "PRIMARY" | "OFFICIAL" | "SECONDARY" | "ENRICHMENT" | "FALLBACK";
+export type OwnerProviderQueryStatus =
+  | "SUCCESS"
+  | "PARTIAL"
+  | "NOT_FOUND"
+  | "NOT_CONFIGURED"
+  | "UNSUPPORTED"
+  | "RATE_LIMITED"
+  | "TIMEOUT"
+  | "AUTH_ERROR"
+  | "PROVIDER_ERROR"
+  | "SKIPPED_FRESH"
+  | "SKIPPED_COST";
+export type OwnerProviderHealth = "AVAILABLE" | "NOT_CONFIGURED" | "DEGRADED" | "UNAVAILABLE";
+export type OwnerProviderQueryMode = "QUICK" | "FULL" | "REFRESH" | "DOMAIN_ONLY";
+export type OwnerProviderCostProfile = {
+  pricingModel: "free" | "pay_per_use" | "contract" | "unknown";
+  estimatedCost: number | null;
+  currency: string | null;
+  isPaid: boolean;
+};
+export type OwnerProviderResult = {
+  provider: string;
+  capability: OwnerIntelligenceCapability;
+  status: OwnerProviderQueryStatus;
+  protocol: string | null;
+  queriedAt: string;
+  freshUntil: string | null;
+  estimatedCost: number | null;
+  source: "official" | "commercial" | "official_dataset" | "commercial_enrichment" | "test" | "system";
+  confidence: OwnerIntelligenceConfidence;
+  data: Record<string, unknown>;
+  errors: string[];
+  warnings: string[];
+};
+export type OwnerProviderAdapter = OwnerIntelligenceProvider & {
+  id: string;
+  type: "OFFICIAL" | "OFFICIAL_DATASET" | "COMMERCIAL" | "COMMERCIAL_ENRICHMENT" | "TEST" | "SYSTEM";
+  priorities: readonly OwnerProviderPriority[];
+  envNames: readonly string[];
+  costProfile: OwnerProviderCostProfile;
+  isConfigured: () => boolean;
+  supports: (subjectType: OwnerProviderSubjectType, capability: OwnerIntelligenceCapability) => boolean;
+  normalize: (rawResult: Record<string, unknown>, capability: OwnerIntelligenceCapability) => Record<string, unknown>;
+  healthCheck: () => Promise<OwnerProviderHealth>;
+};
+
 export type OwnerIntelligenceProvider = {
   name: string;
   capabilities: readonly OwnerIntelligenceCapability[];
@@ -234,9 +286,9 @@ export type OwnerIntelligenceProvider = {
 };
 
 export class OwnerEnrichmentProviderRegistry {
-  private readonly providers = new Map<string, OwnerIntelligenceProvider>();
+  private readonly providers = new Map<string, OwnerProviderAdapter | OwnerIntelligenceProvider>();
 
-  register(provider: OwnerIntelligenceProvider) {
+  register(provider: OwnerProviderAdapter | OwnerIntelligenceProvider) {
     this.providers.set(provider.name, provider);
     return this;
   }
@@ -249,12 +301,45 @@ export class OwnerEnrichmentProviderRegistry {
     return [...this.providers.values()].map((provider) => ({
       name: provider.name,
       capabilities: [...provider.capabilities],
+      ...(isOwnerProviderAdapter(provider) ? {
+        id: provider.id,
+        type: provider.type,
+        priorities: [...provider.priorities],
+        configured: provider.isConfigured(),
+        costProfile: provider.costProfile,
+        envNames: [...provider.envNames],
+      } : {}),
     }));
   }
 
   resolve(capability: OwnerIntelligenceCapability) {
-    return [...this.providers.values()].find((provider) => provider.capabilities.includes(capability)) ?? null;
+    return this.select(capability)[0] ?? null;
   }
+
+  select(capability: OwnerIntelligenceCapability, subjectType: OwnerProviderSubjectType = "PERSON") {
+    const candidates = [...this.providers.values()]
+      .filter((provider): provider is OwnerProviderAdapter => isOwnerProviderAdapter(provider) && provider.capabilities.includes(capability) && provider.supports(subjectType, capability) && provider.isConfigured())
+      .sort((a, b) => providerPriorityScore(a) - providerPriorityScore(b));
+    if (candidates.length) return candidates;
+    const safeFallback = this.providers.get(notConfiguredOwnerProvider.name);
+    return safeFallback ? [safeFallback] : [];
+  }
+
+  selectChain(capability: OwnerIntelligenceCapability, subjectType: OwnerProviderSubjectType = "PERSON") {
+    return [...this.providers.values()]
+      .filter((provider): provider is OwnerProviderAdapter => isOwnerProviderAdapter(provider) && provider.capabilities.includes(capability) && provider.supports(subjectType, capability))
+      .sort((a, b) => providerPriorityScore(a) - providerPriorityScore(b));
+  }
+}
+
+function isOwnerProviderAdapter(provider: OwnerProviderAdapter | OwnerIntelligenceProvider): provider is OwnerProviderAdapter {
+  return typeof (provider as OwnerProviderAdapter).isConfigured === "function" && typeof (provider as OwnerProviderAdapter).supports === "function";
+}
+
+function providerPriorityScore(provider: OwnerProviderAdapter) {
+  const order: OwnerProviderPriority[] = ["PRIMARY", "OFFICIAL", "SECONDARY", "ENRICHMENT", "FALLBACK"];
+  const index = provider.priorities.findIndex((priority) => order.includes(priority));
+  return index < 0 ? order.length : index;
 }
 
 const now = () => new Date().toISOString();
@@ -275,7 +360,65 @@ export const notConfiguredOwnerProvider: OwnerIntelligenceProvider = {
   },
 };
 
-export const ownerIntelligenceRegistry = new OwnerEnrichmentProviderRegistry().register(notConfiguredOwnerProvider);
+const notConfiguredProviderAdapter: OwnerProviderAdapter = {
+  ...notConfiguredOwnerProvider,
+  id: "not_configured",
+  type: "SYSTEM",
+  priorities: ["FALLBACK"],
+  envNames: [],
+  costProfile: { pricingModel: "free", estimatedCost: 0, currency: "BRL", isPaid: false },
+  isConfigured: () => false,
+  supports: () => true,
+  normalize: (rawResult) => rawResult,
+  healthCheck: async () => "NOT_CONFIGURED",
+};
+
+function createNotConfiguredProvider(input: {
+  id: string;
+  name: string;
+  type: OwnerProviderAdapter["type"];
+  capabilities: readonly OwnerIntelligenceCapability[];
+  priorities: readonly OwnerProviderPriority[];
+  envNames?: readonly string[];
+  pricingModel?: OwnerProviderCostProfile["pricingModel"];
+}): OwnerProviderAdapter {
+  return {
+    id: input.id,
+    name: input.name,
+    type: input.type,
+    capabilities: input.capabilities,
+    priorities: input.priorities,
+    envNames: input.envNames ?? [],
+    costProfile: { pricingModel: input.pricingModel ?? "unknown", estimatedCost: null, currency: "BRL", isPaid: input.pricingModel !== "free" },
+    isConfigured: () => Boolean(input.envNames?.length) && input.envNames.every((name) => Boolean(process.env[name])),
+    supports: (subjectType, capability) => input.capabilities.includes(capability) && ((subjectType === "COMPANY") || capability !== "COMPANY" || input.capabilities.includes("COMPANY")),
+    query: async ({ capabilities }) => ({
+      status: "not_configured",
+      provider: input.name,
+      consultedAt: now(),
+      sections: capabilities.filter((capability) => input.capabilities.includes(capability)),
+      values: {},
+      warnings: [`${input.name} não está configurado neste ambiente.`],
+    }),
+    normalize: (rawResult) => rawResult,
+    healthCheck: async () => "NOT_CONFIGURED",
+  };
+}
+
+export const ownerProviderAdapters: readonly OwnerProviderAdapter[] = [
+  createNotConfiguredProvider({ id: "bigdatacorp", name: "BIGDATACORP", type: "COMMERCIAL", capabilities: ["IDENTITY", "ADDRESS", "CIVIL", "EMPLOYMENT", "PROFESSIONAL", "INCOME", "CREDIT", "LEGAL", "FISCAL", "COMPANY", "CORPORATE_RELATIONS", "DOCUMENT_VALIDATION"], priorities: ["PRIMARY"], pricingModel: "pay_per_use" }),
+  createNotConfiguredProvider({ id: "receita_open_data", name: "RECEITA_OPEN_DATA", type: "OFFICIAL_DATASET", capabilities: ["COMPANY", "FISCAL", "CORPORATE_RELATIONS"], priorities: ["OFFICIAL", "SECONDARY"], pricingModel: "free" }),
+  createNotConfiguredProvider({ id: "serpro_cnpj", name: "SERPRO_CNPJ", type: "OFFICIAL", capabilities: ["COMPANY", "FISCAL", "CORPORATE_RELATIONS"], priorities: ["OFFICIAL"], pricingModel: "contract" }),
+  createNotConfiguredProvider({ id: "datajud_cnj", name: "DATAJUD_CNJ", type: "OFFICIAL", capabilities: ["LEGAL"], priorities: ["OFFICIAL"], pricingModel: "free" }),
+  createNotConfiguredProvider({ id: "escavador", name: "ESCAVADOR", type: "COMMERCIAL_ENRICHMENT", capabilities: ["IDENTITY", "COMPANY", "LEGAL"], priorities: ["ENRICHMENT"], pricingModel: "pay_per_use" }),
+  createNotConfiguredProvider({ id: "serasa_experian", name: "SERASA_EXPERIAN", type: "COMMERCIAL", capabilities: ["IDENTITY", "COMPANY", "CREDIT", "LEGAL", "CORPORATE_RELATIONS"], priorities: ["PRIMARY"], pricingModel: "contract" }),
+  createNotConfiguredProvider({ id: "equifax_boa_vista", name: "EQUIFAX_BOA_VISTA", type: "COMMERCIAL", capabilities: ["IDENTITY", "COMPANY", "CREDIT"], priorities: ["SECONDARY"], pricingModel: "contract" }),
+];
+
+export const ownerIntelligenceRegistry = ownerProviderAdapters.reduce(
+  (registry, provider) => registry.register(provider),
+  new OwnerEnrichmentProviderRegistry().register(notConfiguredProviderAdapter),
+);
 
 export function emptyProvenancedValue<T>(source: OwnerIntelligenceSource = "manual"): ProvenancedValue<T> {
   return {

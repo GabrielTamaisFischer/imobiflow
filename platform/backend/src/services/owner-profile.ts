@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { writeAuthAudit } from "./mysql-auth.js";
 import { normalizeOwnerCredit, normalizeOwnerFiscal, normalizeOwnerLegal, notConfiguredOwnerProvider, ownerIntelligenceRegistry, type OwnerIntelligenceCapability } from "./owner-intelligence.js";
+import { createOwnerProviderOrchestrator, detectOwnerSubject } from "./owner-provider-orchestrator.js";
 import {
   calculateInformativeFinancialCapacity,
   normalizeOwnerEmployment,
@@ -353,6 +354,9 @@ export async function runOwnerIntelligenceQuery(options: {
   const provider = capabilities.map((capability) => ownerIntelligenceRegistry.resolve(capability)).find(Boolean) ?? notConfiguredOwnerProvider;
   const existing = await getPrisma().ownerCheck.findFirst({ where: { companyId: options.companyId, ownerId: options.ownerId, checkType: "intelligence", provider: provider.name, idempotencyKey: key } });
   if (existing) return serializeCheck(existing);
+  if (owner.document && !detectOwnerSubject(owner.document)) {
+    throw Object.assign(new Error("CPF ou CNPJ inválido."), { statusCode: 400, code: "OWNER_DOCUMENT_INVALID" });
+  }
   await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.intelligence.requested", "property_owner", options.ownerId, { provider: provider.name, capabilities });
   const creditRequested = capabilities.includes("CREDIT");
   const legalRequested = capabilities.includes("LEGAL");
@@ -360,7 +364,25 @@ export async function runOwnerIntelligenceQuery(options: {
   if (creditRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.credit.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "CREDIT" });
   if (legalRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.legal.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "LEGAL" });
   if (fiscalRequested) await writeAuthAudit(getPrisma(), options.companyId, options.actorUserId, "owner.fiscal.query.requested", "property_owner", options.ownerId, { provider: provider.name, capability: "FISCAL" });
-  const result = await provider.query({ document: owner.document, capabilities });
+  const orchestration = owner.document && detectOwnerSubject(owner.document)
+    ? await createOwnerProviderOrchestrator().query({
+      companyId: options.companyId,
+      actorUserId: options.actorUserId,
+      document: owner.document,
+      capabilities,
+      idempotencyKey: key,
+    })
+    : null;
+  const result = orchestration
+    ? {
+      status: orchestration.status.toLowerCase(),
+      provider: orchestration.results[0]?.provider ?? notConfiguredOwnerProvider.name,
+      consultedAt: orchestration.results[0]?.queriedAt ?? new Date().toISOString(),
+      sections: orchestration.results.map((entry) => entry.capability),
+      values: orchestration.normalized,
+      warnings: orchestration.warnings,
+    }
+    : await provider.query({ document: owner.document, capabilities });
   const normalizedCredit = creditRequested ? normalizeOwnerCredit({
     ...result.values,
     status: result.status,
