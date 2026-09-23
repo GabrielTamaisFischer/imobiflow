@@ -50,7 +50,6 @@ import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquil
 import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
 import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
 import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
-import { Route as AppQaFaseH2RouteImport } from './routes/app.qa.fase-h2'
 import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
 import { Route as AppImoveisNovoRouteImport } from './routes/app.imoveis_.novo'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
@@ -266,11 +265,6 @@ const AppSiteBuilderRoute = AppSiteBuilderRouteImport.update({
   path: '/builder',
   getParentRoute: () => AppSiteRoute,
 } as any)
-const AppQaFaseH2Route = AppQaFaseH2RouteImport.update({
-  id: '/qa/fase-h2',
-  path: '/qa/fase-h2',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
   id: '/$ownerId',
   path: '/$ownerId',
@@ -356,7 +350,6 @@ export interface FileRoutesByFullPath {
   '/app/': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
-  '/app/qa/fase-h2': typeof AppQaFaseH2Route
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -406,7 +399,6 @@ export interface FileRoutesByTo {
   '/app': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
-  '/app/qa/fase-h2': typeof AppQaFaseH2Route
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -459,7 +451,6 @@ export interface FileRoutesById {
   '/app/': typeof AppIndexRoute
   '/app/imoveis_/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
-  '/app/qa/fase-h2': typeof AppQaFaseH2Route
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
@@ -513,7 +504,6 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
-    | '/app/qa/fase-h2'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -563,7 +553,6 @@ export interface FileRouteTypes {
     | '/app'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
-    | '/app/qa/fase-h2'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -615,7 +604,6 @@ export interface FileRouteTypes {
     | '/app/'
     | '/app/imoveis_/novo'
     | '/app/proprietarios/$ownerId'
-    | '/app/qa/fase-h2'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
     | '/portal/comprador/$token'
@@ -943,13 +931,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSiteBuilderRouteImport
       parentRoute: typeof AppSiteRoute
     }
-    '/app/qa/fase-h2': {
-      id: '/app/qa/fase-h2'
-      path: '/qa/fase-h2'
-      fullPath: '/app/qa/fase-h2'
-      preLoaderRoute: typeof AppQaFaseH2RouteImport
-      parentRoute: typeof AppRoute
-    }
     '/app/proprietarios/$ownerId': {
       id: '/app/proprietarios/$ownerId'
       path: '/$ownerId'
@@ -1108,7 +1089,6 @@ interface AppRouteChildren {
   AppVistoriasRoute: typeof AppVistoriasRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
   AppImoveisNovoRoute: typeof AppImoveisNovoRoute
-  AppQaFaseH2Route: typeof AppQaFaseH2Route
   AppImoveisPropertyIdEditarRoute: typeof AppImoveisPropertyIdEditarRoute
 }
 
@@ -1131,7 +1111,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppVistoriasRoute: AppVistoriasRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
   AppImoveisNovoRoute: AppImoveisNovoRoute,
-  AppQaFaseH2Route: AppQaFaseH2Route,
   AppImoveisPropertyIdEditarRoute: AppImoveisPropertyIdEditarRoute,
 }
 
