@@ -36,7 +36,6 @@ import { testLabRouter } from "./routes/test-lab.js";
 import { usageCostsRouter } from "./routes/usage-costs.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { websiteBuilderRouter } from "./routes/website-builder.js";
-import { qaFaseH2BridgeRouter } from "./routes/qa-fase-h2-bridge.js";
 import { buildAppBootstrap } from "./services/app-bootstrap.js";
 import { getStorageProviderName } from "./services/storage/index.js";
 import { localUploadsRoot } from "./services/storage/local-storage-provider.js";
@@ -141,8 +140,6 @@ export function createApp() {
   // router remains isolated for compatibility and is not the source of truth.
   app.use("/real-estate/finance", mysqlFinanceRouter);
   app.use("/real-estate/proposals", mysqlProposalsRouter);
-  // Temporary staging-only H2 verifier on the already-routed real-estate API surface.
-  app.use("/real-estate/qa-fase-h2", qaFaseH2BridgeRouter);
   app.use("/real-estate", realEstateRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);
@@ -150,9 +147,6 @@ export function createApp() {
   app.use("/usage-costs", usageCostsRouter);
   app.use("/webhooks", webhooksRouter);
   app.use("/website-builder", websiteBuilderRouter);
-  app.use("/internal-qa", qaFaseH2BridgeRouter);
-  // Vercel may preserve the rewritten /api prefix for this temporary bridge.
-  app.use("/api/internal-qa", qaFaseH2BridgeRouter);
   app.get("/me/authorization", requireAuth, requireCompany, (req: RequestWithAccess, res) => {
     res.json({ access: req.access });
   });

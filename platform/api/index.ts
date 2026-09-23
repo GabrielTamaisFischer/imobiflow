@@ -13,7 +13,6 @@
 // preserves the client's original request URL in `req.url` for regular (non-Prerender)
 // Node.js Serverless Functions regardless of any `rewrites` match — only the function
 // selection changes, not what the invoked function observes as the request path.
-// H2 temporary verifier bridge is intentionally included in createApp for the staging-only gate.
 import { createApp } from "../backend/src/app.js";
 
 const app = createApp();
