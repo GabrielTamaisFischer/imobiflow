@@ -36,7 +36,6 @@ import { testLabRouter } from "./routes/test-lab.js";
 import { usageCostsRouter } from "./routes/usage-costs.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { websiteBuilderRouter } from "./routes/website-builder.js";
-import { qaFaseH3ABridgeRouter } from "./routes/qa-fase-h3a-bridge.js";
 import { buildAppBootstrap } from "./services/app-bootstrap.js";
 import { getStorageProviderName } from "./services/storage/index.js";
 import { localUploadsRoot } from "./services/storage/local-storage-provider.js";
@@ -141,7 +140,6 @@ export function createApp() {
   // router remains isolated for compatibility and is not the source of truth.
   app.use("/real-estate/finance", mysqlFinanceRouter);
   app.use("/real-estate/proposals", mysqlProposalsRouter);
-  app.use("/real-estate/qa-fase-h3a", qaFaseH3ABridgeRouter);
   app.use("/real-estate", realEstateRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);
