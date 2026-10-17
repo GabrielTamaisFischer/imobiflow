@@ -45,6 +45,10 @@ export type Env = {
   REGISTRATION_ENABLED?: string;
   BILLING_REQUIRED?: string;
   ALLOW_SYNTHETIC_BILLING_PROVISIONING?: string;
+  STAGING_FREE_ACCESS_ENABLED?: string;
+  VERCEL?: string;
+  VERCEL_ENV?: string;
+  VERCEL_PROJECT_PRODUCTION_URL?: string;
   SYNTHETIC_BILLING_ADMIN_SECRET?: string;
   STORAGE_PROVIDER?: string;
   LOCAL_STORAGE_PUBLIC_URL?: string;
@@ -127,6 +131,10 @@ function readEnv(): Env {
     REGISTRATION_ENABLED: process.env.REGISTRATION_ENABLED,
     BILLING_REQUIRED: process.env.BILLING_REQUIRED,
     ALLOW_SYNTHETIC_BILLING_PROVISIONING: process.env.ALLOW_SYNTHETIC_BILLING_PROVISIONING,
+    STAGING_FREE_ACCESS_ENABLED: process.env.STAGING_FREE_ACCESS_ENABLED,
+    VERCEL: process.env.VERCEL,
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL,
     SYNTHETIC_BILLING_ADMIN_SECRET: process.env.SYNTHETIC_BILLING_ADMIN_SECRET,
     STORAGE_PROVIDER: process.env.STORAGE_PROVIDER,
     LOCAL_STORAGE_PUBLIC_URL: process.env.LOCAL_STORAGE_PUBLIC_URL,
@@ -193,4 +201,22 @@ export const env = readEnv();
 export function isFreeRegistrationEnabled(): boolean {
   if (env.NODE_ENV === "production") return false;
   return env.REGISTRATION_ENABLED === "true" && env.BILLING_REQUIRED !== "true";
+}
+
+/**
+ * C0.1: entitlement gratuito exclusivamente para o projeto Vercel de staging.
+ * A decisão usa apenas variáveis server-side e falha fechado quando qualquer
+ * sinal do projeto/ambiente está ausente ou divergente. Nenhum header, query,
+ * body, e-mail ou claim enviado pelo cliente participa desta decisão.
+ */
+export function isStagingFreeAccessEnabled(config: Pick<
+  Env,
+  "STAGING_FREE_ACCESS_ENABLED" | "VERCEL" | "VERCEL_PROJECT_PRODUCTION_URL" | "APP_URL"
+> = env): boolean {
+  return (
+    config.STAGING_FREE_ACCESS_ENABLED === "true" &&
+    config.VERCEL === "1" &&
+    config.VERCEL_PROJECT_PRODUCTION_URL === "imobiflow-staging.vercel.app" &&
+    config.APP_URL === "https://imobiflow-staging.vercel.app"
+  );
 }

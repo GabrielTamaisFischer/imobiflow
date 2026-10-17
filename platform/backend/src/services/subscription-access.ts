@@ -1,10 +1,35 @@
 import type { SubscriptionStatus } from "../types/access.js";
+import { env, isStagingFreeAccessEnabled } from "../config/env.js";
 
 export type SubscriptionAccessDecision = {
   allowed: boolean;
   normalizedStatus: "PENDING" | "ACTIVE" | "PAST_DUE" | "SUSPENDED" | "CANCELLED";
   reason: string | null;
 };
+
+export type ApplicationEntitlement = "PAID" | "STAGING_QA" | "DENIED";
+
+export function resolveApplicationEntitlement(
+  subscription: {
+    status?: SubscriptionStatus | null;
+    expires_at?: string | null;
+    grace_ends_at?: string | null;
+  } | null | undefined,
+  config = env,
+  now = new Date(),
+): ApplicationEntitlement {
+  if (
+    getSubscriptionAccessDecision(
+      subscription?.status,
+      subscription?.expires_at,
+      subscription?.grace_ends_at,
+      now,
+    ).allowed
+  ) {
+    return "PAID";
+  }
+  return isStagingFreeAccessEnabled(config) ? "STAGING_QA" : "DENIED";
+}
 
 export function getSubscriptionAccessDecision(
   status?: SubscriptionStatus | null,

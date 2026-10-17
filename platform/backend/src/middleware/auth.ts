@@ -1,6 +1,6 @@
 import type { NextFunction, Response } from "express";
 import { buildMysqlAccessContextFromToken } from "../services/mysql-auth.js";
-import { isSubscriptionAllowed } from "../services/subscription-access.js";
+import { resolveApplicationEntitlement } from "../services/subscription-access.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 function readBearerToken(header?: string) {
@@ -50,13 +50,7 @@ export function requireActiveSubscription(
   next: NextFunction,
 ) {
   const subscription = req.access?.subscription;
-  if (
-    !isSubscriptionAllowed(
-      subscription?.status,
-      subscription?.expires_at,
-      subscription?.grace_ends_at,
-    )
-  ) {
+  if (resolveApplicationEntitlement(subscription) === "DENIED") {
     return res.status(402).json({
       error: "SUBSCRIPTION_INACTIVE",
       message: "Acesso bloqueado por assinatura inativa.",

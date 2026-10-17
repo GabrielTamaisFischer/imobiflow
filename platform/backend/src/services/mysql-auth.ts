@@ -9,7 +9,8 @@ import {
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { env } from "../config/env.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
-import type { AccessContext, SubscriptionStatus } from "../types/access.js";
+import { resolveApplicationEntitlement } from "./subscription-access.js";
+import type { AccessContext, ResourceScope, SubscriptionStatus } from "../types/access.js";
 
 const jwtIssuer = "imobiflow-api";
 const jwtAudience = "imobiflow-platform";
@@ -364,13 +365,32 @@ export async function buildMysqlAccessContextForUser(
     where: { companyId },
     orderBy: { createdAt: "desc" },
   });
+  const mappedSubscription = subscription
+    ? {
+        id: subscription.id,
+        status: subscription.status as SubscriptionStatus,
+        plan_slug: subscription.planSlug,
+        expires_at: subscription.expiresAt?.toISOString() ?? null,
+        grace_ends_at: subscription.graceEndsAt?.toISOString() ?? null,
+      }
+    : null;
+  const stagingQaSubscription =
+    resolveApplicationEntitlement(mappedSubscription) === "STAGING_QA"
+      ? {
+          id: "staging-qa-entitlement",
+          status: "ACTIVE" as const,
+          plan_slug: "staging_qa",
+          expires_at: null,
+          grace_ends_at: null,
+        }
+      : null;
   const permissions = user.roleRecord.permissions.map(({ permission }) => permission.key);
-  const permissionScopes = Object.fromEntries(
+  const permissionScopes: Record<string, ResourceScope> = Object.fromEntries(
     user.roleRecord.permissions.map(({ permission, scope }) => [
       permission.key,
       scope === "own" || scope === "shared" || scope === "company" ? scope : "own",
     ]),
-  );
+  ) as Record<string, ResourceScope>;
   const role = user.roleRecord.systemKey ?? user.roleRecord.name;
 
   return {
@@ -390,15 +410,7 @@ export async function buildMysqlAccessContextForUser(
       permissionScopes,
     },
     company: { id: user.company.id, name: user.company.name, status: user.company.status },
-    subscription: subscription
-      ? {
-          id: subscription.id,
-          status: subscription.status as SubscriptionStatus,
-          plan_slug: subscription.planSlug,
-          expires_at: subscription.expiresAt?.toISOString() ?? null,
-          grace_ends_at: subscription.graceEndsAt?.toISOString() ?? null,
-        }
-      : null,
+    subscription: mappedSubscription ?? stagingQaSubscription,
   };
 }
 
