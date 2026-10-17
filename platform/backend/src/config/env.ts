@@ -204,19 +204,20 @@ export function isFreeRegistrationEnabled(): boolean {
 }
 
 /**
- * C0.1: entitlement gratuito exclusivamente para o projeto Vercel de staging.
- * A decisão usa apenas variáveis server-side e falha fechado quando qualquer
- * sinal do projeto/ambiente está ausente ou divergente. Nenhum header, query,
- * body, e-mail ou claim enviado pelo cliente participa desta decisão.
+ * C0.1.2: entitlement gratuito exclusivamente para o projeto Vercel de staging.
+ * A decisão usa a identidade server-side do projeto, não a URL configurável da
+ * aplicação. Isso evita que um APP_URL ausente (que cai no default localhost)
+ * bloqueie o alias oficial, sem permitir que o cliente influencie a decisão.
  */
-export function isStagingFreeAccessEnabled(config: Pick<
-  Env,
-  "STAGING_FREE_ACCESS_ENABLED" | "VERCEL" | "VERCEL_PROJECT_PRODUCTION_URL" | "APP_URL"
-> = env): boolean {
+export function isStagingFreeAccessEnabled(
+  config: Pick<
+    Env,
+    "STAGING_FREE_ACCESS_ENABLED" | "VERCEL" | "VERCEL_PROJECT_PRODUCTION_URL"
+  > = env,
+): boolean {
   return (
     config.STAGING_FREE_ACCESS_ENABLED === "true" &&
     config.VERCEL === "1" &&
-    config.VERCEL_PROJECT_PRODUCTION_URL === "imobiflow-staging.vercel.app" &&
-    config.APP_URL === "https://imobiflow-staging.vercel.app"
+    config.VERCEL_PROJECT_PRODUCTION_URL === "imobiflow-staging.vercel.app"
   );
 }

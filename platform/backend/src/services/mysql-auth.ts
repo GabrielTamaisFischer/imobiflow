@@ -9,7 +9,7 @@ import {
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { env } from "../config/env.js";
 import { getPrisma } from "../lib/website-builder-prisma.js";
-import { resolveApplicationEntitlement } from "./subscription-access.js";
+import { resolveApplicationEntitlement, resolveBillingEnforcement } from "./subscription-access.js";
 import type { AccessContext, ResourceScope, SubscriptionStatus } from "../types/access.js";
 
 const jwtIssuer = "imobiflow-api";
@@ -374,8 +374,9 @@ export async function buildMysqlAccessContextForUser(
         grace_ends_at: subscription.graceEndsAt?.toISOString() ?? null,
       }
     : null;
+  const entitlement = resolveApplicationEntitlement(mappedSubscription);
   const stagingQaSubscription =
-    resolveApplicationEntitlement(mappedSubscription) === "STAGING_QA"
+    entitlement === "STAGING_QA"
       ? {
           id: "staging-qa-entitlement",
           status: "ACTIVE" as const,
@@ -411,6 +412,10 @@ export async function buildMysqlAccessContextForUser(
     },
     company: { id: user.company.id, name: user.company.name, status: user.company.status },
     subscription: mappedSubscription ?? stagingQaSubscription,
+    billing: {
+      enforcement: resolveBillingEnforcement(),
+      entitlement,
+    },
   };
 }
 

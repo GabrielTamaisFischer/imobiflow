@@ -1,8 +1,12 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import type { AccessResponse } from "./auth";
-import { clearToken, getStoredToken, loadSession } from "./auth";
-import { isSubscriptionActive } from "./subscription";
+import {
+  canEnterApplication,
+  clearToken,
+  getStoredToken,
+  loadSession,
+  type AccessResponse,
+} from "./auth";
 
 export function useSessionGuard() {
   const navigate = useNavigate();
@@ -24,15 +28,7 @@ export function useSessionGuard() {
           await navigate({ to: "/entrar" });
           return;
         }
-        const subscription = nextSession.access.subscription;
-
-        if (
-          !isSubscriptionActive(
-            subscription?.status,
-            subscription?.expires_at,
-            subscription?.grace_ends_at,
-          )
-        ) {
+        if (!canEnterApplication(nextSession.access)) {
           await navigate({ to: "/assinatura-bloqueada" });
           return;
         }

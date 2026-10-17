@@ -46,6 +46,10 @@ export type AccessContext = {
     expires_at: string | null;
     grace_ends_at: string | null;
   } | null;
+  billing?: {
+    enforcement: "DISABLED" | "ENABLED";
+    entitlement: "PAID" | "STAGING_QA" | "DENIED";
+  };
 };
 
 export type PortalPartyAccess = {

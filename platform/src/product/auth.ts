@@ -1,4 +1,5 @@
 import { apiRequest } from "./api";
+import { isSubscriptionActive } from "./subscription";
 
 const accessTokenKey = "imobiflow.access_token";
 const refreshTokenKey = "imobiflow.refresh_token";
@@ -29,8 +30,22 @@ export type AccessResponse = {
       expires_at: string | null;
       grace_ends_at: string | null;
     } | null;
+    billing?: {
+      enforcement: "DISABLED" | "ENABLED";
+      entitlement: "PAID" | "STAGING_QA" | "DENIED";
+    };
   };
 };
+
+/** Server-authoritative billing decision with a legacy response fallback. */
+export function canEnterApplication(access: AccessResponse["access"]) {
+  if (access.billing) return access.billing.entitlement !== "DENIED";
+  return isSubscriptionActive(
+    access.subscription?.status,
+    access.subscription?.expires_at,
+    access.subscription?.grace_ends_at,
+  );
+}
 
 export type AppUserSummary = {
   id: string;

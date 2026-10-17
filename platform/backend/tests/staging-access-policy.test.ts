@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import express from "express";
 import type { Server } from "node:http";
 import { env, isStagingFreeAccessEnabled } from "../src/config/env.js";
-import { resolveApplicationEntitlement } from "../src/services/subscription-access.js";
+import {
+  resolveApplicationEntitlement,
+  resolveBillingEnforcement,
+} from "../src/services/subscription-access.js";
 import { requireActiveSubscription, requireAuth, requireCompany } from "../src/middleware/auth.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
 
@@ -24,12 +27,16 @@ afterEach(() => {
 
 const servers: Server[] = [];
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  await Promise.all(
+    servers
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+  );
 });
 
 function enableStagingGate() {
   env.NODE_ENV = "production";
-  env.APP_URL = "https://imobiflow-staging.vercel.app";
+  env.APP_URL = "http://localhost:3333";
   env.STAGING_FREE_ACCESS_ENABLED = "true";
   env.VERCEL = "1";
   env.VERCEL_PROJECT_PRODUCTION_URL = "imobiflow-staging.vercel.app";
@@ -39,6 +46,7 @@ describe("C0.1 staging_qa entitlement", () => {
   it("allows an authenticated company without a paid subscription only on the exact staging project", () => {
     enableStagingGate();
     expect(isStagingFreeAccessEnabled()).toBe(true);
+    expect(resolveBillingEnforcement()).toBe("DISABLED");
     expect(resolveApplicationEntitlement(null)).toBe("STAGING_QA");
   });
 
@@ -58,13 +66,13 @@ describe("C0.1 staging_qa entitlement", () => {
     expect(response.status).toBe(401);
   });
 
-  it("fails closed when flag, Vercel marker, project identity, or official URL differs", () => {
+  it("fails closed when flag, Vercel marker, or project identity differs", () => {
     enableStagingGate();
     for (const mutate of [
       () => (env.STAGING_FREE_ACCESS_ENABLED = "false"),
       () => (env.VERCEL = undefined),
       () => (env.VERCEL_PROJECT_PRODUCTION_URL = "other-project.vercel.app"),
-      () => (env.APP_URL = "https://imobiflow.example.com"),
+      () => (env.VERCEL_PROJECT_PRODUCTION_URL = "https://imobiflow.example.com"),
     ]) {
       enableStagingGate();
       mutate();
@@ -78,5 +86,21 @@ describe("C0.1 staging_qa entitlement", () => {
     expect(
       resolveApplicationEntitlement({ status: "ACTIVE", expires_at: null, grace_ends_at: null }),
     ).toBe("PAID");
+  });
+
+  it("does not require APP_URL to be configured in Vercel", () => {
+    enableStagingGate();
+    env.APP_URL = "http://localhost:3333";
+    expect(isStagingFreeAccessEnabled()).toBe(true);
+    expect(resolveApplicationEntitlement(null)).toBe("STAGING_QA");
+  });
+
+  it("keeps production-like enforcement enabled when the project identity is not staging", () => {
+    env.NODE_ENV = "production";
+    env.STAGING_FREE_ACCESS_ENABLED = "true";
+    env.VERCEL = "1";
+    env.VERCEL_PROJECT_PRODUCTION_URL = "imobiflow-production.vercel.app";
+    expect(resolveBillingEnforcement()).toBe("ENABLED");
+    expect(resolveApplicationEntitlement(null)).toBe("DENIED");
   });
 });

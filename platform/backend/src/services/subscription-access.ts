@@ -9,12 +9,28 @@ export type SubscriptionAccessDecision = {
 
 export type ApplicationEntitlement = "PAID" | "STAGING_QA" | "DENIED";
 
+export type BillingEnforcement = "DISABLED" | "ENABLED";
+
+/**
+ * Financial enforcement is disabled only for the verified staging project.
+ * Authentication, company membership, RBAC and tenant checks remain separate
+ * middleware concerns and are never bypassed by this decision.
+ */
+export function resolveBillingEnforcement(config = env): BillingEnforcement {
+  if (isStagingFreeAccessEnabled(config)) return "DISABLED";
+  if (config.NODE_ENV !== "production" && config.BILLING_REQUIRED !== "true") return "DISABLED";
+  return "ENABLED";
+}
+
 export function resolveApplicationEntitlement(
-  subscription: {
-    status?: SubscriptionStatus | null;
-    expires_at?: string | null;
-    grace_ends_at?: string | null;
-  } | null | undefined,
+  subscription:
+    | {
+        status?: SubscriptionStatus | null;
+        expires_at?: string | null;
+        grace_ends_at?: string | null;
+      }
+    | null
+    | undefined,
   config = env,
   now = new Date(),
 ): ApplicationEntitlement {
@@ -28,7 +44,7 @@ export function resolveApplicationEntitlement(
   ) {
     return "PAID";
   }
-  return isStagingFreeAccessEnabled(config) ? "STAGING_QA" : "DENIED";
+  return resolveBillingEnforcement(config) === "DISABLED" ? "STAGING_QA" : "DENIED";
 }
 
 export function getSubscriptionAccessDecision(
