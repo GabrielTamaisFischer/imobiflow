@@ -27,6 +27,7 @@ import { publicInspectionsRouter } from "./routes/public-inspections.js";
 import { publicPortalsRouter } from "./routes/public-portals.js";
 import { publicSitesRouter } from "./routes/public-sites.js";
 import { realEstateRouter } from "./routes/real-estate.js";
+import { registrationsRouter } from "./routes/registrations.js";
 import { mysqlPortalRouter } from "./routes/portal-mysql.js";
 import { mysqlFinanceRouter } from "./routes/finance-mysql.js";
 import { mysqlProposalsRouter } from "./routes/proposals-mysql.js";
@@ -141,6 +142,7 @@ export function createApp() {
   app.use("/real-estate/finance", mysqlFinanceRouter);
   app.use("/real-estate/proposals", mysqlProposalsRouter);
   app.use("/real-estate", realEstateRouter);
+  app.use("/registrations", registrationsRouter);
   app.use("/rentals", rentalsRouter);
   app.use("/site", sitesRouter);
   app.use("/test-lab", testLabRouter);
