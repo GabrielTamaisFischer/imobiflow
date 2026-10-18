@@ -15,6 +15,8 @@ import { resolveIdempotencyKey, withIdempotency } from "../services/idempotency.
 import { assertSafeContractContent, resolveContractPlaceholders } from "../services/contract-editor-f6d.js";
 import { findPartyForContract, canPartyDownloadSignedDocument, canPartySignVersion, canPartyViewContract, getContractsForParty } from "../services/contract-party-portal.js";
 import { hashOpaqueToken } from "../services/mysql-auth.js";
+import { isValidBrazilianDocument, normalizeBrazilianDocument } from "../services/brazilian-document.js";
+import { ensureTenantIdentityForParty, resolveOrCreateTenantIdentity } from "../services/tenant-registration.js";
 
 export const mysqlContractsRouter = Router();
 mysqlContractsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
@@ -41,6 +43,35 @@ const fromLeadSchema = z.object({ lead_id: z.string().uuid(), property_id: z.str
 function notFound() { return Object.assign(new Error("Contrato não encontrado."), { statusCode: 404, code: "CONTRACT_NOT_FOUND" }); }
 function invalid(message: string, code = "CONTRACT_INVALID") { return Object.assign(new Error(message), { statusCode: 422, code }); }
 function conflict(message: string, code = "CONTRACT_VERSION_CONFLICT") { return Object.assign(new Error(message), { statusCode: 409, code }); }
+
+function tenantPartyType(document: string): "individual" | "company" {
+  return normalizeBrazilianDocument(document).length === 14 ? "company" : "individual";
+}
+
+function validateTenantPartyDocument(party: z.infer<typeof partySchema>) {
+  if (party.party_type !== "tenant" || !party.document?.trim()) return;
+  const partyType = tenantPartyType(party.document);
+  if (!isValidBrazilianDocument(party.document, partyType)) {
+    throw invalid("CPF/CNPJ inválido para o inquilino.", "INVALID_TENANT_DOCUMENT");
+  }
+}
+
+async function resolveTenantSourcePartyId(
+  companyId: string,
+  userId: string,
+  party: z.infer<typeof partySchema>,
+) {
+  if (party.party_type !== "tenant" || !party.document?.trim()) return null;
+  validateTenantPartyDocument(party);
+  const identity = await resolveOrCreateTenantIdentity(companyId, userId, {
+    name: party.name,
+    document: party.document,
+    partyType: tenantPartyType(party.document),
+    email: party.email ?? null,
+    phone: party.phone ?? null,
+  });
+  return identity.party.id;
+}
 
 const include = {
   property: { select: { id: true, code: true, title: true, city: true, state: true, ownerId: true } },
@@ -143,9 +174,21 @@ mysqlContractsRouter.post("/", requirePermission("contracts.manage"), async (req
     await assertInspectionLink(req, input.entry_inspection_id, input.property_id, "entry");
     await assertInspectionLink(req, input.exit_inspection_id, input.property_id, "exit");
     if (input.lead_id) { const lead = await db().lead.findFirst({ where: { id: input.lead_id, companyId: access.company.id } }); if (!lead) throw invalid("Lead inválido para esta empresa.", "INVALID_LEAD"); }
+
+    // C4 — ContractParty continua sendo a participação contratual. Para
+    // partes "tenant" com documento explícito, vinculamos a identidade
+    // canônica Party/PartyRole/TenantProfile; sem documento, o contrato segue
+    // funcionando sem inventar dedupe por nome/e-mail/telefone.
+    const preparedParties = await Promise.all(
+      input.parties.map(async (party) => ({
+        party,
+        sourcePartyId: await resolveTenantSourcePartyId(access.company.id, access.appUser.id, party),
+      })),
+    );
+
     const created = await db().$transaction(async (tx: any) => {
       const contract = await tx.contract.create({ data: { id: input.id, companyId: access.company.id, propertyId: input.property_id, leadId: input.lead_id ?? null, entryInspectionId: input.entry_inspection_id ?? null, exitInspectionId: input.exit_inspection_id ?? null, createdBy: access.appUser.id, title: input.title, contractType: input.contract_type, startsAt: input.starts_at ?? null, endsAt: input.ends_at ?? null, totalAmountCents: input.total_amount_cents ?? null, monthlyAmountCents: input.monthly_amount_cents ?? null, depositCents: input.deposit_cents ?? null, notes: input.notes ?? null, metadataJson: {} } });
-      if (input.parties.length) await tx.contractParty.createMany({ data: input.parties.map((party) => ({ id: randomUUID(), companyId: access.company.id, contractId: contract.id, partyType: party.party_type, name: party.name, document: party.document ?? null, email: party.email ?? null, phone: party.phone ?? null, signatureRequired: party.signature_required, signatureStatus: party.signature_required ? "pending" : "not_required" })) });
+      if (preparedParties.length) await tx.contractParty.createMany({ data: preparedParties.map(({ party, sourcePartyId }) => ({ id: randomUUID(), companyId: access.company.id, contractId: contract.id, partyType: party.party_type, name: party.name, document: party.document ?? null, email: party.email ?? null, phone: party.phone ?? null, signatureRequired: party.signature_required, signatureStatus: party.signature_required ? "pending" : "not_required", sourcePartyId })) });
       await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, actorUserId: access.appUser.id, eventType: "contract.created", payloadJson: { contract_type: input.contract_type } } });
       return tx.contract.findUniqueOrThrow({ where: { id: contract.id }, include });
     });
@@ -159,13 +202,21 @@ mysqlContractsRouter.post("/", requirePermission("contracts.manage"), async (req
 mysqlContractsRouter.post("/from-lead", requirePermission("contracts.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = fromLeadSchema.parse(req.body); const access = req.access!;
-    const lead = await db().lead.findFirst({ where: { id: input.lead_id, companyId: access.company.id }, include: { siteLeads: { where: { companyId: access.company.id, propertyId: input.property_id }, take: 1 }, assignee: true } });
+    const lead = await db().lead.findFirst({ where: { id: input.lead_id, companyId: access.company.id }, include: { siteLeads: { where: { companyId: access.company.id, propertyId: input.property_id }, take: 1 }, assignee: true, party: { select: { id: true, taxId: true, partyType: true } } } });
     if (!lead) throw notFound();
     await assertProperty(req, input.property_id);
     if (!lead.siteLeads.length && lead.propertyReference && lead.propertyReference !== input.property_id) throw invalid("O imóvel não corresponde ao interesse do lead.", "NEGOTIATION_PROPERTY_MISMATCH");
+
+    // C4 — quando o Lead já está ligado à Party (C3), a conversão para
+    // contrato de locação adiciona o papel tenant à MESMA identidade civil.
+    // Lead legado/sem Party continua permitido e gera ContractParty sem link.
+    if (lead.partyId) {
+      await ensureTenantIdentityForParty(access.company.id, lead.partyId);
+    }
+
     const created = await db().$transaction(async (tx: any) => {
       const contract = await tx.contract.create({ data: { id: randomUUID(), companyId: access.company.id, propertyId: input.property_id, leadId: lead.id, createdBy: access.appUser.id, title: input.title, contractType: input.contract_type, notes: input.notes ?? lead.notes ?? null, metadataJson: { source: "lead", source_lead_id: lead.id } } });
-      await tx.contractParty.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, partyType: "tenant", name: lead.name, email: lead.email, phone: lead.phone, signatureRequired: true, signatureStatus: "pending" } });
+      await tx.contractParty.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, partyType: "tenant", name: lead.name, document: lead.party?.taxId ?? null, email: lead.email, phone: lead.phone, sourcePartyId: lead.partyId ?? null, signatureRequired: true, signatureStatus: "pending" } });
       await tx.contractEvent.create({ data: { id: randomUUID(), companyId: access.company.id, contractId: contract.id, actorUserId: access.appUser.id, eventType: "contract.created", payloadJson: { source: "lead", lead_id: lead.id } } });
       return tx.contract.findUniqueOrThrow({ where: { id: contract.id }, include });
     });
