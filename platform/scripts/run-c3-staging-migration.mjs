@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-function fail(message: string): never {
+function fail(message) {
   console.error(message);
   process.exit(1);
 }
