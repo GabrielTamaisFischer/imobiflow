@@ -80,6 +80,11 @@ model AppUser {
   name          String        @db.VarChar(160)
   email         String        @unique(map: "users_email_key") @db.VarChar(180)
   phone         String?       @db.VarChar(40)
+  // C5 — vínculo opcional entre a conta de acesso (AppUser) e a identidade
+  // civil canônica (Party). AppUser continua sendo credencial/autorização;
+  // Party é a pessoa/empresa. O vínculo é tenant-safe e permanece nullable
+  // para compatibilidade com usuários legados.
+  partyId       String?       @map("party_id") @db.Char(36)
   passwordHash  String?       @map("password_hash") @db.VarChar(180)
   status        String        @default("active") @db.VarChar(40)
   isSynthetic   Boolean       @default(false) @map("is_synthetic")
@@ -93,6 +98,7 @@ model AppUser {
   updatedAt     DateTime      @updatedAt @map("updated_at")
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   roleRecord    Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  party         Party?        @relation("AppUserParty", fields: [companyId, partyId], references: [companyId, id], onDelete: Restrict)
   authSessions  AuthSession[]
   passwordResetTokens PasswordResetToken[]
   invitationsSent UserInvitation[] @relation("InvitationSender")
@@ -127,7 +133,9 @@ model AppUser {
   resolvedOwnerPropertyUpdates OwnerPropertyUpdateRequest[] @relation("OwnerPropertyUpdateResolver")
 
   @@unique([companyId, email])
+  @@unique([companyId, partyId])
   @@index([companyId, status])
+  @@index([companyId, partyId])
   @@map("users")
 }
 
@@ -603,6 +611,7 @@ model Party {
   ownersLinked    PropertyOwner[]
   buyerLeads      Lead[]
   contractSources ContractParty[] @relation("ContractPartySource")
+  appUsers        AppUser[]        @relation("AppUserParty")
 
   @@unique([companyId, id])
   // C1.1 (ajuste pós-auditoria) — unique tenant-safe para identidade
