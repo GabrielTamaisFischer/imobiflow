@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { LogOut } from "lucide-react";
+import { ChevronDown, FolderKanban, LogOut } from "lucide-react";
+import { useState } from "react";
 import type { AccessResponse } from "@/product/auth";
 import { logout } from "@/product/auth";
 import { appModules } from "@/product/app-modules";
@@ -12,12 +13,61 @@ type AppShellProps = {
   fullBleed?: boolean;
 };
 
+const registrationKeys = new Set(["owners", "buyers", "tenants", "brokers"]);
+
 export function AppShell({ session, activeModule, children, fullBleed }: AppShellProps) {
   const companyName = session?.access.company?.name ?? "ImobiFlow";
   const userName = session?.access.appUser?.name ?? "Usuário";
   const subscription = session?.access.subscription;
   const isPreview = subscription?.plan_slug === "preview";
   const visibleModules = getVisibleModules(session?.access.appUser, appModules);
+  const registrationModules = visibleModules.filter((module) => registrationKeys.has(module.key));
+  const standaloneModules = visibleModules.filter((module) => !registrationKeys.has(module.key));
+  const registrationsActive = registrationKeys.has(activeModule);
+  const [registrationsOpen, setRegistrationsOpen] = useState(registrationsActive);
+
+  const registrationsMenu = registrationModules.length ? (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setRegistrationsOpen((current) => !current)}
+        aria-expanded={registrationsOpen}
+        className={`flex h-10 w-full items-center gap-3 rounded-md px-3 text-sm font-medium transition ${
+          registrationsActive
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+        }`}
+      >
+        <FolderKanban className="h-4 w-4" />
+        <span className="flex-1 text-left">Cadastros</span>
+        <ChevronDown className={`h-4 w-4 transition-transform ${registrationsOpen ? "rotate-180" : ""}`} />
+      </button>
+
+      {registrationsOpen ? (
+        <div className="ml-4 space-y-1 border-l border-border pl-2">
+          {registrationModules.map((module) => {
+            const Icon = module.icon;
+            const isActive = activeModule === module.key;
+
+            return (
+              <Link
+                key={module.key}
+                to={module.path as never}
+                className={`flex h-9 items-center gap-3 rounded-md px-3 text-sm font-medium transition ${
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {module.label}
+              </Link>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -30,25 +80,28 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
           </div>
 
           <nav className="space-y-1 p-3">
-            {visibleModules.map((module) => {
+            {standaloneModules.map((module) => {
               const Icon = module.icon;
               const isActive = activeModule === module.key;
 
               return (
-                <Link
-                  key={module.key}
-                  to={module.path as never}
-                  className={`flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition ${
-                    isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {module.label}
-                </Link>
+                <div key={module.key}>
+                  <Link
+                    to={module.path as never}
+                    className={`flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition ${
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {module.label}
+                  </Link>
+                  {module.key === "properties" ? registrationsMenu : null}
+                </div>
               );
             })}
+            {!standaloneModules.some((module) => module.key === "properties") ? registrationsMenu : null}
           </nav>
         </aside>
 
