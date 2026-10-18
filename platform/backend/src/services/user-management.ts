@@ -77,16 +77,25 @@ export async function updateCompanyUser(input: {
         }
       }
 
-      const result = await transaction.appUser.updateMany({
-        where: { id: target.id, companyId: input.companyId },
-        data: {
-          ...(input.update.name !== undefined ? { name: input.update.name } : {}),
-          ...(input.update.phone !== undefined ? { phone: input.update.phone || null } : {}),
-          ...(input.update.status !== undefined ? { status: input.update.status } : {}),
-          ...(nextRole ? { roleId: nextRole.id, role: nextRole.systemKey ?? nextRole.name } : {}),
-        },
-      });
-      if (result.count !== 1) throw authError("USER_NOT_FOUND", "Usuario nao encontrado.", 404);
+      const appUserPatch = {
+        ...(input.update.name !== undefined ? { name: input.update.name } : {}),
+        ...(input.update.phone !== undefined ? { phone: input.update.phone || null } : {}),
+        ...(input.update.status !== undefined ? { status: input.update.status } : {}),
+        ...(nextRole ? { roleId: nextRole.id, role: nextRole.systemKey ?? nextRole.name } : {}),
+      };
+
+      // C5 — document/creci_number/bio_text pertencem à identidade civil/
+      // profissional (Party/BrokerProfile), não a AppUser. Quando o PATCH
+      // contém apenas esses campos, não executamos updateMany com data vazio:
+      // TiDB pode retornar count=0 para um UPDATE sem alteração material, o
+      // que seria um falso USER_NOT_FOUND.
+      if (Object.keys(appUserPatch).length > 0) {
+        const result = await transaction.appUser.updateMany({
+          where: { id: target.id, companyId: input.companyId },
+          data: appUserPatch,
+        });
+        if (result.count !== 1) throw authError("USER_NOT_FOUND", "Usuario nao encontrado.", 404);
+      }
       if (input.update.status && input.update.status !== "active") {
         await revokeAllUserSessions(target.id, input.companyId, transaction);
       }
