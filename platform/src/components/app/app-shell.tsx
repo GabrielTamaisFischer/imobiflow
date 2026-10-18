@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, FolderKanban, LogOut } from "lucide-react";
+import { ChevronDown, Folder, LogOut } from "lucide-react";
 import { useState } from "react";
 import type { AccessResponse } from "@/product/auth";
 import { logout } from "@/product/auth";
@@ -38,7 +38,7 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
             : "text-muted-foreground hover:bg-accent hover:text-foreground"
         }`}
       >
-        <FolderKanban className="h-4 w-4" />
+        <Folder className="h-4 w-4" />
         <span className="flex-1 text-left">Cadastros</span>
         <ChevronDown className={`h-4 w-4 transition-transform ${registrationsOpen ? "rotate-180" : ""}`} />
       </button>
