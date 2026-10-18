@@ -68,6 +68,42 @@ export const appModules = [
     actionLabel: "Cadastrar proprietário",
   },
   {
+    key: "buyers",
+    label: "Compradores",
+    path: "/app/compradores",
+    icon: Users,
+    title: "Compradores",
+    description: "Cadastro civil e perfil de compradores, independente das oportunidades do CRM.",
+    emptyTitle: "Nenhum comprador cadastrado",
+    emptyDescription:
+      "Cadastre compradores para reutilizar sua identidade em leads, propostas e contratos.",
+    actionLabel: "Cadastrar comprador",
+  },
+  {
+    key: "tenants",
+    label: "Inquilinos",
+    path: "/app/inquilinos",
+    icon: Building2,
+    title: "Inquilinos",
+    description: "Cadastro civil e perfil de locação dos inquilinos.",
+    emptyTitle: "Nenhum inquilino cadastrado",
+    emptyDescription:
+      "Cadastre inquilinos antes ou depois da criação dos contratos de locação.",
+    actionLabel: "Cadastrar inquilino",
+  },
+  {
+    key: "brokers",
+    label: "Corretores",
+    path: "/app/corretores",
+    icon: KeyRound,
+    title: "Corretores",
+    description: "Identidade civil e perfil profissional dos corretores da imobiliária.",
+    emptyTitle: "Nenhum corretor cadastrado",
+    emptyDescription:
+      "Cadastre CPF, CRECI e dados profissionais dos corretores; acessos ficam em Configurações.",
+    actionLabel: "Cadastrar corretor",
+  },
+  {
     key: "agenda",
     label: "Agenda",
     path: "/app/agenda",
