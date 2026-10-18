@@ -36,6 +36,7 @@ import {
 } from "../services/roles.js";
 import type { RequestWithAccess } from "../types/access.js";
 import { updateCompanyUser } from "../services/user-management.js";
+import { linkAppUserToBrokerIdentity } from "../services/broker-registration.js";
 import {
   activatePaidAccount,
   registerFreeAccount,
@@ -91,6 +92,9 @@ const acceptInviteSchema = z.object({
   name: z.string().trim().min(2).max(160),
   password: passwordSchema,
   phone: z.string().trim().max(40).optional(),
+  document: z.string().trim().max(40).optional(),
+  creci_number: z.string().trim().max(40).optional(),
+  bio_text: z.string().trim().max(4000).optional(),
 });
 const userUpdateSchema = z.object({
   name: z.string().trim().min(2).max(160).optional(),
@@ -98,6 +102,9 @@ const userUpdateSchema = z.object({
   roleSystemKey: roleSystemKeySchema.optional(),
   roleId: z.string().uuid().optional(),
   status: z.enum(["active", "inactive", "blocked"]).optional(),
+  document: z.string().trim().max(40).optional().or(z.literal("")),
+  creci_number: z.string().trim().max(40).optional().or(z.literal("")),
+  bio_text: z.string().trim().max(4000).optional().or(z.literal("")),
 });
 const profileUpdateSchema = z.object({
   name: z.string().trim().min(2).max(160).optional(),
@@ -821,6 +828,23 @@ authRouter.post("/accept-invite", async (req, res, next) => {
           permissionsJson: [],
         },
       });
+
+      if (invitation.role.systemKey === "broker") {
+        await linkAppUserToBrokerIdentity(
+          invitation.companyId,
+          createdUser.id,
+          {
+            name: input.name,
+            document: input.document || null,
+            email: invitation.email,
+            phone: input.phone || null,
+            creciNumber: input.creci_number || null,
+            bioText: input.bio_text || null,
+          },
+          transaction,
+        );
+      }
+
       await writeAuthAudit(
         transaction,
         invitation.companyId,
