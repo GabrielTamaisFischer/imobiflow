@@ -11,7 +11,6 @@ import {
   archiveMysqlOwner,
   archiveMysqlProperty,
   countMysqlPropertyMedia,
-  createMysqlOwner,
   createMysqlProperty,
   createMysqlPropertyMedia,
   deleteMysqlPropertyMedia,
@@ -39,7 +38,6 @@ import {
   resolveMysqlOwnerPropertyUpdateRequest,
   setMysqlOwnerPortalEnabled,
   setMysqlPropertyMediaCover,
-  updateMysqlOwner,
   updateMysqlProperty,
 } from "../services/mysql-real-estate.js";
 import { validateUploadFile } from "../services/storage/file-policy.js";
@@ -71,6 +69,7 @@ import type { RequestWithAccess } from "../types/access.js";
 import { getOwnerProfile, listOwnerChecks, runOwnerEnrichment, runOwnerIntelligenceQuery, sanitizeOwnerForPermissions, updateOwnerProfile } from "../services/owner-profile.js";
 import { OWNER_INTELLIGENCE_CAPABILITIES, type OwnerIntelligenceCapability } from "../services/owner-intelligence.js";
 import { detectOwnerConflict, getOwner360Data, resolveOwnerConflict } from "../services/owner-360.js";
+import { createOrResolveOwner, updateOwnerCanonical } from "../services/owner-registration.js";
 import { getOwnerDownstreamData } from "../services/owner-downstream.js";
 
 export const realEstateRouter = Router();
@@ -479,9 +478,12 @@ realEstateRouter.patch("/owner-property-update-requests/:id", requirePermission(
 realEstateRouter.post("/owners", requirePermission("owners.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id;
-    const owner = await createMysqlOwner(companyId, req.access!.appUser.id, ownerSchema.parse(req.body));
+    // C2 — fluxo canônico: resolve/cria a Party, garante PartyRole "owner" e
+    // só então cria o PropertyOwner com partyId preenchido.
+    const owner = await createOrResolveOwner(companyId, req.access!.appUser.id, ownerSchema.parse(req.body));
     await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "owner.created", "property_owner", owner.id, {
       owner_type: owner.owner_type,
+      party_id: owner.party_id,
     });
     res.status(201).json({ owner });
   } catch (error) {
@@ -493,9 +495,13 @@ realEstateRouter.patch("/owners/:id", requirePermission("owners.manage"), async 
   try {
     const companyId = req.access!.company.id;
     const input = ownerUpdateSchema.parse(req.body);
-    const owner = await updateMysqlOwner(companyId, String(req.params.id), input);
+    // C2 — fluxo canônico: preserva a lógica atual de updateMysqlOwner e
+    // adiciona resolução/lazy-link de Party quando aplicável (ver
+    // services/owner-registration.ts para as regras exatas).
+    const owner = await updateOwnerCanonical(companyId, String(req.params.id), input);
     await writeAuthAudit(getPrisma(), companyId, req.access!.appUser.id, "owner.updated", "property_owner", owner.id, {
       updated_fields: Object.keys(input),
+      party_id: owner.party_id,
     });
     res.json({ owner });
   } catch (error) {

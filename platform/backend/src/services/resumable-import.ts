@@ -7,6 +7,7 @@ import { createStoredFileRecord } from "./storage/stored-files.js";
 import type { StorageProviderName } from "./storage/types.js";
 import { env } from "../config/env.js";
 import { importMetricsEnabled, mergeImportMetrics, recordImportMetric, type ImportMetricBag } from "./import-metrics.js";
+import { ensurePartyRole, resolveOrCreateParty } from "./party-identity.js";
 
 export const DEFAULT_IMPORT_BATCH_SIZE = 25;
 export const MAX_IMPORT_BATCH_SIZE = 100;
@@ -202,9 +203,55 @@ async function upsertOwner(prisma: PrismaClient, companyId: string, userId: stri
   const name = readString(owner.name); if (!name) return { id: null, created: false };
   const document = readString(owner.document); const email = readString(owner.email);
   const existing = await prisma.propertyOwner.findFirst({ where: { companyId, ...(document ? { document } : email ? { email } : { name }) }, select: { id: true } });
-  if (existing) return { id: existing.id, created: false };
-  const created = await prisma.propertyOwner.create({ data: { companyId, createdBy: userId, name, document, email, phone: readString(owner.phone), whatsapp: readString(owner.phone), ownerType: document?.replace(/\D/g, "").length! > 11 ? "company" : "individual", addressJson: {}, status: "active" } });
+  if (existing) {
+    await linkImportedOwnerToParty(prisma, companyId, userId, existing.id, name, document, email, owner);
+    return { id: existing.id, created: false };
+  }
+  const ownerType = document?.replace(/\D/g, "").length! > 11 ? "company" : "individual";
+  const created = await prisma.propertyOwner.create({ data: { companyId, createdBy: userId, name, document, email, phone: readString(owner.phone), whatsapp: readString(owner.phone), ownerType, addressJson: {}, status: "active" } });
+  await linkImportedOwnerToParty(prisma, companyId, userId, created.id, name, document, email, owner);
   return { id: created.id, created: true };
+}
+
+// C2 — best-effort: liga o PropertyOwner importado a uma Party canonica,
+// SEM alterar a heuristica de matching do import (document > email > name,
+// inalterada acima). Nunca lanca erro: se a Party resolvida ja pertencer a
+// outro PropertyOwner desta empresa, apenas pula o link (evita duplicar a
+// semantica de conflito 409 do fluxo de criacao direta dentro do import,
+// que nao tem um usuario interativo para resolver isso).
+async function linkImportedOwnerToParty(
+  prisma: PrismaClient,
+  companyId: string,
+  userId: string,
+  ownerId: string,
+  name: string,
+  document: string | null | undefined,
+  email: string | null | undefined,
+  owner: Record<string, unknown>,
+) {
+  try {
+    const current = await prisma.propertyOwner.findFirst({ where: { id: ownerId, companyId }, select: { partyId: true } });
+    if (current?.partyId) return;
+    const ownerType = document?.replace(/\D/g, "").length! > 11 ? "company" : "individual";
+    const { party, created } = await resolveOrCreateParty({
+      companyId,
+      name,
+      partyType: ownerType,
+      taxId: document ?? null,
+      email: email ?? null,
+      phone: readString(owner.phone) ?? null,
+      whatsapp: readString(owner.phone) ?? null,
+      createdBy: userId,
+    });
+    if (!created) {
+      const conflictingOwner = await prisma.propertyOwner.findFirst({ where: { companyId, partyId: party.id, id: { not: ownerId } }, select: { id: true } });
+      if (conflictingOwner) return;
+    }
+    await ensurePartyRole(companyId, party.id, "owner");
+    await prisma.propertyOwner.updateMany({ where: { id: ownerId, companyId, partyId: null }, data: { partyId: party.id } });
+  } catch {
+    // Best-effort: nunca bloquear a importacao por falha de linkagem de identidade.
+  }
 }
 
 function propertyCreateData(job: { id: string; companyId: string; sourceType: string }, userId: string, ownerId: string | null, value: Record<string, unknown>, externalId: string | null): Prisma.PropertyUncheckedCreateInput {

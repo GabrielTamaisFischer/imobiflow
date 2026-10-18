@@ -613,7 +613,7 @@ async function recordOwnerPropertyUpdateNotification(input: { companyId: string;
 
 export { ownerPropertyUpdateTypes };
 
-export async function createMysqlOwner(companyId: string, userId: string, input: PropertyInput) {
+export async function createMysqlOwner(companyId: string, userId: string, input: PropertyInput, partyId?: string | null) {
   const document = await ensureOwnerDocumentAvailable(companyId, input.document);
   const owner = await prisma().propertyOwner.create({
     data: {
@@ -633,13 +633,19 @@ export async function createMysqlOwner(companyId: string, userId: string, input:
       status: "active",
       portalToken: randomUUID(),
       portalEnabled: true,
+      // C2 — vínculo aditivo opcional à identidade canônica (Party). Omitido
+      // (undefined) quando o chamador não usa o fluxo canônico ainda —
+      // nunca obrigatório, nunca quebra um chamador existente que não passa
+      // este argumento (ex.: chamadas antigas continuam criando com
+      // partyId NULL, exatamente como antes da C2).
+      ...(partyId !== undefined ? { partyId } : {}),
     },
   });
 
   return serializeOwner(owner);
 }
 
-export async function updateMysqlOwner(companyId: string, ownerId: string, input: PropertyInput) {
+export async function updateMysqlOwner(companyId: string, ownerId: string, input: PropertyInput, partyId?: string | null) {
   await ensureOwnerBelongsToCompany(ownerId, companyId);
   const current = await prisma().propertyOwner.findFirstOrThrow({ where: { id: ownerId, companyId } });
   const ownerType = (input.owner_type ?? current.ownerType) as "individual" | "company";
@@ -651,7 +657,13 @@ export async function updateMysqlOwner(companyId: string, ownerId: string, input
   }
   const owner = await prisma().propertyOwner.update({
     where: { id: ownerId },
-    data: { ...cleanOwnerUpdate(input), ...(document !== undefined ? { document } : {}) },
+    data: {
+      ...cleanOwnerUpdate(input),
+      ...(document !== undefined ? { document } : {}),
+      // C2 — só grava quando o chamador canônico explicitamente decidiu
+      // vincular/trocar a Party (undefined = não tocar no partyId atual).
+      ...(partyId !== undefined ? { partyId } : {}),
+    },
   });
 
   return serializeOwner(owner);
@@ -1774,6 +1786,9 @@ export function serializeOwner(owner: any) {
   return {
     id: owner.id,
     company_id: owner.companyId,
+    // C2 — exposição aditiva da identidade canônica vinculada (nunca
+    // obrigatória; null em registros legados sem lazy-link ainda).
+    party_id: owner.partyId ?? null,
     owner_type: owner.ownerType,
     client_type: owner.clientType,
     name: owner.name,

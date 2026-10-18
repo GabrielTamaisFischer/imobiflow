@@ -6,12 +6,12 @@ import {
   requirePermission,
 } from "../middleware/auth.js";
 import {
-  createMysqlOwner,
   createMysqlProperty,
   createMysqlPropertyMedia,
   ensureMysqlCompanySite,
   prisma,
 } from "../services/mysql-real-estate.js";
+import { createOrResolveOwner } from "../services/owner-registration.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const testLabRouter = Router();
@@ -84,7 +84,11 @@ testLabRouter.post(
 
       for (const [index, scenario] of scenarios.entries()) {
         const code = `QA-${batchId.slice(-8).toUpperCase()}-${String(index + 1).padStart(3, "0")}`;
-        const owner = await createMysqlOwner(companyId, userId, {
+        // C2 — test-lab também passa pelo fluxo canônico (resolve/cria Party +
+        // garante PartyRole "owner"); documentos sintéticos aqui nunca são CPF/CNPJ
+        // matematicamente válidos, então sempre criam uma Party nova (sem dedupe),
+        // preservando exatamente o comportamento de hoje.
+        const owner = await createOrResolveOwner(companyId, userId, {
           owner_type: index % 5 === 0 ? "company" : "individual",
           client_type: "proprietario",
           name: `Proprietario QA ${String(index + 1).padStart(2, "0")}`,
