@@ -302,33 +302,46 @@ try {
   }, null, 2));
   exitCode = 1;
 } finally {
-  try {
-    await cleanup();
-    const remainingProperties = createdPropertyIds.size
-      ? await prisma.property.count({ where: { id: { in: [...createdPropertyIds] } } })
-      : 0;
-    const remainingOwners = createdOwnerIds.size
-      ? await prisma.propertyOwner.count({ where: { id: { in: [...createdOwnerIds] } } })
-      : 0;
-    const remainingUsers = createdUserIds.size
-      ? await prisma.appUser.count({ where: { id: { in: [...createdUserIds] } } })
-      : 0;
-    const remainingParties = createdPartyIds.size
-      ? await prisma.party.count({ where: { id: { in: [...createdPartyIds] } } })
-      : 0;
-    const cleanupOk = remainingProperties === 0 && remainingOwners === 0 && remainingUsers === 0 && remainingParties === 0;
-    if (!cleanupOk) exitCode = 1;
-    console.log(JSON.stringify({
-      cleanup: { remainingProperties, remainingOwners, remainingUsers, remainingParties, cleanupOk },
-    }, null, 2));
-  } catch (cleanupError) {
+  let cleanupSucceeded = false;
+  let lastCleanupError: unknown = null;
+
+  for (let attempt = 1; attempt <= 3 && !cleanupSucceeded; attempt += 1) {
+    try {
+      await cleanup();
+      const remainingProperties = createdPropertyIds.size
+        ? await prisma.property.count({ where: { id: { in: [...createdPropertyIds] } } })
+        : 0;
+      const remainingOwners = createdOwnerIds.size
+        ? await prisma.propertyOwner.count({ where: { id: { in: [...createdOwnerIds] } } })
+        : 0;
+      const remainingUsers = createdUserIds.size
+        ? await prisma.appUser.count({ where: { id: { in: [...createdUserIds] } } })
+        : 0;
+      const remainingParties = createdPartyIds.size
+        ? await prisma.party.count({ where: { id: { in: [...createdPartyIds] } } })
+        : 0;
+      const cleanupOk = remainingProperties === 0 && remainingOwners === 0 && remainingUsers === 0 && remainingParties === 0;
+      cleanupSucceeded = cleanupOk;
+      if (!cleanupOk) exitCode = 1;
+      console.log(JSON.stringify({
+        cleanup: { attempt, remainingProperties, remainingOwners, remainingUsers, remainingParties, cleanupOk },
+      }, null, 2));
+    } catch (cleanupError) {
+      lastCleanupError = cleanupError;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+      }
+    }
+  }
+
+  if (!cleanupSucceeded) {
     console.error(JSON.stringify({
-      cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      cleanupError: lastCleanupError instanceof Error ? lastCleanupError.message : String(lastCleanupError ?? "cleanup incompleto"),
     }, null, 2));
     exitCode = 1;
-  } finally {
-    await prisma.$disconnect();
   }
+
+  await prisma.$disconnect();
 }
 
 console.log(`C7_INTEGRATION_EXIT_CODE=${exitCode}`);
