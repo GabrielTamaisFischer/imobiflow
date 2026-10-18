@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { authError, revokeAllUserSessions, writeAuthAudit } from "./mysql-auth.js";
+import { linkAppUserToBrokerIdentity } from "./broker-registration.js";
 
 export type CompanyUserUpdate = {
   name?: string;
@@ -7,6 +8,9 @@ export type CompanyUserUpdate = {
   roleSystemKey?: string;
   roleId?: string;
   status?: "active" | "inactive" | "blocked";
+  document?: string;
+  creci_number?: string;
+  bio_text?: string;
 };
 
 export async function updateCompanyUser(input: {
@@ -86,6 +90,28 @@ export async function updateCompanyUser(input: {
       if (input.update.status && input.update.status !== "active") {
         await revokeAllUserSessions(target.id, input.companyId, transaction);
       }
+
+      const updatedUser = await transaction.appUser.findFirstOrThrow({
+        where: { id: target.id, companyId: input.companyId },
+        include: { roleRecord: true },
+      });
+
+      if (updatedUser.roleRecord.systemKey === "broker") {
+        await linkAppUserToBrokerIdentity(
+          input.companyId,
+          updatedUser.id,
+          {
+            name: updatedUser.name,
+            document: input.update.document || null,
+            email: updatedUser.email,
+            phone: updatedUser.phone,
+            creciNumber: input.update.creci_number || null,
+            bioText: input.update.bio_text || null,
+          },
+          transaction,
+        );
+      }
+
       await writeAuthAudit(
         transaction,
         input.companyId,
@@ -99,7 +125,17 @@ export async function updateCompanyUser(input: {
       );
       return transaction.appUser.findFirstOrThrow({
         where: { id: target.id, companyId: input.companyId },
-        include: { roleRecord: true },
+        include: {
+          roleRecord: true,
+          party: {
+            include: {
+              roles: {
+                where: { role: "broker" },
+                include: { brokerProfile: true },
+              },
+            },
+          },
+        },
       });
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
