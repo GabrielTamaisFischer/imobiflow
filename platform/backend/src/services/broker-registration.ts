@@ -3,6 +3,8 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ensurePartyRole, resolveOrCreateParty } from "./party-identity.js";
 import { normalizeBrazilianDocument } from "./brazilian-document.js";
 
+type BrokerDatabase = ReturnType<typeof getPrisma> | Prisma.TransactionClient;
+
 export type BrokerRegistrationInput = {
   name: string;
   document?: string | null;
@@ -38,7 +40,7 @@ async function ensureBrokerProfile(
   companyId: string,
   partyRoleId: string,
   input: Pick<BrokerRegistrationInput, "creciNumber" | "bioText">,
-  database: ReturnType<typeof getPrisma>,
+  database: BrokerDatabase,
 ) {
   const existing = await database.brokerProfile.findFirst({
     where: { companyId, partyRoleId },
@@ -87,7 +89,7 @@ export async function ensureBrokerIdentityForParty(
   companyId: string,
   partyId: string,
   input: Pick<BrokerRegistrationInput, "creciNumber" | "bioText"> = {},
-  database: ReturnType<typeof getPrisma> = getPrisma(),
+  database: BrokerDatabase = getPrisma(),
 ) {
   const { partyRole, created: partyRoleCreated } = await ensurePartyRole(
     companyId,
@@ -112,7 +114,7 @@ export async function resolveOrCreateBrokerIdentity(
   companyId: string,
   userId: string | null | undefined,
   input: BrokerRegistrationInput,
-  database: ReturnType<typeof getPrisma> = getPrisma(),
+  database: BrokerDatabase = getPrisma(),
 ) {
   const { party, created: partyCreated } = await resolveOrCreateParty(
     {
@@ -147,7 +149,7 @@ export async function linkAppUserToBrokerIdentity(
   companyId: string,
   appUserId: string,
   input: BrokerRegistrationInput,
-  database: ReturnType<typeof getPrisma> = getPrisma(),
+  database: BrokerDatabase = getPrisma(),
 ) {
   const user = await database.appUser.findFirst({
     where: { id: appUserId, companyId },
