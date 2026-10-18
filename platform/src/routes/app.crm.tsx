@@ -325,7 +325,7 @@ function LeadDetail({ lead, users, canManage, currentUser, onClose, onSaved }: {
           <button type="button" onClick={onClose} className="text-sm text-muted-foreground">Fechar</button>
         </div>
       </div>
-      <Field label="Nome" name="name" required defaultValue={lead.name} disabled={!canManage} /><Field label="E-mail" name="email" type="email" defaultValue={lead.email ?? ""} disabled={!canManage} /><Field label="Telefone" name="phone" defaultValue={lead.phone ?? ""} disabled={!canManage} /><Field label="Origem" name="source" defaultValue={lead.source ?? ""} disabled={!canManage} /><Field label="Orçamento" name="budget" defaultValue={lead.budget_cents ? String(lead.budget_cents / 100) : ""} disabled={!canManage} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" defaultValue={toDateTimeLocalValue(lead.next_follow_up_at)} disabled={!canManage} />
+      <Field label="Nome" name="name" required defaultValue={lead.name} disabled={!canManage} /><Field label="E-mail" name="email" type="email" defaultValue={lead.email ?? ""} disabled={!canManage} /><Field label="Telefone" name="phone" defaultValue={lead.phone ?? ""} disabled={!canManage} /><Field label="CPF/CNPJ" name="document" defaultValue={lead.document ?? ""} disabled={!canManage} /><Field label="Origem" name="source" defaultValue={lead.source ?? ""} disabled={!canManage} /><Field label="Orçamento" name="budget" defaultValue={lead.budget_cents ? String(lead.budget_cents / 100) : ""} disabled={!canManage} /><Field label="Próximo follow-up" name="next_follow_up_at" type="datetime-local" defaultValue={toDateTimeLocalValue(lead.next_follow_up_at)} disabled={!canManage} />
       <label className="block space-y-1 text-sm"><span className="font-medium">Corretor responsável</span><select name="assigned_to" value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)} disabled={!canManage} className="h-10 w-full rounded border border-input bg-background px-3"><option value="">Sem responsável</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
       <label className="block space-y-1 text-sm"><span className="font-medium">Observações</span><textarea name="notes" defaultValue={lead.notes ?? ""} disabled={!canManage} rows={3} className="w-full rounded border border-input bg-background px-3 py-2" /></label>
       {lead.interests?.length ? <section className="rounded border border-border bg-muted/30 p-3"><p className="text-sm font-semibold">Imóveis de interesse</p><div className="mt-2 space-y-2">{lead.interests.map((interest) => <div key={interest.id} className="text-xs text-muted-foreground"><span className="font-medium text-foreground">{interest.property_code ?? "Imóvel"}</span>{interest.property_title ? ` — ${interest.property_title}` : ""} · {interest.source}</div>)}</div></section> : null}
@@ -359,6 +359,7 @@ function buildLeadDetailUpdateInput(form: FormData, assignedTo: string) {
     name: String(form.get("name")),
     email: String(form.get("email")),
     phone: String(form.get("phone")),
+    document: String(form.get("document")),
     source: String(form.get("source")),
     budget_cents: parseMoneyToCents(String(form.get("budget"))),
     assigned_to: assignedTo || undefined,
@@ -394,6 +395,7 @@ function LeadForm({
         name: String(form.get("name") ?? ""),
         email: String(form.get("email") ?? ""),
         phone: String(form.get("phone") ?? ""),
+        document: String(form.get("document") ?? ""),
         source: String(form.get("source") ?? ""),
         interest_type: String(form.get("interest_type") ?? "not_defined") as Lead["interest_type"],
         stage_id: String(form.get("stage_id") ?? "") || stages[0]?.id,
@@ -434,6 +436,7 @@ function LeadForm({
         <Field label="Nome do lead" name="name" required />
         <Field label="E-mail" name="email" type="email" />
         <Field label="Telefone/WhatsApp" name="phone" />
+        <Field label="CPF/CNPJ" name="document" placeholder="Opcional — usado para identificar o comprador" />
         <Field label="Origem" name="source" placeholder="Site, indicação, portal..." />
         <label className="space-y-1 text-sm">
           <span className="font-medium">Interesse</span>
