@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { ensurePartyRole, resolveOrCreateParty } from "./party-identity.js";
-import { normalizeBrazilianDocument } from "./brazilian-document.js";
+import { isValidBrazilianDocument, normalizeBrazilianDocument } from "./brazilian-document.js";
 
 type BrokerDatabase = ReturnType<typeof getPrisma> | Prisma.TransactionClient;
 
@@ -30,6 +30,23 @@ export class BrokerIdentityError extends Error {
 function cleanOptionalString(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed || null;
+}
+
+function inferPartyType(document: string): "individual" | "company" {
+  return normalizeBrazilianDocument(document).length === 14 ? "company" : "individual";
+}
+
+function validateBrokerDocument(document: string | null | undefined, explicitType?: "individual" | "company") {
+  const value = cleanOptionalString(document);
+  if (!value) return;
+  const type = explicitType ?? inferPartyType(value);
+  if (!isValidBrazilianDocument(value, type)) {
+    throw new BrokerIdentityError(
+      "CPF/CNPJ invalido para a identidade do corretor.",
+      422,
+      "INVALID_BROKER_DOCUMENT",
+    );
+  }
 }
 
 function isUniqueConstraintViolation(error: unknown): boolean {
@@ -116,6 +133,7 @@ export async function resolveOrCreateBrokerIdentity(
   input: BrokerRegistrationInput,
   database: BrokerDatabase = getPrisma(),
 ) {
+  validateBrokerDocument(input.document, input.partyType);
   const { party, created: partyCreated } = await resolveOrCreateParty(
     {
       companyId,
@@ -151,6 +169,7 @@ export async function linkAppUserToBrokerIdentity(
   input: BrokerRegistrationInput,
   database: BrokerDatabase = getPrisma(),
 ) {
+  validateBrokerDocument(input.document, input.partyType);
   const user = await database.appUser.findFirst({
     where: { id: appUserId, companyId },
     include: { party: true },
