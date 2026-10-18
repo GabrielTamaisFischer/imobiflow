@@ -170,8 +170,11 @@ export type ResolveOrCreatePartyResult = {
  * - Reaproveitamento é conservador: quando uma Party existente é devolvida,
  *   nenhum campo dela é sobrescrito pelos dados de entrada.
  */
-export async function resolveOrCreateParty(input: ResolveOrCreatePartyInput): Promise<ResolveOrCreatePartyResult> {
-  const prisma = getPrisma();
+export async function resolveOrCreateParty(
+  input: ResolveOrCreatePartyInput,
+  database: ReturnType<typeof getPrisma> = getPrisma(),
+): Promise<ResolveOrCreatePartyResult> {
+  const prisma = database;
   const companyId = requireCompanyId(input.companyId);
   const partyType = input.partyType ?? "individual";
   const taxIdNormalized = resolvePartyTaxIdNormalized(input.taxId, input.partyType);
@@ -234,8 +237,9 @@ export async function ensurePartyRole(
   companyId: string,
   partyId: string,
   role: PartyRoleName,
+  database: ReturnType<typeof getPrisma> = getPrisma(),
 ): Promise<EnsurePartyRoleResult> {
-  const prisma = getPrisma();
+  const prisma = database;
   const safeCompanyId = requireCompanyId(companyId);
   assertValidRole(role);
 
