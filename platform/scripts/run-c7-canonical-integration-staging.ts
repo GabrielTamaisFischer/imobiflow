@@ -183,7 +183,7 @@ async function run() {
         },
       },
       appUsers: true,
-      propertyOwners: true,
+      ownersLinked: true,
     },
   });
 
@@ -195,7 +195,7 @@ async function run() {
   record("[F] Party possui role tenant", roles.has("tenant"));
   record("[F] Party possui role broker", roles.has("broker"));
   record("[F] exatamente quatro roles canônicas", roles.size === 4, `count=${roles.size}`);
-  record("[F] um PropertyOwner operacional ligado", party?.propertyOwners.length === 1, `count=${party?.propertyOwners.length ?? 0}`);
+  record("[F] um PropertyOwner operacional ligado", party?.ownersLinked.length === 1, `count=${party?.ownersLinked.length ?? 0}`);
   record("[F] um AppUser operacional ligado", party?.appUsers.length === 1, `count=${party?.appUsers.length ?? 0}`);
 
   const roleRows = await prisma.partyRole.findMany({
