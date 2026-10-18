@@ -1301,23 +1301,31 @@ export async function getMysqlPropertyByExternalId(
 export async function createMysqlProperty(companyId: string, userId: string, input: PropertyInput) {
   const ownerId = await ensureMysqlOwner(companyId, input.owner_id || null);
   const code = input.code || (await generateMysqlPropertyCode(companyId));
+  const responsibleUserId = await ensureMysqlResponsibleUser(
+    companyId,
+    uuidOrNull(input.responsible_user_id || userId),
+  );
 
   await ensureMysqlPropertyCodeAvailable(companyId, code);
 
-  const property = await prisma().property.create({
-    data: {
-      ...(propertyDataFromInput(input) as any),
-      title: input.title?.trim() || "Rascunho sem título",
-      companyId,
-      ownerId,
-      createdBy: uuidOrNull(userId),
-      responsibleUserId: uuidOrNull(input.responsible_user_id || userId),
-      code,
-    },
-    include: propertyInclude,
+  const property = await prisma().$transaction(async (tx) => {
+    const created = await tx.property.create({
+      data: {
+        ...(propertyDataFromInput(input) as any),
+        title: input.title?.trim() || "Rascunho sem título",
+        companyId,
+        ownerId,
+        createdBy: uuidOrNull(userId),
+        responsibleUserId,
+        code,
+      },
+      include: propertyInclude,
+    });
+
+    await syncMainOwnerLink(tx, companyId, created.id, ownerId);
+    return created;
   });
 
-  if (ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
   await syncMysqlPropertyPublication(companyId, property.id);
   return getMysqlProperty(companyId, property.id);
 }
@@ -1334,17 +1342,30 @@ export async function updateMysqlProperty(companyId: string, propertyId: string,
   const commercialOnly = Boolean(before?.publishedAt)
     && !Object.keys(input).some((key) => readinessFields.includes(key));
 
-  const ownerId = input.owner_id !== undefined ? await ensureMysqlOwner(companyId, input.owner_id || null) : undefined;
-  const property = await prisma().property.update({
-    where: { id: propertyId },
-    data: {
-      ...(propertyDataFromInput(input, true) as any),
-      ...(input.owner_id !== undefined ? { ownerId } : {}),
-    },
-    include: propertyInclude,
+  const ownerId = input.owner_id !== undefined
+    ? await ensureMysqlOwner(companyId, input.owner_id || null)
+    : undefined;
+  const responsibleUserId = input.responsible_user_id !== undefined
+    ? await ensureMysqlResponsibleUser(companyId, uuidOrNull(input.responsible_user_id))
+    : undefined;
+
+  const property = await prisma().$transaction(async (tx) => {
+    const updated = await tx.property.update({
+      where: { id: propertyId },
+      data: {
+        ...(propertyDataFromInput(input, true) as any),
+        ...(input.owner_id !== undefined ? { ownerId } : {}),
+        ...(input.responsible_user_id !== undefined ? { responsibleUserId } : {}),
+      },
+      include: propertyInclude,
+    });
+
+    if (input.owner_id !== undefined) {
+      await syncMainOwnerLink(tx, companyId, propertyId, ownerId ?? null);
+    }
+    return updated;
   });
 
-  if (input.owner_id !== undefined && ownerId) await upsertOwnerLink(prisma(), companyId, property.id, ownerId);
   await syncMysqlPropertyPublication(companyId, property.id, { preserveExistingOnIncomplete: commercialOnly });
   return getMysqlProperty(companyId, property.id);
 }
@@ -2132,7 +2153,6 @@ function propertyDataFromInput(input: PropertyInput, partial = false) {
     ["latitude", "latitude", Number],
     ["longitude", "longitude", Number],
     ["condominium_name", "condominiumName", emptyToNull],
-    ["responsible_user_id", "responsibleUserId", uuidOrNull],
     ["bedrooms", "bedrooms", numberOrNull],
     ["bathrooms", "bathrooms", numberOrNull],
     ["suites", "suites", numberOrNull],
@@ -2228,7 +2248,39 @@ async function ensureMysqlPropertyCodeAvailable(companyId: string, code: string 
   }
 }
 
-async function upsertOwnerLink(client: PrismaClient, companyId: string, propertyId: string, ownerId: string) {
+type PropertyDatabase = PrismaClient | Prisma.TransactionClient;
+
+async function ensureMysqlResponsibleUser(companyId: string, userId: string | null) {
+  if (!userId) return null;
+  const user = await prisma().appUser.findFirst({
+    where: { id: userId, companyId, status: "active" },
+    select: { id: true },
+  });
+  if (!user) {
+    throw Object.assign(new Error("Responsável inválido para esta empresa."), {
+      statusCode: 422,
+      code: "INVALID_RESPONSIBLE_USER",
+    });
+  }
+  return user.id;
+}
+
+async function syncMainOwnerLink(
+  client: PropertyDatabase,
+  companyId: string,
+  propertyId: string,
+  ownerId: string | null,
+) {
+  // Property.ownerId é a fonte do proprietário principal. Links antigos são
+  // preservados como coproprietários/secundários, mas nunca podem continuar
+  // marcados como principal depois de uma troca/remoção.
+  await client.propertyOwnerLink.updateMany({
+    where: { companyId, propertyId, isMainOwner: true },
+    data: { isMainOwner: false },
+  });
+
+  if (!ownerId) return;
+
   await client.propertyOwnerLink.upsert({
     where: {
       companyId_propertyId_ownerId: { companyId, propertyId, ownerId },
