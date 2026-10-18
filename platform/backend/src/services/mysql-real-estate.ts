@@ -1308,23 +1308,31 @@ export async function createMysqlProperty(companyId: string, userId: string, inp
 
   await ensureMysqlPropertyCodeAvailable(companyId, code);
 
-  const property = await prisma().$transaction(async (tx) => {
-    const created = await tx.property.create({
-      data: {
-        ...(propertyDataFromInput(input) as any),
-        title: input.title?.trim() || "Rascunho sem título",
-        companyId,
-        ownerId,
-        createdBy: uuidOrNull(userId),
-        responsibleUserId,
-        code,
-      },
-      include: propertyInclude,
-    });
+  const property = await prisma().$transaction(
+    async (tx) => {
+      const created = await tx.property.create({
+        data: {
+          ...(propertyDataFromInput(input) as any),
+          title: input.title?.trim() || "Rascunho sem título",
+          companyId,
+          ownerId,
+          createdBy: uuidOrNull(userId),
+          responsibleUserId,
+          code,
+        },
+        include: propertyInclude,
+      });
 
-    await syncMainOwnerLink(tx, companyId, created.id, ownerId);
-    return created;
-  });
+      await syncMainOwnerLink(tx, companyId, created.id, ownerId);
+      return created;
+    },
+    {
+      // TiDB Cloud pode ultrapassar o default de 5s em picos de latência.
+      // Esta transação executa somente a criação do imóvel + sincronização
+      // do proprietário principal; ampliamos o timeout sem relaxar atomicidade.
+      timeout: 15_000,
+    },
+  );
 
   await syncMysqlPropertyPublication(companyId, property.id);
   return getMysqlProperty(companyId, property.id);
