@@ -15,9 +15,16 @@
  *    exportado no shell (este script não lê nenhum arquivo .env por conta
  *    própria — propositalmente, para nunca correr o risco de importar um
  *    módulo do backend antes do DATABASE_URL correto estar no ambiente).
- *  - NUNCA toca em empresa real: só prossegue se o banco tiver exatamente
- *    as 2 empresas sintéticas já usadas por run-import-500-railway-staging
- *    (nome contendo "staging"), mesma verificação de preflight.companiesAreSynthetic.
+ *  - NUNCA toca em empresa real: busca SOMENTE empresas com
+ *    isSynthetic = true (coluna real do schema, nunca um filtro por nome/
+ *    regex), exige pelo menos 2 (o banco de staging real tem hoje 91
+ *    empresas totais e 6 sintéticas — exigir "exatamente 2" quebraria sem
+ *    motivo de segurança; "pelo menos 2", ordenadas de forma estável por
+ *    createdAt+id e pegando as 2 primeiras, é suficiente e continua 100%
+ *    seguro porque o filtro nunca deixa de ser isSynthetic = true). Antes
+ *    de qualquer INSERT de QA, reconfirma em runtime companyA.isSynthetic,
+ *    companyB.isSynthetic e companyA.id !== companyB.id — qualquer falha
+ *    aborta sem tocar em nada.
  *  - Todo dado criado é sintético, marcado com um runKey único, e é
  *    removido em bloco finally — mesmo se o teste falhar no meio.
  *
@@ -79,21 +86,44 @@ function record(name: string, pass: boolean, detail?: string) {
   checks.push({ name, pass, detail });
 }
 
-async function preflightOnlySyntheticCompanies() {
-  const companies = await prisma.company.findMany({ select: { id: true, name: true } });
-  const synthetic = companies.length === 2 && companies.every((company) => /staging/i.test(company.name));
-  if (!synthetic) {
+async function preflightSelectTwoSyntheticCompanies() {
+  // Filtro explícito e seguro: SOMENTE isSynthetic = true (coluna real do
+  // schema — nunca nome/regex, nunca fallback para empresa real). O banco
+  // real de staging hoje tem 91 empresas totais e 6 com isSynthetic=true;
+  // "pelo menos 2" (nao "exatamente 2") e a pre-condicao correta aqui.
+  const syntheticCompanies = await prisma.company.findMany({
+    where: { isSynthetic: true },
+    select: { id: true, name: true, isSynthetic: true, createdAt: true },
+    // Ordenação determinística: sempre as mesmas 2 primeiras entre
+    // execuções, nunca uma ordem implícita do banco.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+
+  if (syntheticCompanies.length < 2) {
     throw new Error(
-      "O banco nao tem exatamente as 2 empresas sinteticas esperadas (mesma verificacao de run-import-500-railway-staging). " +
-        "Execucao interrompida para nunca arriscar tocar dado real.",
+      `Encontradas apenas ${syntheticCompanies.length} empresa(s) com isSynthetic=true; ` +
+        "e necessario pelo menos 2 para rodar o teste de isolamento de tenant. Execucao interrompida " +
+        "(nunca usa empresa real como fallback).",
     );
   }
-  return companies;
+
+  const [companyA, companyB] = syntheticCompanies;
+
+  // Reconfirmação em runtime ANTES de qualquer INSERT de QA — nunca confiar
+  // apenas no filtro da query. Qualquer uma destas condições falhando
+  // aborta imediatamente, sem tocar em nada.
+  if (companyA.isSynthetic !== true || companyB.isSynthetic !== true || companyA.id === companyB.id) {
+    throw new Error(
+      "Reconfirmacao em runtime falhou (isSynthetic ou unicidade de id entre companyA/companyB) — " +
+        "abortando antes de qualquer insercao de QA.",
+    );
+  }
+
+  return { companyA, companyB };
 }
 
 async function run() {
-  const companies = await preflightOnlySyntheticCompanies();
-  const [companyA, companyB] = companies;
+  const { companyA, companyB } = await preflightSelectTwoSyntheticCompanies();
 
   // Gera um CPF matematicamente valido e sintetico, derivado do runKey, para
   // nao colidir com nenhum outro teste/execucao.
@@ -190,9 +220,17 @@ try {
   exitCode = 1;
 } finally {
   await cleanup();
+  // Validação explícita pós-cleanup (exigência do escopo): o cleanup só é
+  // considerado bem-sucedido se NENHUM registro de QA desta execução
+  // sobrar. remainingParties é restrito ao runKey desta execução (nunca a
+  // Parties pré-existentes); remainingRoles é restrito aos ids criados
+  // nesta própria execução (nunca a PartyRoles pré-existentes).
   const remainingParties = await prisma.party.count({ where: { name: { contains: runKey } } });
-  const remainingRoles = createdPartyRoleIds.size > 0 ? await prisma.partyRole.count({ where: { id: { in: [...createdPartyRoleIds] } } }) : 0;
-  console.log(JSON.stringify({ cleanup: { remainingParties, remainingRoles } }, null, 2));
+  const remainingRoles =
+    createdPartyRoleIds.size > 0 ? await prisma.partyRole.count({ where: { id: { in: [...createdPartyRoleIds] } } }) : 0;
+  const cleanupOk = remainingParties === 0 && remainingRoles === 0;
+  if (!cleanupOk) exitCode = 1;
+  console.log(JSON.stringify({ cleanup: { remainingParties, remainingRoles, cleanupOk } }, null, 2));
   await prisma.$disconnect();
 }
 
