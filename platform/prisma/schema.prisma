@@ -27,6 +27,11 @@ model Company {
   accountProvisionings AccountProvisioning[]
   owners        PropertyOwner[]
   properties    Property[]
+  parties       Party[]
+  partyRoles    PartyRole[]
+  buyerProfiles BuyerProfile[]
+  tenantProfiles TenantProfile[]
+  brokerProfiles BrokerProfile[]
   companySites  CompanySite[]
   leads         Lead[]
   crmPipelines  CrmPipeline[]
@@ -422,9 +427,14 @@ model PropertyOwner {
   checks                OwnerCheck[]
   documentRecords       OwnerDocumentRecord[]
   conflicts             OwnerConflict[]
+  // C1.1 — vínculo aditivo opcional à identidade canônica Party; nunca
+  // obrigatório, nunca substitui PropertyOwner como fonte de verdade.
+  partyId             String?      @map("party_id") @db.Char(36)
+  party               Party?       @relation(fields: [companyId, partyId], references: [companyId, id], onDelete: Restrict)
 
   @@index([companyId, status])
   @@index([companyId, document])
+  @@index([companyId, partyId])
   @@map("property_owners")
 }
 
@@ -544,6 +554,139 @@ model OwnerConflict {
   @@index([companyId, ownerId, domain, field])
   @@index([companyId, detectedAt])
   @@map("owner_conflicts")
+}
+
+// C1.1 — Identidade canônica Party/PartyRole (IMOBIFLOW C1→C7).
+// Party = identidade civil/empresarial (pessoa física/jurídica), independente
+// de papel comercial. PartyRole = papel comercial (OWNER/BUYER/TENANT/BROKER/
+// GUARANTOR/LEGAL_REPRESENTATIVE) que uma Party assume para uma empresa.
+// PropertyOwner/OwnerProfile (P1) permanecem 100% intactos e são a fonte de
+// verdade operacional de Proprietários; partyId é um vínculo aditivo,
+// opcional, nunca carregado como obrigatório pelo código existente.
+//
+// Regra crítica (NUNCA violar): taxIdNormalized só é preenchido quando o
+// documento é um CPF/CNPJ válido. Documento ausente ou inválido => Party
+// independente com taxIdNormalized = NULL. Documentos inválidos (ex.:
+// "000.000.000-00") NUNCA são usados como chave de deduplicação/merge.
+//
+// Segurança multi-tenant estrutural: companyId é chave composta em
+// @@unique([companyId, id]) em Party e PartyRole, permitindo FKs compostas
+// (fields: [companyId, partyId], references: [companyId, id]) nas tabelas
+// filhas — torna estruturalmente impossível (nível de banco, não só
+// aplicação) uma linha referenciar uma Party/PartyRole de outra empresa.
+// Nos vínculos opcionais de entidades pré-existentes (PropertyOwner.partyId,
+// ContractParty.sourcePartyId) usamos onDelete: Restrict em vez de SetNull
+// nessa FK composta: companyId nessas tabelas é NOT NULL e compartilhado com
+// outras relações (ex.: Company), então SetNull exigiria permitir NULL em
+// companyId — o que quebraria isolamento e outras invariantes. Restrict
+// preserva a segurança estrutural sem exigir companyId nulo e sem risco de
+// apagar dados (deletar uma Party referenciada bloqueia a operação).
+model Party {
+  id              String   @id @default(uuid()) @db.Char(36)
+  companyId       String   @map("company_id") @db.Char(36)
+  partyType       String   @default("individual") @map("party_type") @db.VarChar(20)
+  name            String   @db.VarChar(180)
+  taxId           String?  @map("tax_id") @db.VarChar(40)
+  taxIdNormalized String?  @map("tax_id_normalized") @db.VarChar(20)
+  email           String?  @db.VarChar(180)
+  phone           String?  @db.VarChar(40)
+  whatsapp        String?  @db.VarChar(40)
+  addressJson     Json?    @map("address_json")
+  notes           String?  @db.Text
+  status          String   @default("active") @db.VarChar(40)
+  createdBy       String?  @map("created_by") @db.Char(36)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  roles           PartyRole[]
+  ownersLinked    PropertyOwner[]
+  contractSources ContractParty[] @relation("ContractPartySource")
+
+  @@unique([companyId, id])
+  // C1.1 (ajuste pós-auditoria) — unique tenant-safe para identidade
+  // documental válida: bloqueia CPF/CNPJ válido duplicado na MESMA empresa,
+  // permite o mesmo documento em empresas diferentes, e permite múltiplos
+  // NULL (documento ausente/inválido nunca é deduplicado — MySQL/TiDB trata
+  // cada NULL como distinto num índice único, então nenhuma concorrência
+  // consegue colidir duas Parties por documento inválido/ausente).
+  @@unique([companyId, taxIdNormalized])
+  @@index([companyId, status])
+  @@map("parties")
+}
+
+model PartyRole {
+  id        String   @id @default(uuid()) @db.Char(36)
+  companyId String   @map("company_id") @db.Char(36)
+  partyId   String   @map("party_id") @db.Char(36)
+  role      String   @db.VarChar(30)
+  status    String   @default("active") @db.VarChar(40)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  party         Party          @relation(fields: [companyId, partyId], references: [companyId, id], onDelete: Cascade)
+  buyerProfile  BuyerProfile?
+  tenantProfile TenantProfile?
+  brokerProfile BrokerProfile?
+
+  @@unique([companyId, id])
+  @@unique([companyId, partyId, role])
+  @@index([companyId, role])
+  @@map("party_roles")
+}
+
+model BuyerProfile {
+  id            String   @id @default(uuid()) @db.Char(36)
+  companyId     String   @map("company_id") @db.Char(36)
+  partyRoleId   String   @map("party_role_id") @db.Char(36)
+  interestJson  Json?    @map("interest_json")
+  financialJson Json?    @map("financial_json")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partyRole PartyRole @relation(fields: [companyId, partyRoleId], references: [companyId, id], onDelete: Cascade)
+
+  @@unique([companyId, partyRoleId])
+  @@map("buyer_profiles")
+}
+
+model TenantProfile {
+  id            String   @id @default(uuid()) @db.Char(36)
+  companyId     String   @map("company_id") @db.Char(36)
+  partyRoleId   String   @map("party_role_id") @db.Char(36)
+  rentalJson    Json?    @map("rental_json")
+  guarantorJson Json?    @map("guarantor_json")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partyRole PartyRole @relation(fields: [companyId, partyRoleId], references: [companyId, id], onDelete: Cascade)
+
+  @@unique([companyId, partyRoleId])
+  @@map("tenant_profiles")
+}
+
+// BrokerProfile = dados profissionais do corretor. Fotos/documentos usam o
+// mecanismo genérico já existente em StoredFile (entityType/entityId), sem
+// nova infraestrutura de storage. Credenciais de acesso continuam em AppUser
+// (fonte separada) — formalização completa do "AppUser = credenciais,
+// BrokerProfile = dados profissionais, Party = identidade civil" fica para C5.
+model BrokerProfile {
+  id          String   @id @default(uuid()) @db.Char(36)
+  companyId   String   @map("company_id") @db.Char(36)
+  partyRoleId String   @map("party_role_id") @db.Char(36)
+  creciNumber String?  @map("creci_number") @db.VarChar(40)
+  bioText     String?  @map("bio_text") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partyRole PartyRole @relation(fields: [companyId, partyRoleId], references: [companyId, id], onDelete: Cascade)
+
+  @@unique([companyId, partyRoleId])
+  @@map("broker_profiles")
 }
 
 model Property {
@@ -1289,10 +1432,15 @@ model ContractParty {
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   contract         Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   financialEntries  FinancialEntry[]
+  // C1.1 — vínculo aditivo opcional à identidade canônica Party (exibição/
+  // assinatura); o contrato nunca depende disso para funcionar.
+  sourcePartyId    String?  @map("source_party_id") @db.Char(36)
+  sourceParty      Party?   @relation("ContractPartySource", fields: [companyId, sourcePartyId], references: [companyId, id], onDelete: Restrict)
 
   @@index([companyId, contractId])
   @@index([companyId, partyType])
   @@index([companyId, partyType, portalEnabled])
+  @@index([companyId, sourcePartyId])
   @@map("contract_parties_mysql")
 }
 
