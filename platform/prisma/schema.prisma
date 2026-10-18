@@ -601,6 +601,7 @@ model Party {
   company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   roles           PartyRole[]
   ownersLinked    PropertyOwner[]
+  buyerLeads      Lead[]
   contractSources ContractParty[] @relation("ContractPartySource")
 
   @@unique([companyId, id])
@@ -1144,6 +1145,10 @@ model Lead {
   stageId           String?    @map("stage_id") @db.Char(36)
   assignedTo        String?    @map("assigned_to") @db.Char(36)
   createdBy         String?    @map("created_by") @db.Char(36)
+  // C3 — vínculo aditivo e opcional entre a oportunidade comercial (Lead)
+  // e a identidade canônica da pessoa/empresa (Party). Um mesmo Party pode
+  // possuir vários Leads; portanto este vínculo NÃO é unique.
+  partyId           String?    @map("party_id") @db.Char(36)
   name              String     @db.VarChar(180)
   email             String?    @db.VarChar(180)
   emailNormalized   String?    @map("email_normalized") @db.VarChar(180)
@@ -1162,6 +1167,7 @@ model Lead {
   createdAt         DateTime   @default(now()) @map("created_at")
   updatedAt         DateTime   @updatedAt @map("updated_at")
   company           Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  party             Party?     @relation(fields: [companyId, partyId], references: [companyId, id], onDelete: Restrict)
   assignee          AppUser?   @relation("LeadAssignee", fields: [assignedTo], references: [id], onDelete: SetNull)
   stage             CrmStage?  @relation(fields: [stageId], references: [id], onDelete: SetNull)
   events            LeadEvent[]
@@ -1173,6 +1179,7 @@ model Lead {
   proposals         Proposal[]
 
   @@index([companyId, source, createdAt])
+  @@index([companyId, partyId])
   @@index([companyId, stageId, status, createdAt])
   @@index([companyId, emailNormalized, status])
   @@index([companyId, phoneNormalized, status])
