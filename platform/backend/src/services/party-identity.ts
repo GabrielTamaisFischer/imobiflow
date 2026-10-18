@@ -135,6 +135,8 @@ export function resolvePartyTaxIdNormalized(
   return normalized;
 }
 
+type PartyIdentityDatabase = ReturnType<typeof getPrisma> | Prisma.TransactionClient;
+
 export type ResolveOrCreatePartyInput = {
   /** Deve vir de getAuthenticatedCompanyId(req) ou equivalente confiável. */
   companyId: string;
@@ -172,7 +174,7 @@ export type ResolveOrCreatePartyResult = {
  */
 export async function resolveOrCreateParty(
   input: ResolveOrCreatePartyInput,
-  database: ReturnType<typeof getPrisma> = getPrisma(),
+  database: PartyIdentityDatabase = getPrisma(),
 ): Promise<ResolveOrCreatePartyResult> {
   const prisma = database;
   const companyId = requireCompanyId(input.companyId);
@@ -237,7 +239,7 @@ export async function ensurePartyRole(
   companyId: string,
   partyId: string,
   role: PartyRoleName,
-  database: ReturnType<typeof getPrisma> = getPrisma(),
+  database: PartyIdentityDatabase = getPrisma(),
 ): Promise<EnsurePartyRoleResult> {
   const prisma = database;
   const safeCompanyId = requireCompanyId(companyId);
