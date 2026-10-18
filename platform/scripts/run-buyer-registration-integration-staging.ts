@@ -158,15 +158,16 @@ async function run() {
   record("[E] unicidade persistida PartyRole=1", roleCountA === 1, `count=${roleCountA}`);
   record("[E] unicidade persistida BuyerProfile=1", profileCountA === 1, `count=${profileCountA}`);
 
+  const concurrentCpf = computeValidCpf(String(Date.now()).slice(-8).padStart(9, "5"));
   const [raceA, raceB] = await Promise.all([
     resolveOrCreateBuyerIdentity(companyA.id, userId, {
       name: `${runKey} Race A`,
-      document: computeValidCpf(String(Date.now()).slice(-8).padStart(9, "5")),
+      document: concurrentCpf,
       partyType: "individual",
     }),
     resolveOrCreateBuyerIdentity(companyA.id, userId, {
       name: `${runKey} Race B`,
-      document: computeValidCpf(String(Date.now()).slice(-8).padStart(9, "5")),
+      document: concurrentCpf,
       partyType: "individual",
     }),
   ]);
