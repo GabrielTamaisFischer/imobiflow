@@ -138,6 +138,9 @@ export async function updateCompanyUser(input: {
         },
       });
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    // TiDB suporta REPEATABLE READ/READ COMMITTED, mas rejeita
+    // SERIALIZABLE (ERROR 8048). Mantemos isolamento explícito e compatível
+    // para proteger as verificações de papel/status dentro desta transação.
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
   );
 }
