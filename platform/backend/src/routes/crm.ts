@@ -5,6 +5,8 @@ import { getPrisma } from "../lib/website-builder-prisma.js";
 import { requireActiveSubscription, requireAuth, requireCompany, requirePermission, requireRole } from "../middleware/auth.js";
 import { ensureDefaultCrmPipeline } from "../services/crm-bootstrap.js";
 import { normalizeLeadEmail, normalizeLeadPhone } from "../services/lead-intake.js";
+import { isValidBrazilianDocument, normalizeBrazilianDocument } from "../services/brazilian-document.js";
+import { resolveOrCreateBuyerIdentity } from "../services/buyer-registration.js";
 import { saoPauloDayBounds } from "../services/crm-time.js";
 import {
   assertLeadAccess,
@@ -24,6 +26,8 @@ const leadSchema = z.object({
   name: z.string().trim().min(2).max(180),
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().min(3).max(40).optional().or(z.literal("")),
+  document: z.string().max(32).optional().or(z.literal("")),
+  party_type: z.enum(["individual", "company"]).optional(),
   source: z.string().max(80).optional().or(z.literal("")),
   interest_type: z.enum(["sale", "rent", "both", "not_defined"]).default("not_defined"),
   stage_id: z.string().uuid().optional(),
@@ -62,7 +66,8 @@ const leadAccessReplaceSchema = z.object({
     .refine(uniquePermissions, { message: "Permissões duplicadas não são permitidas." }),
 });
 const leadSelect = {
-  id: true, companyId: true, stageId: true, assignedTo: true, name: true, email: true, phone: true,
+  id: true, companyId: true, stageId: true, assignedTo: true, partyId: true, name: true, email: true, phone: true,
+  party: { select: { taxId: true, partyType: true } },
   source: true, interestType: true, status: true, lostReason: true, budgetCents: true,
   propertyReference: true, notes: true, firstContactAt: true, lastContactAt: true, nextFollowUpAt: true, createdAt: true, updatedAt: true,
 } as const;
@@ -72,6 +77,7 @@ const nil = (value?: string | null) => value || null;
 function serialize(lead: LeadRow) {
   return {
     id: lead.id, company_id: lead.companyId, stage_id: lead.stageId, assigned_to: lead.assignedTo,
+    party_id: lead.partyId, document: lead.party?.taxId ?? null, party_type: lead.party?.partyType ?? null,
     name: lead.name, email: lead.email, phone: lead.phone, source: lead.source,
     interest_type: lead.interestType, status: lead.status, lost_reason: lead.lostReason,
     budget_cents: lead.budgetCents, property_reference: lead.propertyReference, notes: lead.notes,
@@ -86,6 +92,28 @@ function notFound() {
 function invalid(message: string, code: string) {
   return Object.assign(new Error(message), { statusCode: 422, code });
 }
+
+function buyerDocumentChangeBlocked() {
+  return Object.assign(
+    new Error("Troca de CPF/CNPJ não é permitida nesta fase para um comprador já vinculado a uma identidade (Party)."),
+    { statusCode: 409, code: "BUYER_DOCUMENT_CHANGE_BLOCKED" },
+  );
+}
+
+function buyerPartyType(document: string, explicit?: "individual" | "company") {
+  if (explicit) return explicit;
+  return normalizeBrazilianDocument(document).length === 14 ? "company" : "individual";
+}
+
+function validateBuyerDocument(input: { document?: string; party_type?: "individual" | "company" }) {
+  const document = input.document?.trim();
+  if (!document) return;
+  const partyType = buyerPartyType(document, input.party_type);
+  if (!isValidBrazilianDocument(document, partyType)) {
+    throw invalid("CPF/CNPJ inválido para o tipo de pessoa.", "INVALID_BUYER_DOCUMENT");
+  }
+}
+
 function leadSharingDenied() {
   return Object.assign(new Error("Você não tem autorização para gerenciar o compartilhamento deste lead."), {
     statusCode: 403,
@@ -452,14 +480,54 @@ crmRouter.get("/leads/:id", requirePermission("crm.view"), async (req: RequestWi
 crmRouter.post("/leads", requirePermission("crm.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = leadSchema.parse(req.body);
+    validateBuyerDocument(input);
     const pipeline = await ensureDefaultCrmPipeline(companyId, userId);
     const stageId = await stageFor(companyId, input.stage_id ?? pipeline.stages[0]?.id);
     const assignedTo = input.assigned_to
       ? await assignedForRequest(req, input.assigned_to)
       : resolveScope(req.access!, "crm.manage") === "company" ? null : userId;
+
+    // C3 — só cria/vincula identidade canônica quando há CPF/CNPJ explícito.
+    // Lead sem documento (inclusive vindo do site) continua independente e
+    // pode receber lazy-link depois, evitando Parties duplicadas por nome,
+    // e-mail ou telefone.
+    const buyerIdentity = input.document?.trim()
+      ? await resolveOrCreateBuyerIdentity(companyId, userId, {
+          name: input.name,
+          document: input.document,
+          partyType: buyerPartyType(input.document, input.party_type),
+          email: input.email || null,
+          phone: input.phone || null,
+          notes: input.notes || null,
+        })
+      : null;
+
     const lead = await getPrisma().$transaction(async (tx) => {
-      const created = await tx.lead.create({ data: { companyId, createdBy: userId, stageId, assignedTo, name: input.name, ...inputData(input) }, select: leadSelect });
-      await tx.leadEvent.create({ data: { companyId, leadId: created.id, userId, eventType: "lead.created", payloadJson: { source: created.source, stage_id: created.stageId } as Prisma.InputJsonValue } });
+      const created = await tx.lead.create({
+        data: {
+          companyId,
+          createdBy: userId,
+          stageId,
+          assignedTo,
+          name: input.name,
+          ...inputData(input),
+          ...(buyerIdentity ? { partyId: buyerIdentity.party.id } : {}),
+        },
+        select: leadSelect,
+      });
+      await tx.leadEvent.create({
+        data: {
+          companyId,
+          leadId: created.id,
+          userId,
+          eventType: "lead.created",
+          payloadJson: {
+            source: created.source,
+            stage_id: created.stageId,
+            ...(created.partyId ? { party_id: created.partyId } : {}),
+          } as Prisma.InputJsonValue,
+        },
+      });
       return created;
     });
     res.status(201).json({ lead: serialize(lead) });
@@ -470,12 +538,59 @@ crmRouter.patch("/leads/:id", requirePermission("crm.manage"), async (req: Reque
   try {
     const companyId = req.access!.company.id, userId = req.access!.appUser.id, input = updateLeadSchema.parse(req.body);
     ensureStatusRules(input);
+    validateBuyerDocument(input);
     await assertLeadAccess(req.access!, req.params.id, "crm.manage", "EDIT");
-    const existing = await getPrisma().lead.findFirst({ where: { id: req.params.id, companyId }, select: { id: true, status: true, stageId: true, assignedTo: true } });
+    const existing = await getPrisma().lead.findFirst({
+      where: { id: req.params.id, companyId },
+      select: {
+        id: true,
+        status: true,
+        stageId: true,
+        assignedTo: true,
+        partyId: true,
+        name: true,
+        email: true,
+        phone: true,
+        party: { select: { taxId: true, partyType: true } },
+      },
+    });
     if (!existing) throw notFound();
+
+    let partyIdForUpdate: string | undefined;
+
+    if ("document" in input && existing.partyId) {
+      const incoming = normalizeBrazilianDocument(input.document || "");
+      const current = normalizeBrazilianDocument(existing.party?.taxId);
+      if (incoming !== current) throw buyerDocumentChangeBlocked();
+      // Mesmo documento: vínculo existente é preservado e nenhuma nova Party
+      // é resolvida/criada.
+    } else if ("document" in input && !existing.partyId && input.document?.trim()) {
+      // Lazy-link C3: Lead legado só ganha identidade quando CPF/CNPJ é
+      // fornecido explicitamente. Alterações de nome/telefone/e-mail sozinhas
+      // nunca criam Party.
+      const identity = await resolveOrCreateBuyerIdentity(companyId, userId, {
+        name: input.name?.trim() || existing.name,
+        document: input.document,
+        partyType: buyerPartyType(input.document, input.party_type),
+        email: input.email !== undefined ? input.email || null : existing.email,
+        phone: input.phone !== undefined ? input.phone || null : existing.phone,
+        notes: input.notes || null,
+      });
+      partyIdForUpdate = identity.party.id;
+    }
+
     const stageId = await stageFor(companyId, input.stage_id), assignedTo = await assignedForRequest(req, input.assigned_to);
     const lead = await getPrisma().$transaction(async (tx) => {
-      const updated = await tx.lead.update({ where: { id: existing.id }, data: { ...inputData(input), ...(input.stage_id !== undefined ? { stageId } : {}), ...(input.assigned_to !== undefined ? { assignedTo } : {}) }, select: leadSelect });
+      const updated = await tx.lead.update({
+        where: { id: existing.id },
+        data: {
+          ...inputData(input),
+          ...(input.stage_id !== undefined ? { stageId } : {}),
+          ...(input.assigned_to !== undefined ? { assignedTo } : {}),
+          ...(partyIdForUpdate !== undefined ? { partyId: partyIdForUpdate } : {}),
+        },
+        select: leadSelect,
+      });
       const eventType = input.status === "won" ? "lead.won" : input.status === "lost" ? "lead.lost" : input.stage_id !== undefined && input.stage_id !== existing.stageId ? "lead.stage_changed" : "lead.updated";
       const payload = eventType === "lead.lost"
         ? { reason: updated.lostReason }
