@@ -12,6 +12,7 @@
     "test": "vitest run --config ./vitest.config.ts --configLoader runner",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "prisma migrate deploy --schema prisma/schema.prisma",
+    "c3:migrate:staging": "node scripts/run-c3-staging-migration.mjs",
     "prisma:seed": "tsx prisma/seed.ts",
     "deploy:vercel": "powershell -ExecutionPolicy Bypass -File scripts/deploy-backend-vercel.ps1",
     "website-builder:preflight": "node scripts/website-builder-preflight.mjs",
