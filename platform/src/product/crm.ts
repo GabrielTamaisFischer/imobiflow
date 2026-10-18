@@ -28,6 +28,9 @@ export type Lead = {
   company_id: string;
   stage_id: string | null;
   assigned_to: string | null;
+  party_id: string | null;
+  document: string | null;
+  party_type: "individual" | "company" | null;
   name: string;
   email: string | null;
   phone: string | null;
@@ -49,6 +52,8 @@ export type LeadInput = {
   name: string;
   email?: string;
   phone?: string;
+  document?: string;
+  party_type?: "individual" | "company";
   source?: string;
   interest_type: Lead["interest_type"];
   stage_id?: string;
@@ -261,6 +266,9 @@ function createPreviewLead(input: LeadInput): Lead {
     company_id: "preview-company",
     stage_id: input.stage_id ?? previewStages[0].id,
     assigned_to: null,
+    party_id: null,
+    document: input.document || null,
+    party_type: input.document ? (input.party_type ?? (input.document.replace(/\D/g, "").length === 14 ? "company" : "individual")) : null,
     name: input.name,
     email: input.email || null,
     phone: input.phone || null,
