@@ -26,6 +26,9 @@ export type BuyerRegistrationInput = {
   name: string;
   document?: string | null;
   partyType?: "individual" | "company";
+  rg?: string | null;
+  nationality?: string | null;
+  occupation?: string | null;
   email?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
@@ -98,6 +101,9 @@ export async function resolveOrCreateBuyerIdentity(
     name: input.name.trim(),
     partyType: input.partyType ?? "individual",
     taxId: cleanOptionalString(input.document),
+    rg: cleanOptionalString(input.rg),
+    nationality: cleanOptionalString(input.nationality),
+    occupation: cleanOptionalString(input.occupation),
     email: cleanOptionalString(input.email),
     phone: cleanOptionalString(input.phone),
     whatsapp: cleanOptionalString(input.whatsapp),
