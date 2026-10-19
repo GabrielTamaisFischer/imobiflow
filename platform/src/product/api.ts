@@ -18,7 +18,13 @@ const isBrowserOnNonLocalHost =
 
 export const API_URL =
   configuredApiUrl ||
-  (isBrowserOnNonLocalHost ? "/api" : import.meta.env.DEV ? "http://localhost:3333" : "/api");
+  (typeof window !== "undefined"
+    ? "/api"
+    : isBrowserOnNonLocalHost
+      ? "/api"
+      : import.meta.env.DEV
+        ? "http://localhost:3333"
+        : "/api");
 export const API_SETUP_MESSAGE =
   "O acesso antecipado ao produto SaaS está em ativação. A equipe ImobiFlow está conectando a área interna ao ambiente seguro de autenticação, empresa e assinatura.";
 
