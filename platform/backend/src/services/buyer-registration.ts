@@ -29,6 +29,7 @@ export type BuyerRegistrationInput = {
   rg?: string | null;
   nationality?: string | null;
   occupation?: string | null;
+  addressJson?: Prisma.InputJsonValue | null;
   email?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
@@ -104,6 +105,7 @@ export async function resolveOrCreateBuyerIdentity(
     rg: cleanOptionalString(input.rg),
     nationality: cleanOptionalString(input.nationality),
     occupation: cleanOptionalString(input.occupation),
+    addressJson: input.addressJson ?? undefined,
     email: cleanOptionalString(input.email),
     phone: cleanOptionalString(input.phone),
     whatsapp: cleanOptionalString(input.whatsapp),
