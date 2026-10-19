@@ -3,6 +3,7 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { acceptInvite, validateInvitation } from "@/product/auth";
+import { formatInternationalPhone } from "@/product/registration-format";
 
 export const Route = createFileRoute("/aceitar-convite")({
   component: AcceptInvitePage,
@@ -103,6 +104,7 @@ function AcceptInvitePage() {
                   setForm((current) => ({ ...current, name: event.target.value }))
                 }
                 required
+                placeholder="+55 (11) 99999-9999"
                 className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
               />
             </label>
@@ -112,7 +114,7 @@ function AcceptInvitePage() {
               <input
                 value={form.phone}
                 onChange={(event) =>
-                  setForm((current) => ({ ...current, phone: event.target.value }))
+                  setForm((current) => ({ ...current, phone: formatInternationalPhone(event.target.value) }))
                 }
                 className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
               />
