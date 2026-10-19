@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
 import { formatBrazilianDocument, isValidBrazilianDocument } from "@/product/brazilian-document";
 import { getModuleByKey } from "@/product/app-modules";
-import { formatCep, formatCreci, formatInternationalPhone, normalizePhoneForStorage, phoneHint } from "@/product/registration-format";
+import { formatCep, formatCreci, formatInternationalPhone, formatRg, normalizePhoneForStorage, phoneHint } from "@/product/registration-format";
 import {
   createRegistration,
   listRegistrations,
@@ -166,7 +166,7 @@ function RegistrationForm({ role, singular, onCancel, onCreated }: { role: Regis
       <Field label="Nome / Razão social" name="name" required />
       <label className="space-y-1 text-sm"><span className="font-medium">Tipo de pessoa</span><select name="party_type" className={fieldClass}><option value="individual">Pessoa física</option><option value="company">Pessoa jurídica</option></select></label>
       <Field label="CPF / CNPJ" name="document" inputMode="numeric" onInput={(input)=>{input.value=formatBrazilianDocument(input.value);}} onBlur={documentLookup} />
-      <Field label="RG" name="rg" />
+      <Field label="RG" name="rg" inputMode="text" maxLength={12} placeholder="12.345.678-9" onInput={(input)=>{input.value=formatRg(input.value);}} />
       <Field label="Nacionalidade" name="nationality" defaultValue="Brasileira" />
       <Field label={role==="broker"?"Profissão / especialidade":"Profissão / ocupação atual"} name="occupation" />
       <Field label="E-mail pessoal" name="email" type="email" />
@@ -174,7 +174,7 @@ function RegistrationForm({ role, singular, onCancel, onCreated }: { role: Regis
       <PhoneField label="WhatsApp" name="whatsapp" />
       {role==="broker"?<>
         <Field label="CRECI" name="creci_number" onInput={(input)=>{input.value=formatCreci(input.value);}} />
-        <Field label="Cargo" name="job_title" placeholder="Ex.: Corretor de imóveis" />
+        <BrokerJobTitleSelect />
         <Field label="E-mail corporativo / acesso" name="access_email" type="email" />
         <Field label="Senha de acesso" name="access_password" type="password" placeholder="Mín. 12 caracteres, maiúscula, número e símbolo" />
         <label className="space-y-1 text-sm md:col-span-2 xl:col-span-3"><span className="font-medium">Bio profissional</span><textarea name="bio_text" rows={3} className="w-full rounded-md border border-input bg-background p-3 text-sm" /></label>
@@ -198,11 +198,221 @@ function RegistrationForm({ role, singular, onCancel, onCreated }: { role: Regis
 function Field({label,name,type="text",required,placeholder,inputMode,maxLength,defaultValue,onInput,onBlur}:{label:string;name:string;type?:string;required?:boolean;placeholder?:string;inputMode?:React.HTMLAttributes<HTMLInputElement>["inputMode"];maxLength?:number;defaultValue?:string;onInput?:(input:HTMLInputElement)=>void;onBlur?:(input:HTMLInputElement)=>void}){
  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type={type} required={required} placeholder={placeholder} inputMode={inputMode} maxLength={maxLength} defaultValue={defaultValue} onInput={(e)=>onInput?.(e.currentTarget)} onBlur={(e)=>void onBlur?.(e.currentTarget)} className={fieldClass}/></label>;
 }
+
+const brokerJobGroups = [
+  {
+    label: "Direção e sociedade",
+    options: [
+      "Sócio(a)",
+      "Sócio(a)-administrador(a)",
+      "Diretor(a) geral",
+      "Diretor(a) executivo(a)",
+      "Diretor(a) comercial",
+      "Diretor(a) de vendas",
+      "Diretor(a) de locação",
+      "Diretor(a) administrativo(a)",
+      "Diretor(a) financeiro(a)",
+      "Diretor(a) de marketing",
+      "Diretor(a) de operações",
+      "Diretor(a) jurídico(a)",
+    ],
+  },
+  {
+    label: "Gestão e liderança",
+    options: [
+      "Gerente geral",
+      "Gerente comercial",
+      "Gerente de vendas",
+      "Gerente de locação",
+      "Gerente de captação",
+      "Gerente administrativo(a)",
+      "Gerente financeiro(a)",
+      "Gerente de marketing",
+      "Gerente de operações",
+      "Coordenador(a) comercial",
+      "Coordenador(a) de vendas",
+      "Coordenador(a) de locação",
+      "Coordenador(a) de captação",
+      "Supervisor(a) comercial",
+      "Líder de equipe",
+    ],
+  },
+  {
+    label: "Comercial e relacionamento",
+    options: [
+      "Corretor(a) de imóveis",
+      "Corretor(a) de lançamentos",
+      "Corretor(a) de alto padrão",
+      "Corretor(a) de locação",
+      "Corretor(a) de vendas",
+      "Captador(a) de imóveis",
+      "Angariador(a) de imóveis",
+      "Avaliador(a) de imóveis",
+      "Consultor(a) imobiliário(a)",
+      "Executivo(a) de contas",
+      "Closer",
+      "SDR / Pré-vendas",
+      "Inside Sales",
+      "Atendimento comercial",
+      "Relacionamento com clientes",
+      "Customer Success",
+      "Pós-venda",
+      "Recepcionista",
+    ],
+  },
+  {
+    label: "Imóveis, cadastro e portais",
+    options: [
+      "Atualizador(a) de imóveis",
+      "Cadastrador(a) de imóveis",
+      "Gestor(a) de imóveis",
+      "Gestor(a) de portais imobiliários",
+      "Analista de anúncios imobiliários",
+      "Analista de qualidade de cadastro",
+      "Fotógrafo(a) imobiliário(a)",
+      "Videomaker imobiliário(a)",
+      "Operador(a) de drone",
+      "Home Stager",
+      "Assistente de captação",
+    ],
+  },
+  {
+    label: "Locação e administração de imóveis",
+    options: [
+      "Analista de locação",
+      "Assistente de locação",
+      "Administrador(a) de imóveis",
+      "Gestor(a) de locações",
+      "Analista de vistoria",
+      "Vistoriador(a)",
+      "Analista de manutenção",
+      "Assistente de manutenção",
+      "Analista de repasses",
+      "Analista de condomínio",
+      "Analista de garantias locatícias",
+      "Analista de cobrança",
+    ],
+  },
+  {
+    label: "Marketing e comunicação",
+    options: [
+      "Marketing",
+      "Analista de marketing",
+      "Coordenador(a) de marketing",
+      "Social Media",
+      "Gestor(a) de tráfego pago",
+      "Designer gráfico",
+      "Designer de conteúdo",
+      "Copywriter",
+      "Produtor(a) de conteúdo",
+      "Fotógrafo(a)",
+      "Videomaker",
+      "Editor(a) de vídeo",
+      "Assessor(a) de comunicação",
+      "CRM / Automação de marketing",
+      "Especialista em SEO",
+      "Especialista em mídia paga",
+    ],
+  },
+  {
+    label: "Administrativo e financeiro",
+    options: [
+      "Administrativo",
+      "Assistente administrativo(a)",
+      "Analista administrativo(a)",
+      "Financeiro",
+      "Assistente financeiro(a)",
+      "Analista financeiro(a)",
+      "Contas a pagar",
+      "Contas a receber",
+      "Faturamento",
+      "Tesouraria",
+      "Controladoria",
+      "Contador(a)",
+      "Auxiliar contábil",
+      "Compras",
+      "Facilities",
+      "Secretário(a)",
+    ],
+  },
+  {
+    label: "Jurídico, contratos e documentação",
+    options: [
+      "Jurídico",
+      "Advogado(a)",
+      "Analista jurídico(a)",
+      "Analista de contratos",
+      "Assistente de contratos",
+      "Documentação imobiliária",
+      "Analista documental",
+      "Despachante imobiliário",
+      "Regularização imobiliária",
+      "Compliance",
+      "Encarregado(a) LGPD / DPO",
+    ],
+  },
+  {
+    label: "Pessoas e suporte",
+    options: [
+      "Recursos Humanos",
+      "Analista de RH",
+      "Departamento Pessoal",
+      "Recrutador(a)",
+      "Treinamento e desenvolvimento",
+      "Assistente operacional",
+      "Auxiliar administrativo(a)",
+      "Estagiário(a)",
+      "Jovem aprendiz",
+    ],
+  },
+  {
+    label: "Tecnologia, dados e sistemas",
+    options: [
+      "TI / Suporte",
+      "Analista de sistemas",
+      "Administrador(a) de sistemas",
+      "Desenvolvedor(a)",
+      "Analista de dados",
+      "Business Intelligence (BI)",
+      "CRM / Sistemas imobiliários",
+      "Automação e IA",
+      "Segurança da informação",
+      "Product Manager",
+      "Product Designer / UX/UI",
+    ],
+  },
+  {
+    label: "Outros",
+    options: [
+      "Consultor(a)",
+      "Prestador(a) de serviço",
+      "Parceiro(a) comercial",
+      "Outro cargo",
+    ],
+  },
+] as const;
+
+function BrokerJobTitleSelect() {
+  return (
+    <label className="space-y-1 text-sm">
+      <span className="font-medium">Cargo / função na imobiliária</span>
+      <select name="job_title" defaultValue="" className={fieldClass}>
+        <option value="">Selecione o cargo</option>
+        {brokerJobGroups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.options.map((option) => <option key={option} value={option}>{option}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function PhoneField({label,name}:{label:string;name:string}){
  const [hint,setHint]=useState("");
  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type="tel" inputMode="tel" placeholder="(11) 99999-9999" onInput={(e)=>{e.currentTarget.value=formatInternationalPhone(e.currentTarget.value);setHint(phoneHint(e.currentTarget.value));}} className={fieldClass}/><span className="block min-h-4 text-xs text-muted-foreground">{hint||"Digite DDD + número"}</span></label>;
 }
 function setFormValue(form:HTMLFormElement,name:string,value:string){const field=form.elements.namedItem(name);if(field instanceof HTMLInputElement||field instanceof HTMLSelectElement||field instanceof HTMLTextAreaElement){field.value=value;field.dispatchEvent(new Event("input",{bubbles:true}));}}
 function applyAddress(form:HTMLFormElement,address:Record<string,string>){for(const field of ["zip_code","street","number","complement","neighborhood","city","state","country"]) if(address[field]) setFormValue(form,field,field==="zip_code"?formatCep(address[field]):address[field]);}
-function applyParty(form:HTMLFormElement,party:PartyRegistration["party"]){setFormValue(form,"name",party.name);setFormValue(form,"party_type",party.party_type);setFormValue(form,"rg",party.rg??"");setFormValue(form,"nationality",party.nationality??"");setFormValue(form,"occupation",party.occupation??"");setFormValue(form,"email",party.email??"");setFormValue(form,"phone",party.phone?formatInternationalPhone(party.phone):"");setFormValue(form,"whatsapp",party.whatsapp?formatInternationalPhone(party.whatsapp):"");applyAddress(form,Object.fromEntries(Object.entries(party.address_json??{}).filter(([,v])=>typeof v==="string")) as Record<string,string>);}
+function applyParty(form:HTMLFormElement,party:PartyRegistration["party"]){setFormValue(form,"name",party.name);setFormValue(form,"party_type",party.party_type);setFormValue(form,"rg",party.rg?formatRg(party.rg):"");setFormValue(form,"nationality",party.nationality??"");setFormValue(form,"occupation",party.occupation??"");setFormValue(form,"email",party.email??"");setFormValue(form,"phone",party.phone?formatInternationalPhone(party.phone):"");setFormValue(form,"whatsapp",party.whatsapp?formatInternationalPhone(party.whatsapp):"");applyAddress(form,Object.fromEntries(Object.entries(party.address_json??{}).filter(([,v])=>typeof v==="string")) as Record<string,string>);}
 function RegistrationCard({item}:{item:PartyRegistration}){const {party,profile,role,linked_users:linkedUsers}=item;const roleLabel=role==="buyer"?"Comprador":role==="tenant"?"Inquilino":"Corretor";return <article className="rounded-lg border border-border bg-card p-4"><div className="flex items-start gap-3">{profile?.photo_url?<img src={profile.photo_url} alt="" className="h-12 w-12 rounded-full object-cover"/>:<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"><UserRound className="h-5 w-5"/></div>}<div className="min-w-0"><h2 className="truncate text-sm font-semibold">{party.name}</h2><p className="mt-1 text-xs text-muted-foreground">{roleLabel} · {party.party_type==="company"?"Pessoa jurídica":"Pessoa física"}</p></div></div><div className="mt-4 space-y-1 text-sm text-muted-foreground">{party.document?<p className="truncate">Documento: {formatBrazilianDocument(party.document)}</p>:null}{party.whatsapp||party.phone?<p className="truncate">Contato: {formatInternationalPhone(party.whatsapp||party.phone||"")}</p>:null}{party.email?<p className="truncate">E-mail: {party.email}</p>:null}{profile?.creci_number?<p className="truncate">CRECI: {formatCreci(profile.creci_number)}</p>:null}{profile?.job_title?<p className="truncate">Cargo: {profile.job_title}</p>:null}</div>{role==="broker"?<div className="mt-4 rounded-md border border-border bg-background p-3"><p className="text-xs font-semibold">Acesso à plataforma</p><p className="mt-1 text-xs text-muted-foreground">{linkedUsers.length?linkedUsers.map((u)=>`${u.email} · ${u.status}`).join(" | "):"Sem usuário de acesso vinculado."}</p></div>:null}</article>;}
