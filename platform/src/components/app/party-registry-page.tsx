@@ -4,7 +4,7 @@ import { EmptyState } from "@/components/app/empty-state";
 import { ModulePage } from "@/components/app/module-page";
 import { formatBrazilianDocument, isValidBrazilianDocument } from "@/product/brazilian-document";
 import { getModuleByKey } from "@/product/app-modules";
-import { formatCep, formatCreci, formatInternationalPhone, phoneHint } from "@/product/registration-format";
+import { formatCep, formatCreci, formatInternationalPhone, normalizePhoneForStorage, phoneHint } from "@/product/registration-format";
 import {
   createRegistration,
   listRegistrations,
@@ -126,8 +126,7 @@ function RegistrationForm({ role, singular, onCancel, onCreated }: { role: Regis
     try {
       const result=await lookupRegistrationCep(input.value);
       applyAddress(form,result.address);
-      setLookupStatus(`CEP localizado${result.address.ddd ? ` · DDD ${result.address.ddd}` : ""}. Informe número e complemento.`);
-      const number=form.elements.namedItem("number"); if(number instanceof HTMLElement) number.focus();
+      setLookupStatus(`CEP localizado${result.address.ddd ? ` · DDD ${result.address.ddd}` : ""}. Confira o endereço e informe número/complemento quando necessário.`);
     } catch(err){setLookupStatus(err instanceof Error?err.message:"Não foi possível consultar o CEP.");}
   }
 
@@ -142,8 +141,8 @@ function RegistrationForm({ role, singular, onCancel, onCreated }: { role: Regis
       nationality:String(form.get("nationality")??"").trim(),
       occupation:String(form.get("occupation")??"").trim(),
       email:String(form.get("email")??"").trim(),
-      phone:String(form.get("phone")??"").trim(),
-      whatsapp:String(form.get("whatsapp")??"").trim(),
+      phone:normalizePhoneForStorage(String(form.get("phone")??"").trim()),
+      whatsapp:normalizePhoneForStorage(String(form.get("whatsapp")??"").trim()),
       address_json:{zip_code:String(form.get("zip_code")??"").trim(),street:String(form.get("street")??"").trim(),number:String(form.get("number")??"").trim(),complement:String(form.get("complement")??"").trim(),neighborhood:String(form.get("neighborhood")??"").trim(),city:String(form.get("city")??"").trim(),state:String(form.get("state")??"").trim(),country:String(form.get("country")??"Brasil").trim()},
     };
     if(role==="broker"){input.creci_number=String(form.get("creci_number")??"").trim();input.job_title=String(form.get("job_title")??"").trim();input.bio_text=String(form.get("bio_text")??"").trim();input.access_email=String(form.get("access_email")??"").trim();input.access_password=String(form.get("access_password")??"");}
@@ -201,7 +200,7 @@ function Field({label,name,type="text",required,placeholder,inputMode,maxLength,
 }
 function PhoneField({label,name}:{label:string;name:string}){
  const [hint,setHint]=useState("");
- return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type="tel" inputMode="tel" placeholder="+55 (11) 99999-9999" onInput={(e)=>{e.currentTarget.value=formatInternationalPhone(e.currentTarget.value);setHint(phoneHint(e.currentTarget.value));}} className={fieldClass}/><span className="block min-h-4 text-xs text-muted-foreground">{hint||"Código do país + DDD + número"}</span></label>;
+ return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type="tel" inputMode="tel" placeholder="(11) 99999-9999" onInput={(e)=>{e.currentTarget.value=formatInternationalPhone(e.currentTarget.value);setHint(phoneHint(e.currentTarget.value));}} className={fieldClass}/><span className="block min-h-4 text-xs text-muted-foreground">{hint||"Digite DDD + número"}</span></label>;
 }
 function setFormValue(form:HTMLFormElement,name:string,value:string){const field=form.elements.namedItem(name);if(field instanceof HTMLInputElement||field instanceof HTMLSelectElement||field instanceof HTMLTextAreaElement){field.value=value;field.dispatchEvent(new Event("input",{bubbles:true}));}}
 function applyAddress(form:HTMLFormElement,address:Record<string,string>){for(const field of ["zip_code","street","number","complement","neighborhood","city","state","country"]) if(address[field]) setFormValue(form,field,field==="zip_code"?formatCep(address[field]):address[field]);}
