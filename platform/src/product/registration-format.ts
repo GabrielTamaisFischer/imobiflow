@@ -112,6 +112,15 @@ export function phoneHint(value: string) {
   return "Digite DDD + número";
 }
 
+export function formatRg(value: string) {
+  const compact = value.toUpperCase().replace(/[^0-9X]/g, "").slice(0, 9);
+  if (!compact) return "";
+  if (compact.length <= 2) return compact;
+  if (compact.length <= 5) return `${compact.slice(0, 2)}.${compact.slice(2)}`;
+  if (compact.length <= 8) return `${compact.slice(0, 2)}.${compact.slice(2, 5)}.${compact.slice(5)}`;
+  return `${compact.slice(0, 2)}.${compact.slice(2, 5)}.${compact.slice(5, 8)}-${compact.slice(8)}`;
+}
+
 export function formatCreci(value: string) {
   const upper = value.toUpperCase().replace(/[^0-9A-Z-]/g, "").slice(0, 16);
   const compact = upper.replace(/-/g, "");
