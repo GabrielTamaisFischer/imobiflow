@@ -1,0 +1,8 @@
+ALTER TABLE parties
+  ADD COLUMN rg VARCHAR(40) NULL,
+  ADD COLUMN nationality VARCHAR(80) NULL,
+  ADD COLUMN occupation VARCHAR(120) NULL;
+
+ALTER TABLE broker_profiles
+  ADD COLUMN job_title VARCHAR(120) NULL,
+  ADD COLUMN photo_url VARCHAR(1200) NULL;
