@@ -47,6 +47,12 @@ const rules: Record<StoragePurpose, UploadRule> = {
     maxBytes: 4 * MiB,
     resourceType: "image",
   },
+  profile_photo: {
+    mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
+    extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
+    maxBytes: 5 * MiB,
+    resourceType: "image",
+  },
   // Fase 4D: documentos do proprietário (purpose=owner_document no
   // StoredFile) reaproveitam este mesmo StoragePurpose "document" — mas
   // muitos documentos reais de proprietário são fotos/scans (RG, CNH,
