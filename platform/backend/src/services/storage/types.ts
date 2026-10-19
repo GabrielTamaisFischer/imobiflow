@@ -9,6 +9,7 @@ export type StoragePurpose =
   | "property_floor_plan"
   | "website_asset"
   | "website_logo"
+  | "profile_photo"
   | "document"
   | "contract_document"
   | "signed_contract"
