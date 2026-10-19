@@ -66,13 +66,43 @@ export function corsOrigins() {
   return origins;
 }
 
+export function corsOriginAllowed(origin: string | undefined) {
+  // Requests sem Origin (health checks, curl, server-to-server) continuam válidos.
+  if (!origin) return true;
+
+  if (corsOrigins().includes(origin)) return true;
+
+  // Em desenvolvimento, o Vite pode escolher 3000, 3001, 5173 etc.
+  // Liberamos apenas loopback local em qualquer porta, mantendo staging/producao
+  // presos à allowlist explícita acima.
+  if (env.NODE_ENV !== "production") {
+    try {
+      const url = new URL(origin);
+      return (
+        (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1") &&
+        (url.protocol === "http:" || url.protocol === "https:")
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export function createApp() {
   const app = express();
 
   app.use(helmet());
   app.use(
     cors({
-      origin: corsOrigins(),
+      origin(origin, callback) {
+        if (corsOriginAllowed(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error(`Origem CORS nao permitida: ${origin ?? "sem origem"}`));
+      },
       credentials: true,
     }),
   );
