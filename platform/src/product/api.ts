@@ -69,7 +69,11 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const error = payload as ApiError | null;
-    throw Object.assign(new Error(error?.message ?? "Falha na solicitação."), {
+    const fallbackMessage =
+      import.meta.env.DEV
+        ? `Falha na solicitação (HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}).`
+        : "Falha na solicitação.";
+    throw Object.assign(new Error(error?.message ?? fallbackMessage), {
       status: response.status,
       code: error?.error,
       payload: error,
