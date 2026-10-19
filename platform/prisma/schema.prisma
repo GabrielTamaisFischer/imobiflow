@@ -596,6 +596,9 @@ model Party {
   name            String   @db.VarChar(180)
   taxId           String?  @map("tax_id") @db.VarChar(40)
   taxIdNormalized String?  @map("tax_id_normalized") @db.VarChar(20)
+  rg              String?  @db.VarChar(40)
+  nationality     String?  @db.VarChar(80)
+  occupation      String?  @db.VarChar(120)
   email           String?  @db.VarChar(180)
   phone           String?  @db.VarChar(40)
   whatsapp        String?  @db.VarChar(40)
@@ -688,6 +691,8 @@ model BrokerProfile {
   companyId   String   @map("company_id") @db.Char(36)
   partyRoleId String   @map("party_role_id") @db.Char(36)
   creciNumber String?  @map("creci_number") @db.VarChar(40)
+  jobTitle    String?  @map("job_title") @db.VarChar(120)
+  photoUrl    String?  @map("photo_url") @db.VarChar(1200)
   bioText     String?  @map("bio_text") @db.Text
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
