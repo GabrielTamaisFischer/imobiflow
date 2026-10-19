@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   formatBrazilianDocument,
   isValidBrazilianDocument,
@@ -21,7 +21,6 @@ export function OwnerFields({
   nameRequired?: boolean;
 }) {
   const [cepStatus, setCepStatus] = useState<"idle" | "loading" | "found" | "error">("idle");
-  const abortRef = useRef<AbortController | null>(null);
   const address = defaults?.address_json ?? {};
   const name = (field: string) => `${prefix}${field}`;
   const addressValue = (field: string) => typeof address[field] === "string" ? String(address[field]) : "";
@@ -43,8 +42,6 @@ export function OwnerFields({
       setFormValue(form, name("state"), data.state ?? "");
       setFormValue(form, name("country"), data.country ?? "Brasil");
       setCepStatus("found");
-      const numberField = form.elements.namedItem(name("number"));
-      if (numberField instanceof HTMLElement) numberField.focus();
     } catch {
       setCepStatus("error");
     }
@@ -138,7 +135,7 @@ function OwnerSelect({ name, label, defaultValue, options }: { name: string; lab
 
 function OwnerField({ name, label, type = "text", required, defaultValue, inputMode, maxLength, format, onInput, onBlur }: { name: string; label: string; type?: string; required?: boolean; defaultValue?: string; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; maxLength?: number; format?: "phone"; onInput?: (input: HTMLInputElement) => void; onBlur?: (input: HTMLInputElement) => void }) {
   const [hint, setHint] = useState("");
-  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type={type} required={required} defaultValue={defaultValue} inputMode={inputMode} maxLength={maxLength} onInput={(event) => { if (format === "phone") { event.currentTarget.value = formatInternationalPhone(event.currentTarget.value); setHint(phoneHint(event.currentTarget.value)); } onInput?.(event.currentTarget); }} onBlur={(event) => onBlur?.(event.currentTarget)} className={fieldClass} />{format === "phone" ? <span className="block min-h-4 text-xs text-muted-foreground">{hint || "Código do país + DDD + número"}</span> : null}</label>;
+  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type={type} required={required} defaultValue={defaultValue} inputMode={inputMode} maxLength={maxLength} onInput={(event) => { if (format === "phone") { event.currentTarget.value = formatInternationalPhone(event.currentTarget.value); setHint(phoneHint(event.currentTarget.value)); } onInput?.(event.currentTarget); }} onBlur={(event) => onBlur?.(event.currentTarget)} className={fieldClass} />{format === "phone" ? <span className="block min-h-4 text-xs text-muted-foreground">{hint || "Digite DDD + número"}</span> : null}</label>;
 }
 
 function setFormValue(form: HTMLFormElement, name: string, value: string) {
