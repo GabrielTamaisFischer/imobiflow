@@ -9,11 +9,16 @@ export type BrokerRegistrationInput = {
   name: string;
   document?: string | null;
   partyType?: "individual" | "company";
+  rg?: string | null;
+  nationality?: string | null;
+  occupation?: string | null;
   email?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
   notes?: string | null;
   creciNumber?: string | null;
+  jobTitle?: string | null;
+  photoUrl?: string | null;
   bioText?: string | null;
 };
 
@@ -56,7 +61,7 @@ function isUniqueConstraintViolation(error: unknown): boolean {
 async function ensureBrokerProfile(
   companyId: string,
   partyRoleId: string,
-  input: Pick<BrokerRegistrationInput, "creciNumber" | "bioText">,
+  input: Pick<BrokerRegistrationInput, "creciNumber" | "jobTitle" | "photoUrl" | "bioText">,
   database: BrokerDatabase,
 ) {
   const existing = await database.brokerProfile.findFirst({
@@ -65,15 +70,21 @@ async function ensureBrokerProfile(
 
   if (existing) {
     const nextCreci = cleanOptionalString(input.creciNumber);
+    const nextJobTitle = cleanOptionalString(input.jobTitle);
+    const nextPhotoUrl = cleanOptionalString(input.photoUrl);
     const nextBio = cleanOptionalString(input.bioText);
     if (
       (nextCreci !== null && nextCreci !== existing.creciNumber) ||
+      (nextJobTitle !== null && nextJobTitle !== existing.jobTitle) ||
+      (nextPhotoUrl !== null && nextPhotoUrl !== existing.photoUrl) ||
       (nextBio !== null && nextBio !== existing.bioText)
     ) {
       const updated = await database.brokerProfile.update({
         where: { id: existing.id },
         data: {
           ...(nextCreci !== null ? { creciNumber: nextCreci } : {}),
+          ...(nextJobTitle !== null ? { jobTitle: nextJobTitle } : {}),
+          ...(nextPhotoUrl !== null ? { photoUrl: nextPhotoUrl } : {}),
           ...(nextBio !== null ? { bioText: nextBio } : {}),
         },
       });
@@ -88,6 +99,8 @@ async function ensureBrokerProfile(
         companyId,
         partyRoleId,
         creciNumber: cleanOptionalString(input.creciNumber),
+        jobTitle: cleanOptionalString(input.jobTitle),
+        photoUrl: cleanOptionalString(input.photoUrl),
         bioText: cleanOptionalString(input.bioText),
       },
     });
