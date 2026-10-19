@@ -5,7 +5,6 @@ import { registerFreeAccount } from "@/product/auth";
 import { formatInternationalPhone } from "@/product/registration-format";
 import { isFreeRegistrationUiEnabled } from "@/product/registration-access";
 import { formatBrazilianDocument } from "@/product/brazilian-document";
-import { formatInternationalPhone } from "@/product/registration-format";
 import { isSubscriptionActive } from "@/product/subscription";
 
 export const Route = createFileRoute("/cadastro")({ component: RegisterPage });
