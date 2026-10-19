@@ -143,6 +143,9 @@ export type ResolveOrCreatePartyInput = {
   name: string;
   partyType?: "individual" | "company";
   taxId?: string | null;
+  rg?: string | null;
+  nationality?: string | null;
+  occupation?: string | null;
   email?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
@@ -195,6 +198,9 @@ export async function resolveOrCreateParty(
         name: input.name,
         taxId: input.taxId ?? null,
         taxIdNormalized,
+        rg: input.rg ?? null,
+        nationality: input.nationality ?? null,
+        occupation: input.occupation ?? null,
         email: input.email ?? null,
         phone: input.phone ?? null,
         whatsapp: input.whatsapp ?? null,
