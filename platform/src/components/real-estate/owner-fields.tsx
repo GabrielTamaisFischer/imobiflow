@@ -4,6 +4,8 @@ import {
   isValidBrazilianDocument,
 } from "@/product/brazilian-document";
 import type { PropertyOwner } from "@/product/real-estate";
+import { formatCep, formatInternationalPhone, phoneHint } from "@/product/registration-format";
+import { lookupRegistrationCep, lookupRegistrationDocument } from "@/product/registrations";
 
 const fieldClass = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring";
 
@@ -30,31 +32,45 @@ export function OwnerFields({
       setCepStatus(cep.length ? "error" : "idle");
       return;
     }
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const timeout = window.setTimeout(() => controller.abort(), 6000);
     setCepStatus("loading");
     try {
-      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { signal: controller.signal });
-      if (!response.ok) throw new Error("CEP indisponível");
-      const data = await response.json() as { erro?: boolean; logradouro?: string; bairro?: string; localidade?: string; uf?: string };
-      if (data.erro) throw new Error("CEP não encontrado");
+      const { address: data } = await lookupRegistrationCep(input.value);
       const form = input.form;
       if (!form) return;
-      setFormValue(form, name("street"), data.logradouro ?? "");
-      setFormValue(form, name("neighborhood"), data.bairro ?? "");
-      setFormValue(form, name("city"), data.localidade ?? "");
-      setFormValue(form, name("state"), data.uf ?? "");
-      setFormValue(form, name("country"), "Brasil");
+      setFormValue(form, name("street"), data.street ?? "");
+      setFormValue(form, name("neighborhood"), data.neighborhood ?? "");
+      setFormValue(form, name("city"), data.city ?? "");
+      setFormValue(form, name("state"), data.state ?? "");
+      setFormValue(form, name("country"), data.country ?? "Brasil");
       setCepStatus("found");
       const numberField = form.elements.namedItem(name("number"));
       if (numberField instanceof HTMLElement) numberField.focus();
     } catch {
-      if (!controller.signal.aborted) setCepStatus("error");
-    } finally {
-      window.clearTimeout(timeout);
+      setCepStatus("error");
+    }
+  }
+
+  async function lookupDocument(input: HTMLInputElement) {
+    const digits = input.value.replace(/\D/g, "");
+    if (![11, 14].includes(digits.length)) return;
+    try {
+      const result = await lookupRegistrationDocument(input.value);
+      const form = input.form;
+      if (!form) return;
+      if (result.type === "cpf" && result.party) {
+        setFormValue(form, name("name"), result.party.name);
+      }
+      if (result.type === "cnpj" && result.company) {
+        setFormValue(form, name("name"), result.company.name);
+        if (result.company.email) setFormValue(form, name("email"), result.company.email);
+        if (result.company.phone) setFormValue(form, name("phone"), formatInternationalPhone(result.company.phone));
+        for (const field of ["zip_code","street","number","complement","neighborhood","city","state","country"]) {
+          const value = result.company.address[field];
+          if (value) setFormValue(form, name(field), field === "zip_code" ? formatCep(value) : value);
+        }
+      }
+    } catch {
+      // lookup assistido: validação local continua sendo a fonte para permitir salvar.
     }
   }
 
@@ -76,6 +92,7 @@ export function OwnerFields({
             : undefined;
           input.setCustomValidity(isValidBrazilianDocument(input.value, ownerType) ? "" : "Informe um CPF ou CNPJ válido.");
         }}
+        onBlur={(input) => void lookupDocument(input)}
       />
       <OwnerField name={name("email")} label="E-mail" type="email" defaultValue={defaults?.email ?? ""} />
       <OwnerField name={name("phone")} label="Telefone" inputMode="tel" defaultValue={defaults?.phone ?? ""} format="phone" />
@@ -119,8 +136,9 @@ function OwnerSelect({ name, label, defaultValue, options }: { name: string; lab
   return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><select name={name} defaultValue={defaultValue} className={fieldClass}>{options.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>;
 }
 
-function OwnerField({ name, label, type = "text", required, defaultValue, inputMode, maxLength, format, onInput }: { name: string; label: string; type?: string; required?: boolean; defaultValue?: string; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; maxLength?: number; format?: "phone"; onInput?: (input: HTMLInputElement) => void }) {
-  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type={type} required={required} defaultValue={defaultValue} inputMode={inputMode} maxLength={maxLength} onInput={(event) => { if (format === "phone") event.currentTarget.value = formatPhone(event.currentTarget.value); onInput?.(event.currentTarget); }} className={fieldClass} /></label>;
+function OwnerField({ name, label, type = "text", required, defaultValue, inputMode, maxLength, format, onInput, onBlur }: { name: string; label: string; type?: string; required?: boolean; defaultValue?: string; inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"]; maxLength?: number; format?: "phone"; onInput?: (input: HTMLInputElement) => void; onBlur?: (input: HTMLInputElement) => void }) {
+  const [hint, setHint] = useState("");
+  return <label className="space-y-1 text-sm"><span className="font-medium">{label}</span><input name={name} type={type} required={required} defaultValue={defaultValue} inputMode={inputMode} maxLength={maxLength} onInput={(event) => { if (format === "phone") { event.currentTarget.value = formatInternationalPhone(event.currentTarget.value); setHint(phoneHint(event.currentTarget.value)); } onInput?.(event.currentTarget); }} onBlur={(event) => onBlur?.(event.currentTarget)} className={fieldClass} />{format === "phone" ? <span className="block min-h-4 text-xs text-muted-foreground">{hint || "Código do país + DDD + número"}</span> : null}</label>;
 }
 
 function setFormValue(form: HTMLFormElement, name: string, value: string) {
@@ -128,13 +146,3 @@ function setFormValue(form: HTMLFormElement, name: string, value: string) {
   if (field instanceof HTMLInputElement) field.value = value;
 }
 
-function formatCep(value: string) {
-  return value.replace(/\D/g, "").slice(0, 8).replace(/^(\d{5})(\d)/, "$1-$2");
-}
-
-function formatPhone(value: string) {
-  const digits = value.replace(/\D/g, "").slice(0, 11);
-  return digits.length <= 10
-    ? digits.replace(/^(\d{2})(\d)/, "($1) $2").replace(/(\d{4})(\d)/, "$1-$2")
-    : digits.replace(/^(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2");
-}
