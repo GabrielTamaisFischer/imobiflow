@@ -24,6 +24,19 @@ export const config = {
 
 export default function handler(req: any, res: any) {
   const originalUrl = typeof req.url === "string" ? req.url : "/";
-  req.url = originalUrl.replace(/^\/api(?=\/|$)/, "") || "/";
+  const parsed = new URL(originalUrl, "https://imobiflow.local");
+  const rewrittenPath =
+    typeof req.query?.__imobiflow_path === "string"
+      ? `/${req.query.__imobiflow_path.replace(/^\\/+/, "")}`
+      : null;
+
+  if (rewrittenPath) {
+    parsed.searchParams.delete("__imobiflow_path");
+    const query = parsed.searchParams.toString();
+    req.url = `${rewrittenPath}${query ? `?${query}` : ""}`;
+  } else {
+    req.url = originalUrl.replace(/^\/api(?=\/|$)/, "") || "/";
+  }
+
   return app(req, res);
 }
