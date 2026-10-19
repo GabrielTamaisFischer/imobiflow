@@ -105,6 +105,8 @@ export function buildStorageFolder(input: {
       return `${root}/${companyId}/properties/${sanitizeSegment(input.propertyId ?? "shared")}/documents`;
     case "website_logo":
       return `${root}/${companyId}/logos`;
+    case "profile_photo":
+      return `${root}/${companyId}/profiles`;
     case "document":
       return input.ownerId
         ? `${root}/${companyId}/owners/${sanitizeSegment(input.ownerId)}/documents`
