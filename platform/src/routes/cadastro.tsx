@@ -2,7 +2,10 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { registerFreeAccount } from "@/product/auth";
+import { formatInternationalPhone } from "@/product/registration-format";
 import { isFreeRegistrationUiEnabled } from "@/product/registration-access";
+import { formatBrazilianDocument } from "@/product/brazilian-document";
+import { formatInternationalPhone } from "@/product/registration-format";
 import { isSubscriptionActive } from "@/product/subscription";
 
 export const Route = createFileRoute("/cadastro")({ component: RegisterPage });
@@ -125,6 +128,8 @@ function FreeRegistrationForm() {
               <input
                 name="company_document"
                 type="text"
+                inputMode="numeric"
+                onInput={(event) => { event.currentTarget.value = formatBrazilianDocument(event.currentTarget.value); }}
                 className="mt-2 h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
             </label>
@@ -133,6 +138,8 @@ function FreeRegistrationForm() {
               <input
                 name="phone"
                 type="tel"
+                placeholder="+55 (11) 99999-9999"
+                onInput={(event) => { event.currentTarget.value = formatInternationalPhone(event.currentTarget.value); }}
                 className="mt-2 h-11 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
             </label>
