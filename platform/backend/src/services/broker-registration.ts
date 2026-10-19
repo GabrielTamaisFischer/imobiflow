@@ -12,6 +12,7 @@ export type BrokerRegistrationInput = {
   rg?: string | null;
   nationality?: string | null;
   occupation?: string | null;
+  addressJson?: Prisma.InputJsonValue | null;
   email?: string | null;
   phone?: string | null;
   whatsapp?: string | null;
