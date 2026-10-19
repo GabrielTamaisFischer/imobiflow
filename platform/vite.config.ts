@@ -7,6 +7,18 @@ import { defineConfig } from "vite";
 import tsConfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig(({ command }) => ({
+  server: {
+    proxy: {
+      "/api": {
+        target: "https://imobiflow-staging.vercel.app",
+        changeOrigin: true,
+        secure: true,
+        headers: {
+          Origin: "https://imobiflow-staging.vercel.app",
+        },
+      },
+    },
+  },
   plugins: [
     tsConfigPaths(),
     tailwindcss(),
