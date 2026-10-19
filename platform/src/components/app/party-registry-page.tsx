@@ -16,6 +16,7 @@ import {
   type RegistrationRole,
 } from "@/product/registrations";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { isLocalFrontend } from "@/product/local-dev-session";
 
 type RegistryConfig = {
   role: RegistrationRole;
@@ -72,6 +73,12 @@ export function PartyRegistryPage({ config }: { config: RegistryConfig }) {
         <div><p className="text-sm font-semibold">Cadastro de {config.plural.toLowerCase()}</p><p className="text-sm text-muted-foreground">{config.description}</p></div>
         <button type="button" onClick={() => setShowForm((current) => !current)} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90"><Plus className="h-4 w-4" />Novo {config.singular.toLowerCase()}</button>
       </div>
+
+      {isLocalFrontend() ? (
+        <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
+          Modo local de desenvolvimento: estes cadastros ficam somente neste navegador e não são enviados ao staging.
+        </div>
+      ) : null}
 
       {showForm ? <RegistrationForm role={config.role} singular={config.singular} onCancel={() => setShowForm(false)} onCreated={(registration) => { setItems((current) => current.some((item) => item.id === registration.id) ? current.map((item) => item.id === registration.id ? registration : item) : [registration, ...current]); setShowForm(false); }} /> : null}
 
