@@ -7,6 +7,7 @@ import {
   loadSession,
   type AccessResponse,
 } from "./auth";
+import { getLocalDevSession, isLocalFrontend } from "./local-dev-session";
 
 export function useSessionGuard() {
   const navigate = useNavigate();
@@ -15,6 +16,12 @@ export function useSessionGuard() {
 
   useEffect(() => {
     async function checkAccess() {
+      if (isLocalFrontend()) {
+        setSession(getLocalDevSession());
+        setIsLoading(false);
+        return;
+      }
+
       const token = getStoredToken();
       if (!token) {
         await navigate({ to: "/entrar" });
