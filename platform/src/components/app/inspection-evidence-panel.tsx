@@ -1,14 +1,14 @@
 import { Loader2, Trash2, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   deleteMysqlInspectionEvidence,
-  listMysqlInspectionEvidence,
-  listMysqlOfflineInspectionEvidence,
+  filterEvidenceFor,
   removeMysqlOfflineInspectionEvidence,
   reorderMysqlInspectionEvidence,
   syncMysqlInspectionOfflineEvidenceQueue,
   updateMysqlOfflineInspectionEvidence,
   uploadMysqlInspectionEvidence,
+  type InspectionEvidenceRow,
   type MysqlInspectionEvidence,
 } from "@/product/inspections";
 
@@ -18,6 +18,9 @@ type Props = {
   itemId?: string | null;
   expectedVersion: number;
   editable: boolean;
+  evidence: InspectionEvidenceRow[];
+  loading: boolean;
+  onEvidenceChanged: () => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
 };
@@ -28,60 +31,18 @@ export function InspectionEvidencePanel({
   itemId = null,
   expectedVersion,
   editable,
+  evidence,
+  loading,
+  onEvidenceChanged,
   onChanged,
   onError,
 }: Props) {
-  const [rows, setRows] = useState<
-    Array<
-      MysqlInspectionEvidence & {
-        offline_pending?: boolean;
-        offline_status?: "pending" | "uploading" | "failed" | "synced";
-      }
-    >
-  >([]);
-  const [loading, setLoading] = useState(true);
+  const rows = filterEvidenceFor(evidence, roomId, itemId);
   const [busy, setBusy] = useState(false);
 
-  useEffect(
-    () => () => {
-      for (const row of rows)
-        if (row.offline_pending && row.signed_url) URL.revokeObjectURL(row.signed_url);
-    },
-    [rows],
-  );
-
   async function refresh() {
-    setLoading(true);
-    try {
-      await syncMysqlInspectionOfflineEvidenceQueue(inspectionId);
-      const [remote, local] = await Promise.all([
-        listMysqlInspectionEvidence(inspectionId),
-        listMysqlOfflineInspectionEvidence(inspectionId),
-      ]);
-      const filteredRemote = remote.evidence.filter(
-        (entry) => entry.room_id === (roomId ?? null) && entry.item_id === (itemId ?? null),
-      );
-      const filteredLocal = local.filter(
-        (entry) => entry.room_id === (roomId ?? null) && entry.item_id === (itemId ?? null),
-      );
-      setRows([...filteredRemote, ...filteredLocal]);
-    } catch (error) {
-      onError(error);
-    } finally {
-      setLoading(false);
-    }
+    await onEvidenceChanged();
   }
-
-  useEffect(() => {
-    void refresh();
-  }, [inspectionId, roomId, itemId]);
-  useEffect(() => {
-    const onOnline = () => {
-      void refresh();
-    };
-    window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
-  }, [inspectionId, roomId, itemId]);
 
   async function upload(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);

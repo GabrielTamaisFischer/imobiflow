@@ -1,4 +1,5 @@
 import { getStoredToken } from "./auth";
+import { decodeTokenScope } from "./offline-session";
 import type { MysqlInspection } from "./inspections";
 
 export type OfflineMutationStatus = "pending" | "syncing" | "conflict" | "failed" | "synced";
@@ -70,6 +71,8 @@ export type InspectionOfflineStore = {
   ): Promise<OfflineInspectionEvidence[]>;
   putEvidence(evidence: OfflineInspectionEvidence): Promise<void>;
   deleteEvidence(localId: string): Promise<void>;
+  /** Remove snapshots, mutations e fotos de UM escopo empresa+usuário. */
+  clearScope(scope: InspectionOfflineScope): Promise<void>;
 };
 
 const DB_NAME = "imobiflow-inspection-offline-v1";
@@ -189,6 +192,17 @@ const indexedDbStore: InspectionOfflineStore = {
   async deleteEvidence(localId) {
     await idbRequest(EVIDENCE, "readwrite", (store) => store.delete(localId));
   },
+  async clearScope(scope) {
+    const prefix = `${scope.companyId}:${scope.userId}:`;
+    const snapshotKeys = await idbRequest<IDBValidKey[]>(SNAPSHOTS, "readonly", (store) => store.getAllKeys());
+    for (const key of snapshotKeys)
+      if (typeof key === "string" && key.startsWith(prefix))
+        await idbRequest(SNAPSHOTS, "readwrite", (store) => store.delete(key));
+    for (const mutation of await this.listMutations(scope))
+      await idbRequest(MUTATIONS, "readwrite", (store) => store.delete(mutation.id));
+    for (const evidence of await this.listEvidence(scope))
+      await idbRequest(EVIDENCE, "readwrite", (store) => store.delete(evidence.localId));
+  },
 };
 
 export function createMemoryInspectionOfflineStore(): InspectionOfflineStore {
@@ -232,6 +246,13 @@ export function createMemoryInspectionOfflineStore(): InspectionOfflineStore {
     async deleteEvidence(localId) {
       evidence.delete(localId);
     },
+    async clearScope(scope) {
+      const matches = (item: { companyId: string; userId: string }) =>
+        item.companyId === scope.companyId && item.userId === scope.userId;
+      for (const [key, item] of snapshots) if (matches(item)) snapshots.delete(key);
+      for (const [key, item] of mutations) if (matches(item)) mutations.delete(key);
+      for (const [key, item] of evidence) if (matches(item)) evidence.delete(key);
+    },
   };
 }
 
@@ -241,27 +262,8 @@ function store() {
   return memoryStore;
 }
 
-function decodeJwtPayload(token: string) {
-  try {
-    const encoded = token.split(".")[1];
-    if (!encoded) return null;
-    const normalized = encoded
-      .replace(/-/g, "+")
-      .replace(/_/g, "/")
-      .padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-    return JSON.parse(atob(normalized)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
 export function getInspectionOfflineScope(): InspectionOfflineScope | null {
-  const token = getStoredToken();
-  if (!token) return null;
-  const claims = decodeJwtPayload(token);
-  const companyId = claims?.company_id;
-  const userId = claims?.sub;
-  return typeof companyId === "string" && typeof userId === "string" ? { companyId, userId } : null;
+  return decodeTokenScope(getStoredToken());
 }
 
 export async function readInspectionSnapshot(
@@ -311,6 +313,41 @@ export async function inspectionOfflineConflictCount(
   return (await storage.listMutations(scope, inspectionId)).filter(
     (item) => item.status === "conflict",
   ).length;
+}
+
+export type InspectionOfflinePendingSummary = {
+  mutations: number;
+  conflicts: number;
+  evidence: number;
+  total: number;
+};
+
+/** Tudo o que ainda NÃO chegou ao servidor neste escopo (empresa+usuário). */
+export async function getInspectionOfflinePendingSummary(
+  scope = getInspectionOfflineScope(),
+  storage = store(),
+): Promise<InspectionOfflinePendingSummary> {
+  if (!scope) return { mutations: 0, conflicts: 0, evidence: 0, total: 0 };
+  const mutationRows = await storage.listMutations(scope);
+  const mutations = mutationRows.filter(
+    (item) => item.status === "pending" || item.status === "syncing" || item.status === "failed",
+  ).length;
+  const conflicts = mutationRows.filter((item) => item.status === "conflict").length;
+  const evidence = (await storage.listEvidence(scope)).filter((item) => item.status !== "synced").length;
+  return { mutations, conflicts, evidence, total: mutations + conflicts + evidence };
+}
+
+/**
+ * Apaga os dados offline de vistoria do escopo informado. Só deve ser chamado
+ * depois de o usuário confirmar (ver confirmLogoutWithOfflineData), nunca de
+ * forma silenciosa quando houver pendências.
+ */
+export async function clearInspectionOfflineScope(
+  scope = getInspectionOfflineScope(),
+  storage = store(),
+) {
+  if (!scope) return;
+  await storage.clearScope(scope);
 }
 
 export async function queueInspectionMutation(
@@ -494,7 +531,14 @@ export async function syncInspectionOfflineQueue(
       mutation.status = "synced";
       mutation.lastError = undefined;
       await storage.putMutation(mutation);
-      await saveInspectionSnapshot(inspection, scope, storage, "synced");
+      // Só troca o snapshot local pelo do servidor quando NÃO restam mutações
+      // locais dessa vistoria. Antes ele era sobrescrito a cada passo, e um
+      // conflito no meio da fila fazia a tela perder as edições locais ainda
+      // não enviadas (o dado só sobrevivia dentro do payload da mutation).
+      const remaining = (await storage.listMutations(scope, mutation.inspectionId)).filter(
+        (item) => item.status !== "synced",
+      ).length;
+      if (remaining === 0) await saveInspectionSnapshot(inspection, scope, storage, "synced");
       synced += 1;
     } catch (error) {
       const code = (error as { code?: string }).code;

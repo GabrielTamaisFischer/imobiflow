@@ -3,6 +3,7 @@ import { ChevronDown, Folder, LogOut } from "lucide-react";
 import { useState } from "react";
 import type { AccessResponse } from "@/product/auth";
 import { logout } from "@/product/auth";
+import { confirmLogoutWithOfflineData } from "@/product/logout-offline-guard";
 import { appModules } from "@/product/app-modules";
 import { getVisibleModules } from "@/product/app-access";
 
@@ -132,6 +133,9 @@ export function AppShell({ session, activeModule, children, fullBleed }: AppShel
                   title="Sair"
                   onClick={async (event) => {
                     event.preventDefault();
+                    // Antes do logout (o escopo offline vem do token): avisa e
+                    // permite cancelar se houver vistoria não sincronizada.
+                    if (!(await confirmLogoutWithOfflineData())) return;
                     await logout().catch(() => undefined);
                     window.location.assign("/entrar");
                   }}

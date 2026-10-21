@@ -107,8 +107,13 @@ export function buildInspectionSnapshot(inspection: any, evidence: any[] = []): 
   };
 }
 
+// O PDF usa a fonte padrão Helvetica com /WinAnsiEncoding: cada caractere do
+// texto precisa virar exatamente um byte nessa tabela. Antes o conteúdo era
+// gravado em UTF-8 (2 bytes por acento) sem encoding declarado, e "Imóvel"
+// saía corrompido no laudo. Todo o documento é montado como string "binária"
+// (códigos 0–255) e serializado em latin1, então offsets e /Length batem.
 export function buildPdfBuffer(title: string, sections: string[]) {
-  const lines = [title, "", ...sections.flatMap((section) => wrap(section, 100)), "Gerado pelo ImobiFlow — documento privado da vistoria."];
+  const lines = [title, "", ...sections.flatMap((section) => wrap(section, 100)), "Gerado pelo ImobiFlow — documento privado da vistoria."].map(toWinAnsi);
   const pages: string[][] = [];
   for (let index = 0; index < lines.length; index += 48) pages.push(lines.slice(index, index + 48));
   const pageContents = pages.map((page) => ["BT", "/F1 10 Tf", "50 790 Td", ...page.flatMap((line, index) => [`(${pdfEscape(line)}) Tj`, index < page.length - 1 ? "0 -14 Td" : "ET"]), ""].join("\n"));
@@ -117,16 +122,34 @@ export function buildPdfBuffer(title: string, sections: string[]) {
     `<< /Type /Pages /Kids [${pages.map((_, index) => `${3 + index * 2} 0 R`).join(" ")}] /Count ${pages.length} >>`,
     ...pages.flatMap((_, index) => [
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 ${3 + pages.length * 2} 0 R >> >> /Contents ${4 + index * 2} 0 R >>`,
-      `<< /Length ${Buffer.byteLength(pageContents[index], "utf8")} >>\nstream\n${pageContents[index]}\nendstream`,
+      `<< /Length ${Buffer.byteLength(pageContents[index], "latin1")} >>\nstream\n${pageContents[index]}\nendstream`,
     ]),
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
   ];
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
-  objects.forEach((object, index) => { offsets[index + 1] = Buffer.byteLength(pdf, "utf8"); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
-  const xref = Buffer.byteLength(pdf, "utf8");
+  objects.forEach((object, index) => { offsets[index + 1] = Buffer.byteLength(pdf, "latin1"); pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(pdf, "latin1");
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n `).join("\n")}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return Buffer.from(pdf, "utf8");
+  return Buffer.from(pdf, "latin1");
+}
+
+// Caracteres fora de Latin-1 que existem na WinAnsiEncoding (faixa 0x80–0x9F).
+const WIN_ANSI_EXTRAS: Record<string, number> = {
+  "€": 0x80, "‚": 0x82, "ƒ": 0x83, "„": 0x84, "…": 0x85, "†": 0x86, "‡": 0x87, "ˆ": 0x88, "‰": 0x89, "Š": 0x8a, "‹": 0x8b, "Œ": 0x8c, "Ž": 0x8e,
+  "‘": 0x91, "’": 0x92, "“": 0x93, "”": 0x94, "•": 0x95, "–": 0x96, "—": 0x97, "˜": 0x98, "™": 0x99, "š": 0x9a, "›": 0x9b, "œ": 0x9c, "ž": 0x9e, "Ÿ": 0x9f,
+};
+
+export function toWinAnsi(value: string) {
+  let result = "";
+  for (const char of value.normalize("NFC")) {
+    const code = char.codePointAt(0) ?? 0x3f;
+    if ((code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff)) result += char;
+    else if (WIN_ANSI_EXTRAS[char] !== undefined) result += String.fromCharCode(WIN_ANSI_EXTRAS[char]);
+    else if (char === "\t") result += " ";
+    else result += "?";
+  }
+  return result;
 }
 
 function stableKey(name: string, position: number) { return `${name.trim().toLocaleLowerCase("pt-BR")}::${position}`; }

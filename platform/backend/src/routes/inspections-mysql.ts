@@ -363,10 +363,20 @@ mysqlInspectionsRouter.delete("/:id/evidence/:evidenceId", requirePermission("in
     if (!existing) throw notFound();
     const { expected_version } = versionSchema.parse(req.body);
     if (inspection.version !== expected_version) throw conflict();
-    const provider = getStorageProviderForName(existing.storedFile.provider as any);
-    await provider.deleteFile({ publicId: existing.storedFile.publicId, resourceType: existing.storedFile.resourceType as StorageResourceType, deliveryAccess: deliveryAccessForPurpose("inspection_evidence") });
+    // O banco é a fonte de verdade: remove as linhas (com checagem de versão)
+    // ANTES do asset. Se a transação falhar (ex.: 409), o arquivo continua
+    // intacto e referenciado. Se só a remoção no provider falhar depois, sobra
+    // um asset órfão privado — preferível a um registro apontando para nada.
     await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, access.company.id, expected_version); await tx.inspectionEvidence.delete({ where: { id: existing.id } }); await tx.storedFile.delete({ where: { id: existing.storedFileId } }); await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.evidence_removed", { evidence_id: existing.id }); });
-    res.json({ ok: true, evidence_id: existing.id });
+    let storageCleanup: "deleted" | "pending" = "deleted";
+    try {
+      const provider = getStorageProviderForName(existing.storedFile.provider as any);
+      await provider.deleteFile({ publicId: existing.storedFile.publicId, resourceType: existing.storedFile.resourceType as StorageResourceType, deliveryAccess: deliveryAccessForPurpose("inspection_evidence") });
+    } catch {
+      storageCleanup = "pending";
+      console.warn("[inspections] asset de evidência removido do banco, mas não do storage", { stored_file_id: existing.storedFileId });
+    }
+    res.json({ ok: true, evidence_id: existing.id, storage_cleanup: storageCleanup });
   } catch (error) { next(error); }
 });
 
@@ -558,24 +568,46 @@ mysqlInspectionsRouter.get("/:id/signatures", requirePermission("inspections.vie
   try { const inspection = await findInspection(req, String(req.params.id), "inspections.view"); const rows = await artifactFiles(req.access!.company.id, "inspection_signature", inspection.id, "inspection_signature"); res.json({ signatures: await Promise.all(rows.map(async (row: any) => artifactDto(row, row.metadataJson, await privateArtifactUrl(row, "inspection_signature")))) }); } catch (error) { next(error); }
 });
 
+// Comparação entrada × saída. Gera artefato privado no storage, por isso exige
+// inspections.manage (antes bastava view). As duas vistorias são carregadas
+// pelo mesmo escopo de sessão (companyId + escopo do imóvel), então um ID de
+// outra empresa responde 404 sem revelar existência. O resultado descreve
+// diferenças estruturais; nunca atribui responsabilidade.
 const comparisonSchema = z.object({ baseline_inspection_id: z.string().uuid(), regenerate: z.boolean().optional().default(false) });
-mysqlInspectionsRouter.post("/:id/comparison", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+const COMPARISON_DISCLAIMER = "Comparação estrutural: indica diferenças registradas entre as vistorias e não atribui responsabilidade.";
+mysqlInspectionsRouter.post("/:id/comparison", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  let uploaded: any = null;
   try {
-    const access = req.access!, exit = await findInspection(req, String(req.params.id), "inspections.view"), input = comparisonSchema.parse(req.body), entry = await findInspection(req, input.baseline_inspection_id, "inspections.view");
-    if (entry.propertyId !== exit.propertyId || entry.companyId !== exit.companyId) throw invalid("A comparação exige o mesmo imóvel e empresa.", "COMPARISON_SCOPE_INVALID");
+    const access = req.access!, input = comparisonSchema.parse(req.body);
+    const exitId = String(req.params.id);
+    if (input.baseline_inspection_id === exitId) throw invalid("Selecione uma vistoria de entrada diferente da vistoria atual.", "COMPARISON_SAME_INSPECTION");
+    const exit = await findInspection(req, exitId, "inspections.manage");
+    const entry = await findInspection(req, input.baseline_inspection_id, "inspections.view");
+    if (entry.companyId !== access.company.id || exit.companyId !== access.company.id || entry.propertyId !== exit.propertyId) throw invalid("A comparação exige vistorias do mesmo imóvel.", "COMPARISON_SCOPE_INVALID");
+    if (entry.type !== "entry" || exit.type !== "exit") throw invalid("Compare uma vistoria de saída com uma vistoria de entrada.", "COMPARISON_TYPE_INVALID");
     if (!["completed", "archived"].includes(entry.status) || !["completed", "archived"].includes(exit.status)) throw invalid("A comparação exige vistorias concluídas.", "COMPARISON_REQUIRES_COMPLETED");
     const [entryEvidence, exitEvidence] = await Promise.all([getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: entry.id }, include: { storedFile: true } }), getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: exit.id }, include: { storedFile: true } })]);
     const comparison = compareInspections(buildInspectionSnapshot(entry, entryEvidence), buildInspectionSnapshot(exit, exitEvidence));
     const hash = snapshotHash(comparison);
-    const existing = await artifactFiles(access.company.id, "inspection_comparison", exit.id, "inspection_comparison");
-    if (existing.length && !input.regenerate) return res.json({ comparison, report: artifactDto(existing[0], existing[0].metadataJson, await privateArtifactUrl(existing[0], "inspection_comparison")), replayed: true });
-    const comparisonId = randomUUID(), body = buildPdfBuffer("Comparação de vistorias", [`Entrada: ${entry.id}`, `Saída: ${exit.id}`, ...comparison.rooms.flatMap((room) => [ `Ambiente ${room.name}: ${room.outcome}`, ...room.items.map((item: any) => `Item ${item.name}: ${item.entry ?? "-"} -> ${item.exit ?? "-"} (${item.outcome})`) ]), `Hash: ${hash}` ]);
-    const storage = getStorageProvider(), uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison", fileName: `comparison-${exit.id}-${comparisonId}.pdf`, mimeType: "application/pdf", sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_comparison", inspectionId: exit.id }), deliveryAccess: deliveryAccessForPurpose("inspection_comparison") });
+    // Reaproveita só o artefato gerado contra ESTA mesma entrada; antes qualquer
+    // comparação anterior da saída era devolvida, mesmo com outra baseline.
+    const existing = (await artifactFiles(access.company.id, "inspection_comparison", exit.id, "inspection_comparison"))
+      .filter((row: any) => (row.metadataJson as any)?.baseline_inspection_id === entry.id);
+    if (existing.length && !input.regenerate) return res.json({ comparison, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(existing[0], existing[0].metadataJson, await privateArtifactUrl(existing[0], "inspection_comparison")), replayed: true });
+    const comparisonId = randomUUID();
+    const fileName = `comparison-${exit.id}-${comparisonId}.pdf`;
+    const body = buildPdfBuffer("Comparação de vistorias", [`Entrada: ${entry.id}`, `Saída: ${exit.id}`, COMPARISON_DISCLAIMER, ...comparison.rooms.flatMap((room) => [ `Ambiente ${room.name}: ${room.outcome}`, ...room.items.map((item: any) => `Item ${item.name}: ${item.entry ?? "-"} -> ${item.exit ?? "-"} (${item.outcome})`) ]), `Hash: ${hash}` ]);
+    const policy = validateUploadFile({ purpose: "inspection_comparison", fileName, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
+    const storage = getStorageProvider();
+    uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison", fileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_comparison", inspectionId: exit.id }), deliveryAccess: deliveryAccessForPurpose("inspection_comparison") });
     await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_comparison", metadata: { inspection_id: exit.id, baseline_inspection_id: entry.id, comparison, comparison_hash: hash } });
     await getPrisma().$transaction(async (tx) => event(tx, access.company.id, exit.id, access.appUser.id, "inspection.comparison_generated", { comparison_id: comparisonId, baseline_inspection_id: entry.id, comparison_hash: hash }));
     const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison" } });
-    res.status(201).json({ comparison, report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_comparison")) });
-  } catch (error) { next(error); }
+    res.status(201).json({ comparison, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_comparison")) });
+  } catch (error) {
+    if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
+    next(error);
+  }
 });
 
 export { inspectionTypes, inspectionStatuses, itemConditions, nextStatus, ensureMutable, IdempotencyConflictError };

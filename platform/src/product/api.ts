@@ -28,6 +28,12 @@ export const API_URL =
 export const API_SETUP_MESSAGE =
   "O acesso antecipado ao produto SaaS está em ativação. A equipe ImobiFlow está conectando a área interna ao ambiente seguro de autenticação, empresa e assinatura.";
 
+export const NETWORK_UNAVAILABLE_CODE = "NETWORK_UNAVAILABLE";
+
+export function isNetworkUnavailableError(error: unknown) {
+  return (error as { code?: string } | null)?.code === NETWORK_UNAVAILABLE_CODE;
+}
+
 export type ApiError = {
   error: string;
   message: string;
@@ -60,8 +66,13 @@ export async function apiRequest<T>(
       headers,
     });
   } catch {
-    throw new Error(
-      "Não foi possível conectar à área segura do ImobiFlow neste momento. Tente novamente em alguns instantes ou fale com a equipe de implantação.",
+    // `code` permite distinguir "sem rede" de erro de autenticação/servidor
+    // (ex.: o session guard não pode deslogar quem só perdeu o sinal).
+    throw Object.assign(
+      new Error(
+        "Não foi possível conectar à área segura do ImobiFlow neste momento. Tente novamente em alguns instantes ou fale com a equipe de implantação.",
+      ),
+      { code: NETWORK_UNAVAILABLE_CODE },
     );
   }
 

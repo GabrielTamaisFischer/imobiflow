@@ -18,6 +18,7 @@ import {
   type OfflineInspectionEvidence,
   syncInspectionOfflineQueue,
 } from "./inspection-offline";
+import { prepareInspectionPhotoForUpload } from "./inspection-photo-compression";
 
 /** Canonical MySQL inspection API (F5C). This deliberately has no preview/local fallback. */
 export type MysqlInspectionCondition = "not_inspected" | "excellent" | "good" | "fair" | "poor" | "damaged" | "not_applicable";
@@ -39,7 +40,10 @@ function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
 function isOfflineError(error: unknown) { return isOfflineRuntime() || (error instanceof TypeError && /fetch|network/i.test(error.message)) || (error instanceof Error && /failed to fetch|network|offline|conectar/i.test(error.message)); }
 function offlineHeaders(key?: string) { return key ? idempotencyKey(key) : undefined; }
 function localNow() { return new Date().toISOString(); }
-const MAX_INSPECTION_EVIDENCE_BYTES = 8 * 1024 * 1024;
+// Limite do arquivo ORIGINAL aceito no aparelho. O que vai ao servidor é
+// reduzido para ~3 MB em prepareInspectionPhotoForUpload (limite de corpo da
+// Vercel Function); o servidor continua validando 8 MB no arquivo recebido.
+const MAX_INSPECTION_EVIDENCE_BYTES = 25 * 1024 * 1024;
 const INSPECTION_EVIDENCE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export async function validateInspectionEvidenceFile(file: Blob & { name?: string }) {
@@ -48,7 +52,7 @@ export async function validateInspectionEvidenceFile(file: Blob & { name?: strin
   const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
   const extensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
   if (!INSPECTION_EVIDENCE_MIME_TYPES.has(mimeType) || !extensions.has(extension)) throw Object.assign(new Error("Tipo de foto não permitido para evidência."), { code: "INVALID_UPLOAD", status: 415 });
-  if (file.size <= 0 || file.size > MAX_INSPECTION_EVIDENCE_BYTES) throw Object.assign(new Error("A foto deve ter até 8MB."), { code: "INVALID_UPLOAD", status: 413 });
+  if (file.size <= 0 || file.size > MAX_INSPECTION_EVIDENCE_BYTES) throw Object.assign(new Error("A foto deve ter até 25MB."), { code: "INVALID_UPLOAD", status: 413 });
   const bytes = new Uint8Array(await file.arrayBuffer());
   const validMagic = mimeType === "image/jpeg"
     ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
@@ -209,9 +213,12 @@ export async function uploadMysqlInspectionEvidence(inspectionId: string, input:
     return { evidence: offlineEvidenceView(row), offline: true as const };
   };
   if (options.offline !== false && isOfflineRuntime()) return queue();
+  // Reduz só a cópia enviada; o original (input.file) segue intacto e é o que
+  // a fila offline guarda se o envio não acontecer agora.
+  const prepared = await prepareInspectionPhotoForUpload(input.file);
   try {
-    const contentBase64 = await blobToDataUrl(input.file);
-    return await apiRequest<{ evidence: MysqlInspectionEvidence; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify({ id, room_id: input.room_id ?? null, item_id: input.item_id ?? null, file_name: input.file.name, mime_type: input.file.type, size_bytes: input.file.size, content_base64: contentBase64, caption: input.caption ?? null, position: input.position ?? 0 }), token: mysqlToken() });
+    const contentBase64 = await blobToDataUrl(prepared.file);
+    return await apiRequest<{ evidence: MysqlInspectionEvidence; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/evidence`, { method: "POST", headers: { "Idempotency-Key": id }, body: JSON.stringify({ id, room_id: input.room_id ?? null, item_id: input.item_id ?? null, file_name: prepared.file.name, mime_type: prepared.file.type, size_bytes: prepared.file.size, content_base64: contentBase64, caption: input.caption ?? null, position: input.position ?? 0 }), token: mysqlToken() });
   } catch (error) {
     const status = (error as { status?: number }).status;
     if (status === 422) return queue("failed", error instanceof Error ? error.message : "Arquivo rejeitado pelo servidor.");
@@ -251,19 +258,44 @@ export async function generateMysqlInspectionComparison(inspectionId: string, ba
   return apiRequest<{ comparison: unknown; report: MysqlInspectionArtifact }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison`, { method: "POST", body: JSON.stringify({ baseline_inspection_id: baselineInspectionId, regenerate }), token: mysqlToken() });
 }
 
+/** Busca a versão do servidor sem gravar snapshot local (usada pela sincronização). */
+export async function fetchMysqlInspectionRemote(id: string) {
+  return (await apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { token: mysqlToken() })).inspection;
+}
+
+/**
+ * Converte uma mutation da fila offline na requisição HTTP canônica.
+ * `expected_version` vem SEMPRE de `baseVersion` (a versão que o aparelho
+ * conhecia ao editar): antes, criações de ambiente/item eram enfileiradas sem
+ * esse campo, o servidor respondia 400 e a fila travava para sempre.
+ */
+export function buildOfflineMutationRequest(mutation: OfflineMutation): { method: "POST" | "PATCH" | "DELETE"; path: string; body: Record<string, unknown> } {
+  const base = `/real-estate/inspections/${encodeURIComponent(mutation.inspectionId)}`;
+  const { room_id: roomId, items: _items, expected_version: _ignored, ...payload } = mutation.payload;
+  const body = { ...payload, expected_version: mutation.baseVersion };
+  const entity = encodeURIComponent(mutation.entityId);
+  if (mutation.entityType === "inspection") return { method: "PATCH", path: base, body };
+  if (mutation.entityType === "room") {
+    if (mutation.operation === "create") return { method: "POST", path: `${base}/rooms`, body };
+    if (mutation.operation === "update") return { method: "PATCH", path: `${base}/rooms/${entity}`, body };
+    return { method: "DELETE", path: `${base}/rooms/${entity}`, body: { expected_version: mutation.baseVersion } };
+  }
+  const room = encodeURIComponent(String(roomId ?? ""));
+  if (!room) throw Object.assign(new Error("Item offline sem ambiente associado."), { code: "OFFLINE_MUTATION_INVALID" });
+  if (mutation.operation === "create") return { method: "POST", path: `${base}/rooms/${room}/items`, body };
+  if (mutation.operation === "update") return { method: "PATCH", path: `${base}/rooms/${room}/items/${entity}`, body };
+  return { method: "DELETE", path: `${base}/rooms/${room}/items/${entity}`, body: { expected_version: mutation.baseVersion } };
+}
+
 export async function syncMysqlInspectionOfflineQueue(inspectionId?: string) {
+  // Chama a API diretamente: os helpers create/patch/delete re-enfileiram a
+  // mutation quando a rede cai, o que durante a sincronização duplicava itens.
   const sender: OfflineSyncSender = async (mutation) => {
-    const p = mutation.payload;
-    if (mutation.entityType === "inspection") return (await patchMysqlInspection(mutation.inspectionId, p as never, { offline: false, idempotencyKey: mutation.idempotencyKey })).inspection;
-    if (mutation.entityType === "room" && mutation.operation === "create") { await createMysqlRoom(mutation.inspectionId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
-    if (mutation.entityType === "room" && mutation.operation === "update") { await patchMysqlRoom(mutation.inspectionId, mutation.entityId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
-    if (mutation.entityType === "room") { await deleteMysqlRoom(mutation.inspectionId, mutation.entityId, mutation.baseVersion, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
-    if (mutation.entityType === "item" && mutation.operation === "create") { await createMysqlItem(mutation.inspectionId, String(p.room_id), p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
-    if (mutation.entityType === "item" && mutation.operation === "update") { await patchMysqlItem(mutation.inspectionId, String(p.room_id), mutation.entityId, p as never, { offline: false }); return (await getMysqlInspection(mutation.inspectionId)).inspection; }
-    await deleteMysqlItem(mutation.inspectionId, String(p.room_id), mutation.entityId, mutation.baseVersion, { offline: false });
-    return (await getMysqlInspection(mutation.inspectionId)).inspection;
+    const request = buildOfflineMutationRequest(mutation);
+    await apiRequest(request.path, { method: request.method, headers: idempotencyKey(mutation.idempotencyKey), body: JSON.stringify(request.body), token: mysqlToken() });
+    return fetchMysqlInspectionRemote(mutation.inspectionId);
   };
-  return syncInspectionOfflineQueue(sender, inspectionId);
+  return syncInspectionOfflineQueue(sender, inspectionId, undefined, undefined, { fetchServer: fetchMysqlInspectionRemote });
 }
 
 export async function syncMysqlInspectionOfflineEvidenceQueue(inspectionId?: string) {
@@ -273,6 +305,36 @@ export async function syncMysqlInspectionOfflineEvidenceQueue(inspectionId?: str
     return { remoteEvidenceId: result.evidence.id };
   };
   return syncOfflineInspectionEvidenceQueue(sender, inspectionId);
+}
+
+export type InspectionEvidenceRow = MysqlInspectionEvidence & {
+  offline_pending?: boolean;
+  offline_status?: OfflineInspectionEvidence["status"];
+};
+
+/**
+ * Carrega TODAS as evidências de uma vistoria uma única vez (remotas + fila
+ * local). Antes cada painel de ambiente/item sincronizava e buscava a lista
+ * inteira sozinho: 9 ambientes × 6 itens ≈ 63 requisições por abertura, cada
+ * uma gerando URLs assinadas de todas as fotos.
+ */
+export async function loadInspectionEvidenceBundle(inspectionId: string): Promise<InspectionEvidenceRow[]> {
+  await syncMysqlInspectionOfflineEvidenceQueue(inspectionId);
+  const [remote, local] = await Promise.all([
+    listMysqlInspectionEvidence(inspectionId),
+    listMysqlOfflineInspectionEvidence(inspectionId),
+  ]);
+  return [...remote.evidence, ...local];
+}
+
+/** Evidências de um ponto exato: vistoria geral, ambiente ou item. */
+export function filterEvidenceFor<T extends { room_id: string | null; item_id: string | null }>(rows: T[], roomId: string | null = null, itemId: string | null = null) {
+  return rows.filter((entry) => entry.room_id === roomId && entry.item_id === itemId);
+}
+
+/** O backend só gera laudo de vistoria concluída ou arquivada. */
+export function canGenerateInspectionReport(status: MysqlInspectionStatus, canEdit: boolean) {
+  return canEdit && (status === "completed" || status === "archived");
 }
 
 export async function listMysqlOfflineInspectionEvidence(inspectionId: string) {

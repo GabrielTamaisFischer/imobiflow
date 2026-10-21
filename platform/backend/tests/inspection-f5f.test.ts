@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPdfBuffer, compareConditions, compareInspections, snapshotHash, stableJson } from "../src/services/inspection-f5f.js";
+import { buildPdfBuffer, compareConditions, compareInspections, snapshotHash, stableJson, toWinAnsi } from "../src/services/inspection-f5f.js";
 
 describe("F5F laudo, integridade e comparação", () => {
   it("gera PDF não vazio e hash determinístico", () => {
@@ -22,5 +22,26 @@ describe("F5F laudo, integridade e comparação", () => {
     const result = compareInspections(base, { ...base, inspection_id: "i2", rooms: [{ ...base.rooms[0], items: [{ ...base.rooms[0].items[0], condition: "damaged" }] }] });
     expect(result.rooms[0].items[0].outcome).toBe("worse");
     expect(() => compareInspections(base, { ...base, inspection_id: "i3", property: { ...base.property, id: "p2" } })).toThrow();
+  });
+
+  it("grava acentos em WinAnsiEncoding (1 byte por caractere), sem UTF-8 corrompido", () => {
+    const pdf = buildPdfBuffer("Laudo de vistoria", ["Imóvel: Apartamento — Condição: ótimo; Não vistoriado; ação “ok”"]);
+    expect(pdf.includes(Buffer.from("/Encoding /WinAnsiEncoding", "latin1"))).toBe(true);
+    // "ó" deve ser o byte 0xF3; em UTF-8 seria 0xC3 0xB3 (exibido como "Ã³").
+    expect(pdf.includes(Buffer.from([0x49, 0x6d, 0xf3, 0x76, 0x65, 0x6c]))).toBe(true); // "Imóvel"
+    expect(pdf.includes(Buffer.from("Imóvel", "utf8"))).toBe(false);
+    expect(pdf.includes(Buffer.from([0x97]))).toBe(true); // travessão "—" na WinAnsi
+    // A tabela xref aponta para os offsets reais em bytes.
+    const text = pdf.toString("latin1");
+    const xrefStart = Number(text.slice(text.lastIndexOf("startxref") + 9).trim().split(/\s/)[0]);
+    expect(text.slice(xrefStart, xrefStart + 4)).toBe("xref");
+    const firstOffset = Number(text.slice(xrefStart).split("\n")[3].slice(0, 10));
+    expect(text.slice(firstOffset, firstOffset + 7)).toBe("1 0 obj");
+  });
+
+  it("toWinAnsi troca caracteres sem representação por ?", () => {
+    expect(toWinAnsi("Ação")).toBe("Ação");
+    expect(toWinAnsi("casa 🏠")).toBe("casa ?");
+    expect(toWinAnsi("…•€")).toBe(String.fromCharCode(0x85, 0x95, 0x80));
   });
 });

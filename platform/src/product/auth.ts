@@ -1,4 +1,5 @@
 import { apiRequest } from "./api";
+import { clearOfflineSessionCache } from "./offline-session";
 import { isSubscriptionActive } from "./subscription";
 
 const accessTokenKey = "imobiflow.access_token";
@@ -117,6 +118,7 @@ export function clearToken() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(accessTokenKey);
   window.localStorage.removeItem(refreshTokenKey);
+  clearOfflineSessionCache();
 }
 
 export function isPreviewToken(_token: string | null) {
