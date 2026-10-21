@@ -370,21 +370,32 @@ export async function confirmOwnerTransferPayment(
   );
 }
 
-export async function issueFinancialChargePayment(chargeId: string) {
+type FinancialGatewayIssue = {
+  provider: string;
+  status: "prepared" | "blocked" | "issued" | "failed";
+  connector_status: string;
+  real_api_call: boolean;
+  next_step?: string;
+  payment_url?: string | null;
+  boleto_pdf_url?: string | null;
+};
+
+type FinancialGatewayCustomerSync = {
+  provider: string;
+  status: "prepared" | "blocked" | "synced" | "failed";
+  connector_status: string;
+  real_api_call: boolean;
+  gateway_customer_id?: string | null;
+  next_step?: string;
+};
+
+// No modo preview não há gateway: a resposta traz só `charge` (gateway_* ausente).
+export async function issueFinancialChargePayment(
+  chargeId: string,
+): Promise<{ charge: FinancialCharge; gateway_issue?: FinancialGatewayIssue }> {
   if (isPreviewFinance()) return { charge: issuePreviewCharge(chargeId) };
 
-  return apiRequest<{
-    charge: FinancialCharge;
-    gateway_issue: {
-      provider: string;
-      status: "prepared" | "blocked" | "issued" | "failed";
-      connector_status: string;
-      real_api_call: boolean;
-      next_step?: string;
-      payment_url?: string | null;
-      boleto_pdf_url?: string | null;
-    };
-  }>(
+  return apiRequest<{ charge: FinancialCharge; gateway_issue: FinancialGatewayIssue }>(
     `/finance/charges/${chargeId}/issue-payment`,
     {
       method: "POST",
@@ -393,20 +404,12 @@ export async function issueFinancialChargePayment(chargeId: string) {
   );
 }
 
-export async function syncFinancialChargeGatewayCustomer(chargeId: string) {
+export async function syncFinancialChargeGatewayCustomer(
+  chargeId: string,
+): Promise<{ charge: FinancialCharge; gateway_customer?: FinancialGatewayCustomerSync }> {
   if (isPreviewFinance()) return { charge: syncPreviewChargeGatewayCustomer(chargeId) };
 
-  return apiRequest<{
-    charge: FinancialCharge;
-    gateway_customer: {
-      provider: string;
-      status: "prepared" | "blocked" | "synced" | "failed";
-      connector_status: string;
-      real_api_call: boolean;
-      gateway_customer_id?: string | null;
-      next_step?: string;
-    };
-  }>(`/finance/charges/${chargeId}/sync-gateway-customer`, {
+  return apiRequest<{ charge: FinancialCharge; gateway_customer: FinancialGatewayCustomerSync }>(`/finance/charges/${chargeId}/sync-gateway-customer`, {
     method: "POST",
     token: getStoredToken() ?? undefined,
   });

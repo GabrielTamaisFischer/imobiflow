@@ -145,15 +145,18 @@ function UsageCostsPage() {
         />
       ) : (
         <div className="space-y-6">
-          <section className="grid gap-3 md:grid-cols-3">
-            <MetricCard label="Custo estimado" value={formatMoney(summary.total_cost_cents)} />
-            <MetricCard label="Receita estimada" value={formatMoney(summary.estimated_revenue_cents)} />
-            <MetricCard
-              label="Margem estimada"
-              value={formatMoney(summary.estimated_margin_cents)}
-              tone={summary.estimated_margin_cents >= 0 ? "positive" : "negative"}
-            />
-          </section>
+          {/* summary pode ser null quando só existem fechamentos (snapshots). */}
+          {summary ? (
+            <section className="grid gap-3 md:grid-cols-3">
+              <MetricCard label="Custo estimado" value={formatMoney(summary.total_cost_cents)} />
+              <MetricCard label="Receita estimada" value={formatMoney(summary.estimated_revenue_cents)} />
+              <MetricCard
+                label="Margem estimada"
+                value={formatMoney(summary.estimated_margin_cents)}
+                tone={summary.estimated_margin_cents >= 0 ? "positive" : "negative"}
+              />
+            </section>
+          ) : null}
 
           {snapshots.length > 0 ? (
             <section className="rounded-lg border border-border bg-card">
@@ -175,7 +178,7 @@ function UsageCostsPage() {
             <div className="rounded-lg border border-border bg-card p-4">
               <h2 className="text-sm font-semibold">Consumo por métrica</h2>
               <div className="mt-4 space-y-3">
-                {Object.entries(summary.by_metric).map(([metricKey, item]) => (
+                {Object.entries(summary?.by_metric ?? {}).map(([metricKey, item]) => (
                   <div key={metricKey} className="rounded-md border border-border bg-background p-3">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-medium">

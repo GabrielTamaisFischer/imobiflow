@@ -682,7 +682,8 @@ export async function createWebsiteBuilderPage(websiteId: string, input: Website
 export async function updateWebsiteBuilderPage(pageId: string, input: Partial<WebsiteBuilderCreatePageInput>) {
   if (isPreviewWebsiteBuilder()) {
     const state = readPreviewBuilder();
-    let updated: WebsiteBuilderPage | null = null;
+    // Atribuído dentro do .map abaixo: o "as" evita que o TS estreite para null e depois para never.
+    let updated = null as WebsiteBuilderPage | null;
     state.pages = state.pages.map((page) => {
       if (page.id !== pageId) return page;
       updated = {
@@ -777,7 +778,7 @@ export async function createWebsiteBuilderSection(pageId: string, input: Website
 export async function updateWebsiteBuilderSection(sectionId: string, input: Partial<WebsiteBuilderCreateSectionInput>) {
   if (isPreviewWebsiteBuilder()) {
     const state = readPreviewBuilder();
-    let updated: WebsiteBuilderSection | null = null;
+    let updated = null as WebsiteBuilderSection | null;
     state.sections = state.sections.map((section) => {
       if (section.id !== sectionId) return section;
       updated = {
@@ -876,7 +877,7 @@ export async function createWebsiteBuilderComponent(sectionId: string, input: We
 export async function updateWebsiteBuilderComponent(componentId: string, input: Partial<WebsiteBuilderCreateComponentInput>) {
   if (isPreviewWebsiteBuilder()) {
     const state = readPreviewBuilder();
-    let updated: WebsiteBuilderComponent | null = null;
+    let updated = null as WebsiteBuilderComponent | null;
     state.components = state.components.map((component) => {
       if (component.id !== componentId) return component;
       updated = {

@@ -372,11 +372,18 @@ function WebsiteBuilderPage() {
     return <Outlet />;
   }
 
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-4 text-center text-sm text-muted-foreground">
-      Abrindo a área de sites...
-    </main>
-  );
+  // O builder legado abaixo está desativado: /app/site/builder só exibe este aviso e o
+  // efeito acima redireciona para /app/site. O código foi preservado para reativação futura.
+  // A flag é tipada como boolean (não o literal `false`) para o TypeScript continuar
+  // verificando esse código como alcançável, em vez de tratá-lo como código morto.
+  const legacyBuilderEnabled: boolean = false;
+  if (!legacyBuilderEnabled) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-4 text-center text-sm text-muted-foreground">
+        Abrindo a área de sites...
+      </main>
+    );
+  }
 
   if (isLoading) {
     return (

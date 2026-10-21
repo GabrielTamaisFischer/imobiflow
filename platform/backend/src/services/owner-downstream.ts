@@ -138,7 +138,7 @@ export async function getOwnerDownstreamData(options: {
   provenance.address = isConflict("address") ? "conflict" : Object.keys(current_address).length ? "owner_profile" : "missing";
   provenance.email = contact.email || owner.email ? "owner_profile" : "missing";
   provenance.phone = contact.phone || owner.phone ? "owner_profile" : "missing";
-  const docs = documents.map((document: any) => ({ type: String(document.documentType), status: documentState(document) }));
+  const docs: Array<{ type: string; status: ReturnType<typeof documentState> }> = documents.map((document: any) => ({ type: String(document.documentType), status: documentState(document) }));
   const readiness = buildDownstreamReadiness({ required: { name: full_name, document, nationality, marital_status, profession, address: current_address }, unresolvedConflicts: contractConflicts, documents: docs });
   const party: ContractPartyData = {
     owner_id: owner.id, owner_type: owner.ownerType === "company" ? "company" : "individual", full_name, document,

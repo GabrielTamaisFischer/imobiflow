@@ -934,10 +934,12 @@ function ownerDocumentCategory(mimeType: string): OwnerDocumentSummary["category
   return "file";
 }
 
+type OwnerDocumentMetadataRecord = { documentType: string; title: string | null; source: string | null; provider: string | null; issuedAt: Date | null; status: string; verified: boolean; expiresAt: Date | null; linkedDomain: string | null; provenance: string | null; confidence: string | null };
+
 function toOwnerDocumentDto(
   record: { id: string; originalFilename: string; mimeType: string; createdAt: Date; metadataJson: unknown },
   ownedPropertyIds: Set<string>,
-  metadataRecord?: { documentType: string; title: string | null; source: string | null; provider: string | null; issuedAt: Date | null; status: string; verified: boolean; expiresAt: Date | null; linkedDomain: string | null; provenance: string | null; confidence: string | null },
+  metadataRecord?: OwnerDocumentMetadataRecord,
   includeMetadata = false,
 ): OwnerDocumentSummary {
   const metadata =
@@ -966,10 +968,13 @@ export async function ensureMysqlOwnerExists(companyId: string, ownerId: string)
 export async function listMysqlOwnerDocuments(companyId: string, ownerId: string): Promise<OwnerDocumentSummary[]> {
   await ensureOwnerBelongsToCompany(ownerId, companyId);
   const ownerDocumentRecordModel = (prisma() as any).ownerDocumentRecord;
+  const metadataRecordsPromise: Promise<Array<OwnerDocumentMetadataRecord & { storedFileId: string }>> = ownerDocumentRecordModel?.findMany
+    ? ownerDocumentRecordModel.findMany({ where: { companyId, ownerId }, select: { storedFileId: true, documentType: true, title: true, source: true, provider: true, issuedAt: true, status: true, verified: true, expiresAt: true, linkedDomain: true, provenance: true, confidence: true } })
+    : Promise.resolve([]);
   const [records, properties, metadataRecords] = await Promise.all([
     findStoredFilesForEntity(companyId, "property_owner", ownerId, "owner_document"),
     prisma().property.findMany({ where: { companyId, ownerId }, select: { id: true } }),
-    ownerDocumentRecordModel?.findMany ? ownerDocumentRecordModel.findMany({ where: { companyId, ownerId }, select: { storedFileId: true, documentType: true, title: true, source: true, provider: true, issuedAt: true, status: true, verified: true, expiresAt: true, linkedDomain: true, provenance: true, confidence: true } }) : Promise.resolve([]),
+    metadataRecordsPromise,
   ]);
   const ownedPropertyIds = new Set(properties.map((property) => property.id));
   const metadataByFile = new Map(metadataRecords.map((record) => [record.storedFileId, record]));

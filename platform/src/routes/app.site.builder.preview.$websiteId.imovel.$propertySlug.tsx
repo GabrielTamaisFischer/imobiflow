@@ -433,7 +433,7 @@ function formatCurrency(value: number | null | undefined) {
 
 function readThemeColor(theme: WebsiteBuilderWebsite["themeJson"] | undefined, fallback: string) {
   const colors = theme && typeof theme === "object" && !Array.isArray(theme) ? theme.colors : null;
-  if (colors && typeof colors === "object" && !Array.isArray(colors) && typeof colors.primary === "string") return colors.primary;
+  if (colors && typeof colors === "object" && !Array.isArray(colors) && "primary" in colors && typeof colors.primary === "string") return colors.primary;
   return fallback;
 }
 

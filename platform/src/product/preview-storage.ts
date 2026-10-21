@@ -104,7 +104,9 @@ export function clearAutomaticQaPreviewData() {
   });
 
   filterPreviewArray("imobiflow.preview.appointments", (appointment) => {
-    return !String(appointment.title ?? "").startsWith("QA ") && !String(appointment.metadata?.test_lab_key ?? "").startsWith("appointment:QA-");
+    const metadata = appointment.metadata;
+    const testLabKey = metadata && typeof metadata === "object" && "test_lab_key" in metadata ? metadata.test_lab_key : undefined;
+    return !String(appointment.title ?? "").startsWith("QA ") && !String(testLabKey ?? "").startsWith("appointment:QA-");
   });
 
   const inspections = readPreviewJson<Array<Record<string, unknown>>>("imobiflow.preview.inspections", []);

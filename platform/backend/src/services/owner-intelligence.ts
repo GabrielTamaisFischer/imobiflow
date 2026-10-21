@@ -393,7 +393,10 @@ function createNotConfiguredProvider(input: {
     priorities: input.priorities,
     envNames: input.envNames ?? [],
     costProfile: { pricingModel: input.pricingModel ?? "unknown", estimatedCost: null, currency: "BRL", isPaid: input.pricingModel !== "free" },
-    isConfigured: () => Boolean(input.envNames?.length) && input.envNames.every((name) => Boolean(process.env[name])),
+    isConfigured: () => {
+      const envNames = input.envNames ?? [];
+      return envNames.length > 0 && envNames.every((name) => Boolean(process.env[name]));
+    },
     supports: (subjectType, capability) => input.capabilities.includes(capability) && ((subjectType === "COMPANY") || capability !== "COMPANY" || input.capabilities.includes("COMPANY")),
     query: async ({ capabilities }) => ({
       status: "not_configured",

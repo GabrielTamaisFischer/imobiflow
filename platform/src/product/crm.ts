@@ -279,6 +279,7 @@ function createPreviewLead(input: LeadInput): Lead {
     budget_cents: input.budget_cents ?? null,
     property_reference: input.property_reference || null,
     notes: input.notes || null,
+    first_contact_at: null,
     last_contact_at: null,
     next_follow_up_at: input.next_follow_up_at || null,
     created_at: now,

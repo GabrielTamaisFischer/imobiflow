@@ -715,7 +715,7 @@ function buildPropertyDescription(label: string, city: string, neighborhood: str
   return `${label} de teste localizado em ${neighborhood}, ${city}, criado pelo laboratório QA para validar cadastro completo, mídia, publicação, agenda e vistoria de ${operationLabel}.`;
 }
 
-function buildAppointmentScenarios(properties: TestPropertyScenario[]) {
+function buildAppointmentScenarios(properties: TestPropertyScenario[]): TestScenarioPlan["appointments"] {
   return properties.slice(0, 12).map((scenario, index) => {
     const startsAt = new Date(Date.UTC(2026, 4, 25 + index, 12 + (index % 5), 0, 0));
     const endsAt = new Date(startsAt.getTime() + 60 * 60 * 1000);

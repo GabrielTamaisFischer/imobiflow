@@ -57,7 +57,7 @@ export function maskOwnerDocument(value: string | null | undefined) {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
-export function sanitizeOwnerForPermissions(owner: Record<string, unknown>, permissions: OwnerProfilePermissions) {
+export function sanitizeOwnerForPermissions<T extends Record<string, unknown>>(owner: T, permissions: OwnerProfilePermissions) {
   if (hasPermission(permissions, "owners.sensitive.view")) return owner;
   return { ...owner, document: maskOwnerDocument(typeof owner.document === "string" ? owner.document : null) };
 }
@@ -224,18 +224,21 @@ export async function updateOwnerProfile(options: {
   const financialData = mergedFinancial
     ? { ...mergedFinancial, financial_capacity: financialCapacity }
     : mergeProfileGroup(currentFinancial, group("financial"));
+  // Os grupos são objetos JSON (vindos do próprio JSON persistido + payload já validado);
+  // a conversão para o tipo de entrada do Prisma acontece só aqui, na fronteira de escrita.
+  const json = (value: JsonRecord) => value as Prisma.InputJsonObject;
   const data = {
-    identityJson: mergeProfileGroup(current?.identityJson ?? defaults.identity, group("identity")),
-    contactJson: mergeProfileGroup(current?.contactJson ?? defaults.contact, group("contact")),
-    addressJson: mergeProfileGroup(current?.addressJson ?? defaults.address, group("address")),
-    professionalJson: professionalPatch ? { ...currentProfessional, ...professionalPatch } : currentProfessional,
-    financialJson: financialData,
-    creditJson: mergeProfileGroup(current?.creditJson ?? defaults.credit, group("credit")),
-    legalJson: mergeProfileGroup(current?.legalJson ?? defaults.legal, group("legal")),
-    fiscalJson: mergeProfileGroup(current?.fiscalJson ?? defaults.fiscal, group("fiscal")),
-    provenanceJson: mergeProfileGroup(current?.provenanceJson ?? defaults.provenance, input.provenance),
-    confidenceJson: mergeProfileGroup(current?.confidenceJson ?? defaults.confidence, input.confidence),
-    treatmentConsentJson: mergeProfileGroup(current?.treatmentConsentJson ?? defaults.treatment_consent, input.treatment_consent),
+    identityJson: json(mergeProfileGroup(current?.identityJson ?? defaults.identity, group("identity"))),
+    contactJson: json(mergeProfileGroup(current?.contactJson ?? defaults.contact, group("contact"))),
+    addressJson: json(mergeProfileGroup(current?.addressJson ?? defaults.address, group("address"))),
+    professionalJson: json(professionalPatch ? { ...currentProfessional, ...professionalPatch } : currentProfessional),
+    financialJson: json(financialData),
+    creditJson: json(mergeProfileGroup(current?.creditJson ?? defaults.credit, group("credit"))),
+    legalJson: json(mergeProfileGroup(current?.legalJson ?? defaults.legal, group("legal"))),
+    fiscalJson: json(mergeProfileGroup(current?.fiscalJson ?? defaults.fiscal, group("fiscal"))),
+    provenanceJson: json(mergeProfileGroup(current?.provenanceJson ?? defaults.provenance, input.provenance)),
+    confidenceJson: json(mergeProfileGroup(current?.confidenceJson ?? defaults.confidence, input.confidence)),
+    treatmentConsentJson: json(mergeProfileGroup(current?.treatmentConsentJson ?? defaults.treatment_consent, input.treatment_consent)),
   };
   const profile = current
     ? await getPrisma().ownerProfile.update({ where: { id: current.id }, data })
