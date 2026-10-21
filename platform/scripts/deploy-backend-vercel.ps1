@@ -2,6 +2,10 @@ param(
   [string]$AppUrl = "https://imobifloww-main.vercel.app",
   [string[]]$VercelTargets = @("production", "preview"),
   [switch]$SkipEnv,
+  # Migrations e seed NAO rodam por padrao: exigem flag explicita e confirmacao digitada.
+  [switch]$RunMigrations,
+  [switch]$RunSeed,
+  # Legado: mantidos so por compatibilidade com comandos antigos (hoje ja sao o padrao).
   [switch]$SkipMigrations,
   [switch]$SkipDeploy,
   [switch]$SkipSmoke,
@@ -13,6 +17,19 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+if ($RunMigrations -and $SkipMigrations) {
+  throw "Use -RunMigrations ou -SkipMigrations, nao ambos."
+}
+if ($RunSeed -and $SkipSeed) {
+  throw "Use -RunSeed ou -SkipSeed, nao ambos."
+}
+if ($SkipMigrations) {
+  Write-Host "AVISO -SkipMigrations e legado: migrations ja nao rodam por padrao (use -RunMigrations para aplica-las)."
+}
+if ($SkipSeed) {
+  Write-Host "AVISO -SkipSeed e legado: seed ja nao roda por padrao (use -RunSeed para aplica-lo)."
+}
 
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $ProjectRoot
@@ -269,6 +286,16 @@ function Normalize-DatabaseUrl([string]$RawUrl, [string]$Label) {
   return $normalized
 }
 
+function Confirm-DatabaseChange([string]$Action, [string]$Phrase) {
+  Write-Host ""
+  Write-Host "ATENCAO: $Action no banco informado em DATABASE_URL (deploy de PRODUCAO)."
+  Write-Host "Isso altera o banco e exige autorizacao explicita para esta execucao."
+  $typed = Read-Host "Digite exatamente '$Phrase' para continuar (qualquer outra resposta cancela)"
+  if ($typed -cne $Phrase) {
+    throw "$Action cancelado: confirmacao nao recebida. Nada foi alterado no banco."
+  }
+}
+
 function Invoke-DatabaseConnectionValidation([string]$DatabaseUrl) {
   Invoke-CommandCheckedMasked "npx" @("prisma", "db", "execute", "--schema", "prisma/schema.prisma", "--stdin") @{
     "DATABASE_URL" = $DatabaseUrl
@@ -384,19 +411,26 @@ if (-not $SkipConnectionValidation) {
   Write-Ok "Conexao MySQL validada"
 }
 
-if (-not $SkipMigrations) {
-  Write-Step "Rodando Prisma generate e migrations"
-  Invoke-CommandCheckedMasked "npm" @("run", "prisma:generate") $migrationEnv
+Write-Step "Gerando Prisma Client (nao altera o banco)"
+Invoke-CommandCheckedMasked "npm" @("run", "prisma:generate") $migrationEnv
+Write-Ok "Prisma Client gerado"
+
+if ($RunMigrations) {
+  Confirm-DatabaseChange "Aplicar migrations (prisma migrate deploy)" "APLICAR MIGRATIONS"
+  Write-Step "Rodando migrations (solicitado por -RunMigrations)"
   Invoke-CommandCheckedMasked "npm" @("run", "prisma:migrate") $migrationEnv
   Write-Ok "Migrations aplicadas"
+} else {
+  Write-Step "Migrations NAO executadas (padrao). Para aplicar, rode de novo com -RunMigrations."
+}
 
-  if (-not $SkipSeed) {
-    Write-Step "Rodando seed estrutural controlado"
-    Invoke-CommandCheckedMasked "npm" @("run", "prisma:seed") $migrationEnv
-    Write-Ok "Seed estrutural aplicado"
-  } else {
-    Write-Host "Seed estrutural pulado por -SkipSeed."
-  }
+if ($RunSeed) {
+  Confirm-DatabaseChange "Rodar seed estrutural (prisma:seed)" "RODAR SEED"
+  Write-Step "Rodando seed estrutural controlado (solicitado por -RunSeed)"
+  Invoke-CommandCheckedMasked "npm" @("run", "prisma:seed") $migrationEnv
+  Write-Ok "Seed estrutural aplicado"
+} else {
+  Write-Step "Seed NAO executado (padrao). Para aplicar, rode de novo com -RunSeed."
 }
 
 $deployUrl = ""

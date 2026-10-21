@@ -43,7 +43,8 @@ O script:
 - grava variaveis em Production e Preview;
 - normaliza a `DATABASE_URL` com `connection_limit=1`, `connect_timeout=15` e `sslaccept` quando ausentes;
 - valida a conexao MySQL com Prisma sem imprimir a URL completa;
-- roda `prisma generate`, `prisma migrate deploy` e o seed estrutural controlado;
+- roda `prisma generate` (nao altera o banco);
+- NAO roda `prisma migrate deploy` nem o seed por padrao. Para isso, use `npm run deploy:vercel -- -RunMigrations` e/ou `-RunSeed`; cada um pede confirmacao digitada e exige autorizacao explicita para producao (`-SkipMigrations`/`-SkipSeed` ficam aceitos apenas por compatibilidade);
 - faz build e deploy de producao;
 - executa o smoke QA real contra `/api`.
 

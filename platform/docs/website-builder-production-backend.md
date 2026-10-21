@@ -68,7 +68,9 @@ Use o script principal:
 npm run deploy:vercel
 ```
 
-Ou rode manualmente:
+O script NAO aplica migrations nem seed por padrao. Quando autorizado, use `npm run deploy:vercel -- -RunMigrations` e/ou `-RunSeed` (cada um pede confirmacao digitada).
+
+Ou rode manualmente (prisma:migrate e prisma:seed alteram o banco: so com autorizacao explicita):
 
 ```bash
 npm run prisma:generate

@@ -43,7 +43,7 @@ CLOUDINARY_UPLOAD_FOLDER=imobiflow
 npm run deploy:vercel
 ```
 
-O script grava as variaveis server-side na Vercel, valida a conexao MySQL, roda migrations/seed estrutural controlado e faz o deploy.
+O script grava as variaveis server-side na Vercel, valida a conexao MySQL e faz o deploy. Migrations e seed estrutural NAO rodam por padrao: use `npm run deploy:vercel -- -RunMigrations` e/ou `-RunSeed`, que exigem confirmacao digitada e autorizacao explicita para producao.
 
 Para Railway, use `MYSQL_PUBLIC_URL` como entrada do prompt `DATABASE_URL`. Nao use `MYSQL_URL`, pois ela aponta para a rede interna `railway.internal`.
 
