@@ -27,7 +27,7 @@ export default function handler(req: any, res: any) {
   const parsed = new URL(originalUrl, "https://imobiflow.local");
   const rewrittenPath =
     typeof req.query?.__imobiflow_path === "string"
-      ? `/${req.query.__imobiflow_path.replace(/^\\/+/, "")}`
+      ? `/${req.query.__imobiflow_path.replace(/^\/+/, "")}`
       : null;
 
   if (rewrittenPath) {
