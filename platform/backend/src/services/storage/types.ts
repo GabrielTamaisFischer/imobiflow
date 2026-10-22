@@ -122,4 +122,25 @@ export interface StorageProvider {
     resourceType: StorageResourceType;
     format?: string | null;
   }): string;
+  /**
+   * F5B (Sub-bloco 5B) - leitura dos BYTES reais do arquivo, feita pelo
+   * proprio backend (nunca via `secureUrl`/`getAuthenticatedDownloadUrl`
+   * repassada para outro processo). Necessario para dois casos que nao
+   * podem depender de uma URL assinada de vida curta: (1) embutir fotos de
+   * evidencia dentro do laudo PDF gerado no servidor; (2) servir o download
+   * autenticado do proprio laudo quando o provider ativo nao implementa
+   * `getAuthenticatedDownloadUrl` (hoje: Local e R2).
+   *
+   * Cada provider implementa com o mecanismo que ja tem: Local le do disco
+   * local; R2 usa `GetObjectCommand` do SDK S3 ja presente; Cloudinary busca
+   * a URL autenticada de 60s ja existente e baixa o conteudo imediatamente
+   * (nunca expoe essa URL para fora do backend). Nao opcional: as 3
+   * implementacoes reais do projeto (Local/R2/Cloudinary) agora implementam
+   * este metodo.
+   */
+  getFileBuffer(input: {
+    publicId: string;
+    resourceType: StorageResourceType;
+    format?: string | null;
+  }): Promise<Buffer>;
 }

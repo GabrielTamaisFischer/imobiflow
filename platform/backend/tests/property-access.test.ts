@@ -51,10 +51,18 @@ type FakeUser = {
   status: string;
   role: string;
   permissionKeys: string[];
+  creciNumber?: string | null;
 };
 
-function fakeUser(id: string, companyId: string, role: string, permissionKeys: string[], status = "active"): FakeUser {
-  return { id, companyId, name: id, status, role, permissionKeys };
+function fakeUser(
+  id: string,
+  companyId: string,
+  role: string,
+  permissionKeys: string[],
+  status = "active",
+  creciNumber: string | null = null,
+): FakeUser {
+  return { id, companyId, name: id, status, role, permissionKeys, creciNumber };
 }
 
 const state = vi.hoisted(() => ({
@@ -76,7 +84,7 @@ const state = vi.hoisted(() => ({
 function resetState() {
   state.users = [
     fakeUser(OWNER_A, COMPANY_A, "owner", ["properties.view", "properties.manage", "crm.view", "crm.manage"]),
-    fakeUser(BROKER_A1, COMPANY_A, "broker", ["properties.view", "properties.manage", "crm.view", "crm.manage"]),
+    fakeUser(BROKER_A1, COMPANY_A, "broker", ["properties.view", "properties.manage", "crm.view", "crm.manage"], "active", "123456-F"),
     fakeUser(BROKER_A2, COMPANY_A, "broker", ["properties.view", "properties.manage", "crm.view", "crm.manage"]),
     fakeUser(BROKER_A3, COMPANY_A, "broker", ["properties.view", "properties.manage", "crm.view", "crm.manage"]),
     fakeUser(OWNER_B, COMPANY_B, "owner", ["properties.view", "properties.manage", "crm.view", "crm.manage"]),
@@ -180,7 +188,13 @@ function buildFakeDatabase() {
       return state.users
         .filter((candidate) => matchesAppUserWhere(candidate, where))
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((user) => ({ id: user.id, name: user.name, role: user.role, status: user.status }));
+        .map((user) => ({
+          id: user.id,
+          name: user.name,
+          role: user.role,
+          status: user.status,
+          party: user.creciNumber ? { roles: [{ brokerProfile: { creciNumber: user.creciNumber, photoUrl: null } }] } : null,
+        }));
     }),
   };
 
@@ -586,5 +600,15 @@ describe("Fase 2.2B — regressão", () => {
     const ids = (res.body.users as Array<{ id: string }>).map((user) => user.id);
     expect(ids).toEqual(expect.arrayContaining([OWNER_A, BROKER_A1, BROKER_A2, BROKER_A3]));
     expect(ids).not.toContain(OWNER_B);
+  });
+
+  it("GET /users retorna creci_number preservando compatibilidade dos campos existentes", async () => {
+    const res = await request("GET", "/users", "token-owner-a");
+    expect(res.status).toBe(200);
+    const users = res.body.users as Array<{ id: string; name: string; role: string; status: string; creci_number: string | null; photo_url: string | null }>;
+    const broker1 = users.find((user) => user.id === BROKER_A1);
+    expect(broker1).toMatchObject({ id: BROKER_A1, name: BROKER_A1, role: "broker", status: "active", creci_number: "123456-F" });
+    const owner = users.find((user) => user.id === OWNER_A);
+    expect(owner?.creci_number ?? null).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { env } from "../../config/env.js";
 import { resourceTypeForMime } from "./file-policy.js";
 import type { DeleteFileInput, PublicUrlOptions, StorageProvider, StoredFile, UploadFileInput } from "./types.js";
@@ -63,6 +63,23 @@ export class LocalStorageProvider implements StorageProvider {
     if (existsSync(absolutePath)) {
       await unlink(absolutePath).catch(() => undefined);
     }
+  }
+
+  // F5B: leitura de bytes direto do disco local, para o backend embutir a
+  // foto em um PDF ou servir um download autenticado sem depender de URL
+  // assinada (que este provider nao gera). publicId sempre vem de um
+  // StoredFile resolvido no backend (nunca do cliente), mas ainda validamos
+  // que o caminho resolvido continua dentro de UPLOADS_ROOT antes de ler.
+  async getFileBuffer(input: { publicId: string }): Promise<Buffer> {
+    const absolutePath = resolve(UPLOADS_ROOT, input.publicId);
+    const rel = relative(UPLOADS_ROOT, absolutePath);
+    if (rel.startsWith("..") || resolve(rel) === rel) {
+      throw Object.assign(new Error("Caminho de arquivo invalido."), { statusCode: 404, code: "FILE_NOT_FOUND" });
+    }
+    if (!existsSync(absolutePath)) {
+      throw Object.assign(new Error("Arquivo nao encontrado no storage local."), { statusCode: 404, code: "FILE_NOT_FOUND" });
+    }
+    return readFile(absolutePath);
   }
 
   getPublicUrl(publicId: string, _options: PublicUrlOptions = {}) {

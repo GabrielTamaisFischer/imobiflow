@@ -15,10 +15,14 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(list).not.toContain("listInspections()");
   });
 
-  it("expõe detalhes de ambientes, itens e todas as condições canônicas", async () => {
+  it("expõe, entre o detalhe e a camada de status (SUB-BLOCO 3), todas as condições canônicas", async () => {
+    // Desde o SUB-BLOCO 3 a UI de status do item é uma camada de apresentação
+    // (inspection-item-status.ts) sobre o enum real de 7 valores — não mais
+    // literais soltos na página de detalhe.
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    const statusDomain = await source("./inspection-item-status.ts");
     for (const condition of ["not_inspected", "excellent", "good", "fair", "poor", "damaged", "not_applicable"]) {
-      expect(detail).toContain(condition);
+      expect(statusDomain).toContain(condition);
     }
     expect(detail).toContain("expected_version");
     expect(detail).toContain("INSPECTION_VERSION_CONFLICT");
@@ -40,14 +44,19 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(list).toContain("if (isDetailRoute) return <Outlet />");
   });
 
-  it("oferece criação de ambiente somente enquanto a vistoria é mutável", async () => {
+  it("oferece criação de ambiente (SUB-BLOCO 3: sugestão + manual) somente enquanto a vistoria é mutável", async () => {
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
-    expect(detail).toContain("Adicionar ambiente");
+    const addRoom = await source("../components/app/inspections/InspectionAddRoom.tsx");
+    expect(addRoom).toContain("Adicionar ambiente");
     expect(detail).toContain("Nenhum ambiente adicionado ainda.");
-    expect(detail).toContain("createMysqlRoom(inspection.id");
-    expect(detail).toContain("expected_version: inspection.version");
+    expect(detail).toContain("createMysqlRoom(currentInspection.id");
+    expect(detail).toContain("expected_version: currentInspection.version");
     expect(detail).toContain("crypto.randomUUID()");
     expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
+    // Ação de criar ambiente (sugestão aceita ou manual) só aparece com
+    // permissão operacional (inspections.manage) e vistoria mutável — nunca
+    // exige cargo administrativo, ao contrário de editar/arquivar o registro.
+    expect(detail).toContain("canEdit && mutable ? <InspectionAddRoom");
   });
 
   it("refaz o carregamento após conflito de versão nas mutações do detalhe", async () => {
@@ -57,27 +66,52 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain("void reload()");
   });
 
-  it("integra criacao, edicao e readonly de itens no Room", async () => {
+  it("integra criação, edição e readonly de itens no workspace do ambiente (SUB-BLOCO 3)", async () => {
+    // Desde o SUB-BLOCO 3 a árvore ambiente→itens é renderizada pelo
+    // InspectionRoomWorkspace (coluna central), não mais na própria página.
+    const workspace = await source("../components/app/inspections/InspectionRoomWorkspace.tsx");
+    const addItem = await source("../components/app/inspections/InspectionAddItem.tsx");
+    expect(workspace).toContain("Nenhum item neste ambiente ainda.");
+    expect(addItem).toContain("Adicionar item");
+    expect(workspace).toContain("createMysqlItem(current.id, room.id");
+    expect(workspace).toContain("expected_version: inspection.version");
+    expect(workspace).toContain("patchMysqlItem(inspection.id, room.id, itemId");
+    expect(workspace).toContain("deleteMysqlItem(inspection.id, room.id, itemId");
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
-    expect(detail).toContain("Nenhum item adicionado ainda.");
-    expect(detail).toContain("Adicionar item");
-    expect(detail).toContain("createMysqlItem(inspection.id, room.id");
-    expect(detail).toContain("expected_version: inspection.version");
-    expect(detail).toContain("condition: itemCondition");
-    expect(detail).toContain("notes: itemNotes.trim() || null");
-    expect(detail).toContain("patchMysqlItem(inspection.id, room.id, itemId");
-    expect(detail).toContain("deleteMysqlItem(inspection.id, room.id, itemId");
     expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
   });
 
-  it("oferece arquivamento somente para completed com locking e confirmacao", async () => {
+  it("oferece arquivamento (\"apagar vistoria\") para draft/in_progress/completed, nunca para archived, com modal de confirmacao e locking", async () => {
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
-    expect(detail).toContain('inspection.status === "completed"');
-    expect(detail).toContain("Arquivar vistoria");
-    expect(detail).toContain('window.confirm("Arquivar esta vistoria?")');
+    const modal = await source("../components/app/inspections/InspectionArchiveConfirmModal.tsx");
+    expect(detail).toContain('inspection.status !== "archived"');
+    expect(detail).toContain('currentInspection.status === "archived"');
+    expect(detail).toContain("Apagar vistoria");
+    expect(detail).toContain("InspectionArchiveConfirmModal");
+    expect(detail).toContain("setArchiveModalOpen(true)");
+    expect(modal).toContain("A vistoria será arquivada e deixará de aparecer no fluxo operacional padrão.");
     expect(detail).toContain('status: "archived"');
-    expect(detail).toContain("expected_version: inspection.version");
+    expect(detail).toContain("expected_version: currentInspection.version");
     expect(detail).toContain("handleMutationError(e)");
     expect(detail).toContain('inspection.status !== "completed" && inspection.status !== "archived"');
+  });
+
+  it("restringe editar/arquivar o registro principal da vistoria a cargo administrativo, sem travar o trabalho operacional", async () => {
+    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
+    const workspace = await source("../components/app/inspections/InspectionRoomWorkspace.tsx");
+    const access = await source("./app-access.ts");
+    // A UI só mostra Editar/Apagar vistoria e o editor de responsável/observações
+    // quando o usuário é administrativo (owner/admin/manager) — não basta ter
+    // inspections.manage, que também é concedido a corretor e vistoriador.
+    expect(detail).toContain("isAdministrative");
+    expect(detail).toContain("canEditRecord = canEdit && isAdministrative(session?.access.appUser)");
+    expect(detail).toContain("{canEditRecord ? (");
+    expect(detail).toContain("editable={canEditRecord && mutable && editMode}");
+    // O trabalho operacional (ambientes, itens, evidências, iniciar/concluir)
+    // continua liberado apenas com inspections.manage, sem exigir cargo alto —
+    // desde o SUB-BLOCO 3 isso é passado para o InspectionRoomWorkspace.
+    expect(detail).toContain("canEdit={canEdit && mutable}");
+    expect(workspace).toContain("canEdit ?");
+    expect(access).toContain('const administrativeRoles = new Set(["owner", "admin", "manager"]);');
   });
 });

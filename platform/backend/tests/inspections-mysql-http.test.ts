@@ -193,12 +193,18 @@ vi.mock("../src/services/idempotency.js", () => ({
 }));
 
 vi.mock("../src/services/storage/index.js", () => {
+  // Sub-bloco 5B - guarda os bytes de upload por publicId para que
+  // getFileBuffer (download autenticado canônico) devolva o conteúdo real
+  // nos testes, igual aos 3 providers reais fazem em produção.
+  const bytesByPublicId = new Map<string, Buffer>();
   const provider = {
     async uploadFile(input: Row) {
       state.storageUploads.push({ companyId: input.companyId, purpose: input.purpose });
+      const publicId = `${input.folder}/${input.entityId}`;
+      bytesByPublicId.set(publicId, Buffer.isBuffer(input.body) ? input.body : Buffer.from(input.body));
       return {
         provider: "fake",
-        publicId: `${input.folder}/${input.entityId}`,
+        publicId,
         resourceType: input.mimeType === "application/pdf" ? "raw" : "image",
         secureUrl: "https://fake.invalid/file",
         originalFilename: input.fileName,
@@ -216,6 +222,11 @@ vi.mock("../src/services/storage/index.js", () => {
     },
     async getAuthenticatedDownloadUrl() {
       return "https://fake.invalid/signed";
+    },
+    async getFileBuffer(input: Row) {
+      const bytes = bytesByPublicId.get(input.publicId);
+      if (!bytes) throw Object.assign(new Error("Arquivo não encontrado no storage fake."), { statusCode: 404 });
+      return bytes;
     },
   };
   return {
@@ -245,7 +256,7 @@ const ids = {
   entryB: "b3000000-0000-4000-8000-000000000001",
 };
 
-function access(companyId: string, userId: string, permissions: string[]) {
+function access(companyId: string, userId: string, permissions: string[], role = "admin") {
   return {
     authUser: { id: userId, email: "qa@example.test", name: "QA" },
     appUser: {
@@ -254,7 +265,7 @@ function access(companyId: string, userId: string, permissions: string[]) {
       name: "QA",
       email: "qa@example.test",
       status: "active",
-      role: "admin",
+      role,
       permissions,
       permissionScopes: {},
     },
@@ -276,6 +287,21 @@ const sessions: Record<string, ReturnType<typeof access>> = {
   adminA: access(COMPANY_A, ids.adminA, ["inspections.view", "inspections.manage"]),
   viewerA: access(COMPANY_A, ids.adminA, ["inspections.view"]),
   adminB: access(COMPANY_B, ids.adminB, ["inspections.view", "inspections.manage"]),
+  // F5G — cenários de cargo administrativo x inspections.manage. owner/admin/
+  // manager são os únicos autorizados a editar o registro principal e
+  // arquivar; broker, inspector e um role customizado não-administrativo
+  // (ex.: "Suporte Vistorias") têm inspections.manage mas não são admin, e
+  // devem continuar liberados só para o trabalho operacional.
+  ownerA: access(COMPANY_A, ids.adminA, ["inspections.view", "inspections.manage"], "owner"),
+  managerA: access(COMPANY_A, ids.adminA, ["inspections.view", "inspections.manage"], "manager"),
+  brokerA: access(COMPANY_A, ids.adminA, ["inspections.view", "inspections.manage"], "broker"),
+  inspectorA: access(COMPANY_A, ids.adminA, ["inspections.view", "inspections.manage"], "inspector"),
+  customNonAdminA: access(
+    COMPANY_A,
+    ids.adminA,
+    ["inspections.view", "inspections.manage"],
+    "Suporte Vistorias",
+  ),
 };
 
 function inspection(
@@ -424,6 +450,7 @@ describe("router canônico de vistorias — isolamento A × B", () => {
     ["PATCH", "", { expected_version: 3, notes: "invasão" }],
     ["POST", "/rooms", { id: randomUUID(), expected_version: 3, name: "Invasão", position: 0 }],
     ["POST", "/report", {}],
+    ["GET", "/report/download"],
     ["DELETE", `/evidence/${randomUUID()}`, { expected_version: 3 }],
   ])(
     "empresa A recebe 404 em %s da vistoria da empresa B (%s)",
@@ -664,10 +691,182 @@ describe("comparação entrada × saída", () => {
   });
 });
 
+async function callRaw(session: keyof typeof sessions, method: string, path: string) {
+  const app = express();
+  app.use(express.json({ limit: "15mb" }));
+  app.use((req: Request & { access?: unknown }, _res, next) => {
+    req.access = sessions[session];
+    next();
+  });
+  app.use("/real-estate/inspections", mysqlInspectionsRouter);
+  app.use(errorHandler);
+  const server = app.listen(0);
+  servers.push(server);
+  await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${port}/real-estate/inspections${path}`, { method });
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { status: response.status, headers: response.headers, buffer };
+}
+
 describe("laudo", () => {
   it("recusa gerar laudo de vistoria em andamento (o botão fica desabilitado no front)", async () => {
     const { status, body } = await call("adminA", "POST", `/${ids.draftA}/report`, {});
     expect(status).toBe(400);
     expect(body.error).toBe("INSPECTION_REPORT_REQUIRES_COMPLETED");
+  });
+
+  it("gera o laudo profissional (pdf-lib) de uma vistoria concluída e permite o download autenticado", async () => {
+    const generated = await call("adminA", "POST", `/${ids.entryA}/report`, {});
+    expect(generated.status).toBe(201);
+    expect(generated.body.report.mime_type).toBe("application/pdf");
+    expect(generated.body.report.file_name).toMatch(/^laudo-vistoria-.*\.pdf$/);
+
+    const download = await callRaw("adminA", "GET", `/${ids.entryA}/report/download`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toBe("application/pdf");
+    expect(download.headers.get("content-disposition")).toContain(generated.body.report.file_name);
+    expect(download.buffer.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(download.buffer.byteLength).toBeGreaterThan(100);
+
+    // Empresa B não consegue baixar o laudo da empresa A mesmo sabendo o ID da vistoria.
+    const crossTenant = await callRaw("adminB", "GET", `/${ids.entryA}/report/download`);
+    expect(crossTenant.status).toBe(404);
+  });
+});
+
+describe("F5G — editar registro principal e arquivar exigem cargo administrativo", () => {
+  function seedInspection(status: string) {
+    const id = randomUUID();
+    state.tables.inspection.push(inspection(id, COMPANY_A, ids.propA, "entry", status, ids.adminA));
+    return id;
+  }
+
+  it.each([["ownerA"], ["adminA"], ["managerA"]] as const)(
+    "%s (administrativo) pode editar o registro principal (responsável/observações)",
+    async (session) => {
+      const { status, body } = await call(session, "PATCH", `/${ids.draftA}`, {
+        expected_version: inspectionOf(ids.draftA).version,
+        notes: "observação administrativa",
+      });
+      expect(status).toBe(200);
+      expect(body.inspection.notes).toBe("observação administrativa");
+    },
+  );
+
+  it.each([["brokerA"], ["inspectorA"], ["customNonAdminA"]] as const)(
+    "%s com inspections.manage mas sem cargo administrativo é bloqueado ao editar o registro principal (403)",
+    async (session) => {
+      const before = structuredClone(inspectionOf(ids.draftA));
+      const { status, body } = await call(session, "PATCH", `/${ids.draftA}`, {
+        expected_version: before.version,
+        notes: "tentativa não administrativa",
+      });
+      expect(status).toBe(403);
+      expect(body.error).toBe("INSPECTION_ADMIN_ROLE_REQUIRED");
+      expect(inspectionOf(ids.draftA).notes).toBe(before.notes);
+      expect(inspectionOf(ids.draftA).version).toBe(before.version);
+    },
+  );
+
+  it.each([["brokerA"], ["inspectorA"]] as const)(
+    "%s continua liberado para trabalho operacional: iniciar/concluir vistoria sem cargo administrativo",
+    async (session) => {
+      const id = seedInspection("draft");
+      const started = await call(session, "PATCH", `/${id}`, {
+        expected_version: 3,
+        status: "in_progress",
+      });
+      expect(started.status).toBe(200);
+      expect(started.body.inspection.status).toBe("in_progress");
+
+      const completed = await call(session, "PATCH", `/${id}`, {
+        expected_version: started.body.inspection.version,
+        status: "completed",
+      });
+      expect(completed.status).toBe(200);
+      expect(completed.body.inspection.status).toBe("completed");
+    },
+  );
+
+  it.each([["brokerA"], ["inspectorA"]] as const)(
+    "%s continua liberado para criar ambientes e itens (trabalho operacional) sem cargo administrativo",
+    async (session) => {
+      const id = seedInspection("in_progress");
+      const room = await call(session, "POST", `/${id}/rooms`, {
+        id: randomUUID(),
+        expected_version: 3,
+        name: "Sala",
+        position: 0,
+      });
+      expect(room.status).toBe(201);
+      const item = await call(session, "POST", `/${id}/rooms/${room.body.room.id}/items`, {
+        id: randomUUID(),
+        expected_version: inspectionOf(id).version,
+        name: "Piso",
+        condition: "good",
+        position: 0,
+      });
+      expect(item.status).toBe(201);
+    },
+  );
+
+  it.each([["draft"], ["in_progress"], ["completed"]] as const)(
+    "owner/admin/manager pode arquivar vistoria em status %s",
+    async (status) => {
+      const id = seedInspection(status);
+      const { status: httpStatus, body } = await call("ownerA", "PATCH", `/${id}`, {
+        expected_version: 3,
+        status: "archived",
+      });
+      expect(httpStatus).toBe(200);
+      expect(body.inspection.status).toBe("archived");
+      expect(inspectionOf(id).archivedAt).not.toBeNull();
+    },
+  );
+
+  it("archived é terminal: não pode ser arquivada novamente (nem por owner/admin/manager)", async () => {
+    const id = seedInspection("draft");
+    const first = await call("ownerA", "PATCH", `/${id}`, { expected_version: 3, status: "archived" });
+    expect(first.status).toBe(200);
+    expect(first.body.inspection.status).toBe("archived");
+    // Vistoria já arquivada é terminal: uma nova tentativa (mesmo por um
+    // cargo administrativo) é rejeitada como não-mutável, nunca reprocessada
+    // como uma transição válida nem fisicamente removida.
+    const second = await call("ownerA", "PATCH", `/${id}`, {
+      expected_version: first.body.inspection.version,
+      status: "archived",
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe("INSPECTION_NOT_MUTABLE");
+    expect(inspectionOf(id).status).toBe("archived");
+  });
+
+  it.each([["brokerA"], ["inspectorA"], ["customNonAdminA"]] as const)(
+    "%s com inspections.manage mas sem cargo administrativo é bloqueado ao arquivar (403), mesmo tendo acesso operacional",
+    async (session) => {
+      const id = seedInspection("draft");
+      const before = structuredClone(inspectionOf(id));
+      const { status, body } = await call(session, "PATCH", `/${id}`, {
+        expected_version: before.version,
+        status: "archived",
+      });
+      expect(status).toBe(403);
+      expect(body.error).toBe("INSPECTION_ADMIN_ROLE_REQUIRED");
+      expect(inspectionOf(id).status).toBe(before.status);
+      expect(inspectionOf(id).version).toBe(before.version);
+    },
+  );
+
+  it("empresa A recebe 404 (não 403) ao tentar arquivar vistoria da empresa B, mesmo sendo owner", async () => {
+    const before = structuredClone(inspectionOf(ids.entryB));
+    const { status, body } = await call("ownerA", "PATCH", `/${ids.entryB}`, {
+      expected_version: before.version,
+      status: "archived",
+    });
+    expect(status).toBe(404);
+    expect(body.error).toBe("INSPECTION_NOT_FOUND");
+    expect(inspectionOf(ids.entryB).status).toBe(before.status);
+    expect(inspectionOf(ids.entryB).version).toBe(before.version);
   });
 });

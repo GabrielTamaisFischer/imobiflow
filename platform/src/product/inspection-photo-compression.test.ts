@@ -103,6 +103,51 @@ describe("compressão de foto da vistoria", () => {
     expect(broken.size).toBe(5_000_000);
   });
 
+  it("WebP pequeno (abaixo do limite) ainda é normalizado para JPEG", async () => {
+    const original = photo(400_000, "foto.webp", "image/webp");
+    const { encoder, calls } = fakeEncoder(1920, 1080);
+    const result = await prepareInspectionPhotoForUpload(original, encoder);
+    expect(result.compressed).toBe(true);
+    expect(result.file.type).toBe("image/jpeg");
+    expect(result.file.name).toBe("foto.jpg");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].quality).toBe(0.88);
+    // Proporção preservada.
+    expect(result.width! / result.height!).toBeCloseTo(1920 / 1080, 2);
+    // O original (ainda WebP) não é alterado — fila offline guarda este arquivo.
+    expect(original.type).toBe("image/webp");
+  });
+
+  it("WebP grande (acima do limite) é normalizado para JPEG com a mesma redução de qualidade/tamanho", async () => {
+    const original = photo(6_500_000, "IMG_0002.webp", "image/webp");
+    const { encoder, calls } = fakeEncoder(4032, 3024);
+    const result = await prepareInspectionPhotoForUpload(original, encoder);
+    expect(result.compressed).toBe(true);
+    expect(result.finalBytes).toBeLessThanOrEqual(INSPECTION_UPLOAD_TARGET_BYTES);
+    expect(result.file.type).toBe("image/jpeg");
+    expect(result.file.name).toBe("IMG_0002.jpg");
+    expect(result.width! / result.height!).toBeCloseTo(4032 / 3024, 2);
+    expect(Math.max(result.width!, result.height!)).toBeLessThanOrEqual(2560);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it("WebP sem encoder disponível (fora do navegador) preserva o arquivo original em vez de falhar", async () => {
+    const original = photo(400_000, "foto.webp", "image/webp");
+    const result = await prepareInspectionPhotoForUpload(original, null);
+    expect(result.file).toBe(original);
+    expect(result.compressed).toBe(false);
+    expect(result.file.type).toBe("image/webp");
+  });
+
+  it("PNG pequeno continua intacto (comportamento existente não foi alterado pela normalização de WebP)", async () => {
+    const original = photo(400_000, "foto.png", "image/png");
+    const { encoder, calls } = fakeEncoder(1920, 1080);
+    const result = await prepareInspectionPhotoForUpload(original, encoder);
+    expect(result.file).toBe(original);
+    expect(result.compressed).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
   it("fitWithin preserva proporção e nunca amplia", () => {
     expect(fitWithin(4000, 3000, 2560)).toEqual({ width: 2560, height: 1920 });
     expect(fitWithin(3000, 4000, 2560)).toEqual({ width: 1920, height: 2560 });

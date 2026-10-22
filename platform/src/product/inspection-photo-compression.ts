@@ -58,12 +58,25 @@ export class PhotoPreparationError extends Error {
   }
 }
 
+/**
+ * WebP novo precisa virar JPEG (Sub-bloco 5B): o gerador de laudo PDF usa
+ * pdf-lib, que não decodifica WebP nativamente. Em vez de uma segunda
+ * dependência de decodificação no backend, normalizamos no mesmo pipeline
+ * de compressão que já existe no navegador (Canvas/OffscreenCanvas já
+ * decodificam WebP e já sabem gerar JPEG — reaproveita quality steps,
+ * orientação EXIF e compressão existentes, sem uploader paralelo).
+ */
+function isWebpFile(file: File) {
+  return file.type.toLowerCase().trim() === "image/webp";
+}
+
 export async function prepareInspectionPhotoForUpload(
   file: File,
   encoder: PhotoEncoder | null = getDefaultPhotoEncoder(),
   targetBytes = INSPECTION_UPLOAD_TARGET_BYTES,
 ): Promise<PreparedPhoto> {
-  if (file.size <= targetBytes) {
+  const needsWebpNormalization = isWebpFile(file);
+  if (file.size <= targetBytes && !needsWebpNormalization) {
     return {
       file,
       compressed: false,
@@ -74,6 +87,19 @@ export async function prepareInspectionPhotoForUpload(
     };
   }
   if (!encoder) {
+    if (needsWebpNormalization) {
+      // Fora do navegador (SSR/teste) não há como normalizar — preserva o
+      // arquivo original. O backend ainda aceita WebP e o gerador de PDF
+      // trata esse caso explicitamente (ver inspection-report-pdf.ts).
+      return {
+        file,
+        compressed: false,
+        originalBytes: file.size,
+        finalBytes: file.size,
+        width: null,
+        height: null,
+      };
+    }
     throw new PhotoPreparationError(
       "Não foi possível otimizar esta foto neste navegador. Tente uma foto menor.",
     );

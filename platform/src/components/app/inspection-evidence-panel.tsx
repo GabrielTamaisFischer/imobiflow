@@ -1,8 +1,8 @@
-import { Loader2, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { isOfflineRuntime } from "@/product/inspection-offline";
 import {
   deleteMysqlInspectionEvidence,
   filterEvidenceFor,
+  patchMysqlInspectionEvidence,
   removeMysqlOfflineInspectionEvidence,
   reorderMysqlInspectionEvidence,
   syncMysqlInspectionOfflineEvidenceQueue,
@@ -11,6 +11,8 @@ import {
   type InspectionEvidenceRow,
   type MysqlInspectionEvidence,
 } from "@/product/inspections";
+import { useState } from "react";
+import { InspectionEvidenceGallery } from "./inspections/InspectionEvidenceGallery";
 
 type Props = {
   inspectionId: string;
@@ -20,9 +22,13 @@ type Props = {
   editable: boolean;
   evidence: InspectionEvidenceRow[];
   loading: boolean;
+  /** SUB-BLOCO 4 — rótulo de contexto mostrado no lightbox (ex.: "Sala" ou "Sala · Paredes"). */
+  contextLabel: string;
   onEvidenceChanged: () => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
+  /** SUB-BLOCO 4 — avisa a página de uma mutação de evidência em voo, para o indicador único de salvamento (ver InspectionSaveStatus). */
+  onSavingChange?: (saving: boolean) => void;
 };
 
 export function InspectionEvidencePanel({
@@ -33,22 +39,27 @@ export function InspectionEvidencePanel({
   editable,
   evidence,
   loading,
+  contextLabel,
   onEvidenceChanged,
   onChanged,
   onError,
+  onSavingChange,
 }: Props) {
   const rows = filterEvidenceFor(evidence, roomId, itemId);
   const [busy, setBusy] = useState(false);
+
+  function notifySaving(saving: boolean) {
+    onSavingChange?.(saving);
+  }
 
   async function refresh() {
     await onEvidenceChanged();
   }
 
-  async function upload(event: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    event.target.value = "";
+  async function upload(files: File[]) {
     if (!files.length || !editable) return;
     setBusy(true);
+    notifySaving(true);
     try {
       for (const [index, file] of files.entries()) {
         await uploadMysqlInspectionEvidence(inspectionId, {
@@ -64,15 +75,16 @@ export function InspectionEvidencePanel({
       onError(error);
     } finally {
       setBusy(false);
+      notifySaving(false);
     }
   }
 
   async function remove(entry: MysqlInspectionEvidence) {
     if (!editable || !window.confirm("Remover esta evidência?")) return;
     setBusy(true);
+    notifySaving(true);
     try {
-      if ("offline_pending" in entry && entry.offline_pending)
-        await removeMysqlOfflineInspectionEvidence(entry.id);
+      if ("offline_pending" in entry && entry.offline_pending) await removeMysqlOfflineInspectionEvidence(entry.id);
       else await deleteMysqlInspectionEvidence(inspectionId, entry.id, expectedVersion);
       await refresh();
       await onChanged();
@@ -80,6 +92,7 @@ export function InspectionEvidencePanel({
       onError(error);
     } finally {
       setBusy(false);
+      notifySaving(false);
     }
   }
 
@@ -90,17 +103,14 @@ export function InspectionEvidencePanel({
     const next = [...rows];
     [next[index], next[target]] = [next[target], next[index]];
     setBusy(true);
+    notifySaving(true);
     try {
       if (next.some((candidate) => "offline_pending" in candidate && candidate.offline_pending)) {
         for (const [position, candidate] of next.entries())
           if ("offline_pending" in candidate && candidate.offline_pending)
             await updateMysqlOfflineInspectionEvidence(candidate.id, { position });
       } else {
-        await reorderMysqlInspectionEvidence(
-          inspectionId,
-          expectedVersion,
-          next.map((candidate, position) => ({ id: candidate.id, position })),
-        );
+        await reorderMysqlInspectionEvidence(inspectionId, expectedVersion, next.map((candidate, position) => ({ id: candidate.id, position })));
       }
       await refresh();
       await onChanged();
@@ -108,126 +118,68 @@ export function InspectionEvidencePanel({
       onError(error);
     } finally {
       setBusy(false);
+      notifySaving(false);
+    }
+  }
+
+  async function retry(entry: MysqlInspectionEvidence) {
+    setBusy(true);
+    notifySaving(true);
+    try {
+      await syncMysqlInspectionOfflineEvidenceQueue(inspectionId);
+      await refresh();
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+      notifySaving(false);
+    }
+  }
+
+  // SUB-BLOCO 4 — legenda (MysqlInspectionEvidence.caption) já existe no
+  // domínio; expõe de forma simples. Uma foto ainda pendente de sincronizar
+  // (offline_pending) edita a legenda localmente (updateMysqlOfflineInspectionEvidence);
+  // uma foto já sincronizada exige conexão (patchMysqlInspectionEvidence
+  // lança OFFLINE_EVIDENCE_UNSUPPORTED offline) — por isso isCaptionEditable
+  // bloqueia esse caso específico em vez de tentar e falhar silenciosamente.
+  function isCaptionEditable(entry: InspectionEvidenceRow) {
+    if (!editable) return false;
+    if (entry.offline_pending) return true;
+    return !isOfflineRuntime();
+  }
+
+  async function saveCaption(entry: MysqlInspectionEvidence, caption: string) {
+    setBusy(true);
+    notifySaving(true);
+    try {
+      if ("offline_pending" in entry && entry.offline_pending) await updateMysqlOfflineInspectionEvidence(entry.id, { caption: caption || null });
+      else await patchMysqlInspectionEvidence(inspectionId, entry.id, { expected_version: expectedVersion, caption: caption || null });
+      await refresh();
+      await onChanged();
+    } catch (error) {
+      onError(error);
+    } finally {
+      setBusy(false);
+      notifySaving(false);
     }
   }
 
   return (
-    <section
-      className="mt-4 rounded-md border border-dashed border-border p-3"
-      aria-label="Evidências"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold">Evidências</h4>
-        {editable ? (
-          <label className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-md border border-border px-3 text-sm">
-            <Upload className="h-4 w-4" />
-            Adicionar fotos
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              className="sr-only"
-              onChange={(event) => void upload(event)}
-              disabled={busy}
-            />
-          </label>
-        ) : null}
-      </div>
-      {loading ? (
-        <p className="mt-2 text-xs text-muted-foreground">Carregando evidências...</p>
-      ) : rows.length === 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">Nenhuma evidência adicionada.</p>
-      ) : (
-        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {rows.map((entry, index) => (
-            <figure
-              key={entry.id}
-              className="overflow-hidden rounded-md border border-border bg-background"
-            >
-              <div className="aspect-square bg-muted">
-                {entry.signed_url ? (
-                  <img
-                    src={entry.signed_url}
-                    alt={entry.caption || entry.file_name || "Evidência"}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="flex h-full items-center justify-center p-2 text-center text-xs text-muted-foreground">
-                    Prévia indisponível
-                  </div>
-                )}
-              </div>
-              <figcaption className="space-y-2 p-2 text-xs">
-                <span className="block truncate">{entry.caption || entry.file_name || "Foto"}</span>
-                {entry.offline_pending ? (
-                  <>
-                    <span className="block text-amber-700">
-                      {entry.offline_status === "failed"
-                        ? "Falha na sincronização"
-                        : entry.offline_status === "uploading"
-                          ? "Sincronizando..."
-                          : "Salva no dispositivo — aguardando sincronização"}
-                    </span>
-                    {entry.offline_status === "failed" ? (
-                      <button
-                        type="button"
-                        className="mt-1 rounded border px-2 py-1 text-xs"
-                        disabled={busy}
-                        onClick={() => {
-                          setBusy(true);
-                          void syncMysqlInspectionOfflineEvidenceQueue(inspectionId)
-                            .then(() => refresh())
-                            .catch(onError)
-                            .finally(() => setBusy(false));
-                        }}
-                      >
-                        Tentar novamente
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                {editable ? (
-                  <div className="flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      className="rounded border px-2 py-1"
-                      disabled={busy || index === 0}
-                      onClick={() => void move(entry, -1)}
-                      aria-label="Mover para esquerda"
-                    >
-                      ←
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border px-2 py-1"
-                      disabled={busy || index === rows.length - 1}
-                      onClick={() => void move(entry, 1)}
-                      aria-label="Mover para direita"
-                    >
-                      →
-                    </button>
-                    <button
-                      type="button"
-                      className="text-destructive"
-                      disabled={busy}
-                      onClick={() => void remove(entry)}
-                      aria-label="Remover evidência"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : null}
-              </figcaption>
-            </figure>
-          ))}
-        </div>
-      )}
-      {busy ? (
-        <p className="mt-2 inline-flex items-center text-xs text-muted-foreground">
-          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-          Processando...
-        </p>
-      ) : null}
+    <section className="mt-4 rounded-md border border-dashed border-border p-3" aria-label="Evidências">
+      <InspectionEvidenceGallery
+        rows={rows}
+        loading={loading}
+        editable={editable}
+        isCaptionEditable={isCaptionEditable}
+        busy={busy}
+        contextLabel={contextLabel}
+        emptyLabel="Nenhuma foto adicionada ainda."
+        onUpload={upload}
+        onMove={move}
+        onRemove={remove}
+        onRetry={retry}
+        onCaptionSave={saveCaption}
+      />
     </section>
   );
 }

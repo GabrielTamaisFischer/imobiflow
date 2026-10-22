@@ -32,7 +32,7 @@ export type ResourceAccessRow = {
   created_at: string;
 };
 
-export type EligibleUser = { id: string; name: string; role?: string; status?: string };
+export type EligibleUser = { id: string; name: string; role?: string; status?: string; creci_number?: string | null; photo_url?: string | null };
 
 // Um usuário com pelo menos uma permissão concedida em um recurso, com o
 // conjunto de permissões já agrupado (a API retorna uma linha por

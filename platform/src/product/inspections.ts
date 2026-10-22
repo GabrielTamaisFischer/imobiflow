@@ -1,4 +1,4 @@
-import { apiRequest } from "./api";
+import { API_URL, apiRequest } from "./api";
 import { getStoredToken, isPreviewToken } from "./auth";
 import { compactPreviewMediaUrl, safeSetPreviewItem } from "./preview-storage";
 import { listAllProperties, type Property, type PropertySummary } from "./real-estate";
@@ -248,6 +248,37 @@ export async function generateMysqlInspectionReport(inspectionId: string, regene
 }
 export async function listMysqlInspectionReports(inspectionId: string) {
   return apiRequest<{ reports: MysqlInspectionArtifact[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/reports`, { token: mysqlToken() });
+}
+
+/**
+ * Sub-bloco 5B - download autenticado do laudo em PDF. Não usa apiRequest
+ * porque ele sempre define Content-Type: application/json e faz
+ * response.json() na resposta (a rota devolve bytes de PDF, não JSON).
+ * Extrai o nome de arquivo amigável do cabeçalho Content-Disposition
+ * (gerado pelo backend via buildReportFileName) e cai para um nome padrão
+ * apenas se o cabeçalho não vier, nunca expondo um UUID bruto ao usuário.
+ */
+export async function downloadMysqlInspectionReport(inspectionId: string, reportId?: string) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Baixar o laudo exige conexão."), { code: "OFFLINE_REPORT_DOWNLOAD_UNSUPPORTED" });
+  const query = reportId ? `?report_id=${encodeURIComponent(reportId)}` : "";
+  const token = mysqlToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/real-estate/inspections/${encodeURIComponent(inspectionId)}/report/download${query}`, { headers });
+  } catch {
+    throw Object.assign(new Error("Não foi possível conectar para baixar o laudo. Tente novamente."), { code: "NETWORK_UNAVAILABLE" });
+  }
+  if (!response.ok) {
+    const message = await response.json().catch(() => null);
+    throw new Error((message as { message?: string } | null)?.message ?? "Não foi possível baixar o laudo.");
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const fileName = match?.[1] ?? `laudo-vistoria-${inspectionId}.pdf`;
+  const blob = await response.blob();
+  return { blob, fileName };
 }
 export async function createMysqlInspectionSignature(inspectionId: string, input: { signer_name: string; signer_role: "responsible" | "owner" | "tenant" | "other"; accepted_terms: boolean; signature_base64: string; report_id?: string }) {
   if (isOfflineRuntime()) throw Object.assign(new Error("Assinar exige conexão."), { code: "OFFLINE_SIGNATURE_UNSUPPORTED" });

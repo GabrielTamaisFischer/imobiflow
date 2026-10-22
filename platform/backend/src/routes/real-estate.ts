@@ -1103,9 +1103,36 @@ realEstateRouter.get("/users", requirePermission("properties.view"), async (req:
         roleRecord: { permissions: { some: { permission: { key: { in: ["properties.view", "properties.manage"] } } } } },
       },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, role: true, status: true },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        status: true,
+        // CRECI não é um campo do AppUser: fica no BrokerProfile (C1.1),
+        // alcançado via AppUser.party -> PartyRole(role="broker") ->
+        // BrokerProfile. O relacionamento é opcional em cada etapa (usuário
+        // pode não ter Party vinculado, ou não ter papel de corretor), então
+        // tudo aqui é tratado como ausente, nunca como erro.
+        party: {
+          select: {
+            roles: {
+              where: { role: "broker" },
+              select: { brokerProfile: { select: { creciNumber: true, photoUrl: true } } },
+            },
+          },
+        },
+      },
     });
-    res.json({ users });
+    res.json({
+      users: users.map((user) => ({
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        status: user.status,
+        creci_number: user.party?.roles.find((partyRole) => partyRole.brokerProfile)?.brokerProfile?.creciNumber ?? null,
+        photo_url: user.party?.roles.find((partyRole) => partyRole.brokerProfile)?.brokerProfile?.photoUrl ?? null,
+      })),
+    });
   } catch (error) {
     next(error);
   }

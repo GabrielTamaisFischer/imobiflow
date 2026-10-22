@@ -1,4 +1,5 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import type { Readable } from "node:stream";
 import { env } from "../../config/env.js";
 import type { DeleteFileInput, PublicUrlOptions, StorageProvider, StoredFile, UploadFileInput } from "./types.js";
 
@@ -58,6 +59,28 @@ export class R2StorageProvider implements StorageProvider {
         Key: input.publicId,
       }),
     );
+  }
+
+  // F5B: leitura de bytes via GetObjectCommand (ja disponivel no SDK S3
+  // usado por este provider) para o backend embutir a foto em um PDF ou
+  // servir um download autenticado sem presigned URL.
+  async getFileBuffer(input: { publicId: string }): Promise<Buffer> {
+    this.requireConfig();
+    const response = await this.client().send(
+      new GetObjectCommand({
+        Bucket: this.config.R2_BUCKET!,
+        Key: input.publicId,
+      }),
+    );
+    const body = response.Body as Readable | undefined;
+    if (!body) {
+      throw Object.assign(new Error("Arquivo nao encontrado no R2."), { statusCode: 404, code: "FILE_NOT_FOUND" });
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
   }
 
   getPublicUrl(publicId: string, _options: PublicUrlOptions = {}) {

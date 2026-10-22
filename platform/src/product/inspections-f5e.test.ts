@@ -16,24 +16,31 @@ describe("F5E — evidências de vistoria", () => {
   });
 
   it("renderiza galeria e CTA apenas enquanto a vistoria é editável", async () => {
-    const panel = await source("../components/app/inspection-evidence-panel.tsx");
-    const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
-    expect(panel).toContain("Adicionar fotos");
-    expect(panel).toContain("multiple");
-    expect(panel).toContain("Remover evidência");
-    expect(detail).toContain("InspectionEvidencePanel");
-    expect(detail).toContain("editable={canEdit}");
-    expect(detail).toContain("roomId={room.id}");
-    expect(detail).toContain("itemId={item.id}");
+    // Desde o SUB-BLOCO 4 o card de item (dentro do workspace do ambiente),
+    // não mais a página de detalhe, é quem renderiza o InspectionEvidencePanel
+    // por item — a vistoria segue reaproveitando a infraestrutura de
+    // evidência existente, só a integração visual mudou de lugar.
+    const gallery = await source("../components/app/inspections/InspectionEvidenceGallery.tsx");
+    const itemCard = await source("../components/app/inspections/InspectionItemCard.tsx");
+    expect(gallery).toContain("Adicionar fotos");
+    expect(gallery).toContain("multiple");
+    const thumbnail = await source("../components/app/inspections/InspectionEvidenceThumbnail.tsx");
+    expect(thumbnail).toContain("Remover evidência");
+    expect(itemCard).toContain("InspectionEvidencePanel");
+    expect(itemCard).toContain("editable={canEdit}");
+    expect(itemCard).toContain("roomId={roomId}");
+    expect(itemCard).toContain("itemId={item.id}");
   });
 
   it("persiste fotos offline em IndexedDB e mostra o estado de sincronização", async () => {
-    const panel = await source("../components/app/inspection-evidence-panel.tsx");
+    // Desde o SUB-BLOCO 4 o rótulo de sincronização por foto fica na
+    // miniatura (InspectionEvidenceThumbnail), não mais no painel.
+    const thumbnail = await source("../components/app/inspections/InspectionEvidenceThumbnail.tsx");
     const client = await source("./inspections.ts");
-    expect(panel).not.toContain("localStorage");
+    expect(thumbnail).not.toContain("localStorage");
     expect(client).toContain("queueOfflineInspectionEvidence");
     expect(client).toContain("offline_pending");
-    expect(panel).toContain("Salva no dispositivo");
-    expect(panel).toContain("Falha na sincronização");
+    expect(thumbnail).toContain("Salva no dispositivo");
+    expect(thumbnail).toContain("Falha na sincronização");
   });
 });

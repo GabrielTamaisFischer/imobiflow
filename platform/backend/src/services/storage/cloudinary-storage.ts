@@ -134,6 +134,23 @@ export class CloudinaryStorageProvider implements StorageProvider {
     });
   }
 
+  // F5B: le os bytes reais buscando a URL assinada de 60s acima e baixando
+  // o conteudo IMEDIATAMENTE aqui dentro do backend — essa URL nunca sai
+  // deste metodo (nunca e devolvida ao chamador nem ao cliente). Mesma
+  // abstracao usada por Local/R2, que nao precisam de URL nenhuma.
+  async getFileBuffer(input: {
+    publicId: string;
+    resourceType: StoredFile["resourceType"];
+    format?: string | null;
+  }): Promise<Buffer> {
+    const url = this.getAuthenticatedDownloadUrl(input);
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw Object.assign(new Error("Nao foi possivel ler o arquivo no Cloudinary."), { statusCode: 502, code: "STORAGE_PROVIDER_ERROR" });
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   private configure() {
     const missing = getMissingCloudinaryConfig(this.config);
     if (missing.length) {

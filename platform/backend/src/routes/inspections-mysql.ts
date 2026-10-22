@@ -11,8 +11,12 @@ import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { validateUploadFile } from "../services/storage/file-policy.js";
 import { createStoredFileRecord } from "../services/storage/stored-files.js";
 import { buildInspectionSnapshot, buildPdfBuffer, compareInspections, snapshotHash } from "../services/inspection-f5f.js";
+import { readStoredFileBuffer } from "../services/storage/read-file.js";
+import { findStoredFileForEntity } from "../services/storage/stored-files.js";
+import { WATERMARK_LOGO_ENTITY_TYPE } from "../services/mysql-real-estate.js";
+import { buildProfessionalInspectionReport, buildReportFileName } from "../services/inspection-report-pdf.js";
 import type { StorageResourceType } from "../services/storage/types.js";
-import type { RequestWithAccess } from "../types/access.js";
+import type { AccessContext, RequestWithAccess } from "../types/access.js";
 
 export const mysqlInspectionsRouter = Router();
 mysqlInspectionsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
@@ -196,6 +200,22 @@ function ensureMutable(inspection: { status: string }, requestedStatus?: string,
   const isArchivingCompleted = inspection.status === "completed" && requestedStatus === "archived" && !hasOtherChanges;
   if (inspection.status === "archived" || (inspection.status === "completed" && !isArchivingCompleted)) {
     throw Object.assign(new Error("Vistoria concluída ou arquivada não pode ser alterada."), { statusCode: 409, code: "INSPECTION_NOT_MUTABLE" });
+  }
+}
+
+// F5G — editar o registro principal da vistoria (responsável/observações
+// gerais) e arquivar exigem cargo administrativo (owner/admin/manager), não
+// bastando possuir inspections.manage: esse permissão também é concedida a
+// corretor e vistoriador (ver roleTemplates em services/roles.ts), que devem
+// continuar livres para o trabalho operacional (ambientes, itens, evidências
+// e as transições draft→in_progress→completed). Backend é autoritativo: o
+// frontend só reflete esta mesma regra para não mostrar a ação, nunca decide
+// por si só.
+const administrativeInspectionRoles = new Set(["owner", "admin", "manager"]);
+function requireAdministrativeRole(access: AccessContext) {
+  const role = access.appUser.role?.toLowerCase() ?? "";
+  if (!administrativeInspectionRoles.has(role)) {
+    throw Object.assign(new Error("Esta ação exige um cargo administrativo (owner, admin ou manager)."), { statusCode: 403, code: "INSPECTION_ADMIN_ROLE_REQUIRED" });
   }
 }
 
@@ -386,6 +406,7 @@ mysqlInspectionsRouter.patch("/:id", requirePermission("inspections.manage"), as
     const existing = await findInspection(req, String(req.params.id), "inspections.manage");
     const status = input.status === undefined ? undefined : nextStatus(existing.status, input.status);
     const hasOtherChanges = input.assigned_user_id !== undefined || input.notes !== undefined;
+    if (hasOtherChanges || status === "archived") requireAdministrativeRole(access);
     ensureMutable(existing, status, hasOtherChanges);
     const assignedUserId = input.assigned_user_id === undefined ? undefined : await resolveAssignee(companyId, input.assigned_user_id, access.appUser.id);
     const updated = await getPrisma().$transaction(async (tx) => {
@@ -483,6 +504,156 @@ mysqlInspectionsRouter.delete("/:id/rooms/:roomId/items/:itemId", requirePermiss
 // F5F: relatórios, assinaturas eletrônicas simples e comparação são artefatos
 // privados no StoredFile. O snapshot fica no metadataJson para que o documento
 // emitido não mude quando a Inspection corrente evoluir.
+// Sub-bloco 5B - monta o input do laudo profissional (pdf-lib). Nao
+// reimplementa a logica de progresso/condicoes (isso fica no gerador e no
+// frontend); so busca dados reais e bytes de evidencia. Gaps documentados:
+// (1) inquilino/comprador so e preenchido quando exatamente um Contract
+// aponta para esta Inspection via entryInspectionId/exitInspectionId com uma
+// unica parte tenant/buyer - caso contrario a secao fica omitida (nunca
+// inventada); (2) foto de capa do imovel nao e carregada aqui (galeria de
+// Property e outro dominio, nao carregado neste fluxo) - fica null.
+async function buildReportInput(access: AccessContext, inspection: any, evidence: any[], snapshotHashValue: string) {
+  const prisma = getPrisma();
+  const companyId = access.company.id;
+  const warnings: string[] = [];
+
+  // Cada busca e isolada (try/catch proprio) de proposito: nenhuma secao
+  // opcional do laudo (empresa, imovel, responsavel/CRECI, contrato) pode
+  // derrubar a geracao inteira por uma falha pontual - cai para null e segue,
+  // igual ja fazia a logo (ver abaixo). Isso tambem cobre ambientes onde um
+  // modelo Prisma mais novo (Contract, PropertyOwner, Party) nao esteja
+  // totalmente disponivel.
+  async function safe<T>(label: string, run: () => Promise<T>): Promise<T | null> {
+    try {
+      return await run();
+    } catch (error) {
+      warnings.push(`Nao foi possivel carregar "${label}" para o laudo: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  const [company, property, assignedUser, linkedContract] = await Promise.all([
+    safe("empresa", () => prisma.company.findFirst({ where: { id: companyId }, select: { name: true, document: true, phone: true, email: true } })),
+    safe("imovel", () => prisma.property.findFirst({
+      where: { id: inspection.propertyId, companyId },
+      select: {
+        code: true, title: true, propertyType: true,
+        street: true, number: true, complement: true, neighborhood: true, city: true, state: true, zipCode: true,
+        condominiumName: true, privateArea: true, totalArea: true, bedrooms: true, suites: true, bathrooms: true, parkingSpaces: true,
+        iptuCents: true, condominiumFeeCents: true, ownerId: true,
+      },
+    })),
+    safe("responsavel/CRECI", () => prisma.appUser.findFirst({
+      where: { id: inspection.assignedUserId, companyId },
+      select: {
+        name: true,
+        party: { select: { roles: { where: { role: "broker" }, select: { brokerProfile: { select: { creciNumber: true } } } } } },
+      },
+    })),
+    safe("contrato vinculado (inquilino/comprador)", () => prisma.contract.findFirst({
+      where: { companyId, OR: [{ entryInspectionId: inspection.id }, { exitInspectionId: inspection.id }] },
+      select: { parties: { where: { partyType: { in: ["tenant", "buyer"] } }, select: { partyType: true, name: true, document: true } } },
+    })),
+  ]);
+
+  const owner = property?.ownerId
+    ? await safe("proprietario", () => prisma.propertyOwner.findFirst({ where: { id: property.ownerId!, companyId }, select: { name: true, document: true } }))
+    : null;
+
+  let logoBuffer: { buffer: Buffer; mimeType: string } | null = null;
+  try {
+    const logo = await findStoredFileForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId);
+    if (logo && (logo.mimeType === "image/png" || logo.mimeType === "image/jpeg")) {
+      logoBuffer = { buffer: await readStoredFileBuffer(logo), mimeType: logo.mimeType };
+    }
+  } catch {
+    logoBuffer = null; // logo nunca pode impedir a geracao do laudo
+  }
+
+  let tenantOrBuyer: { name: string; document: string | null; role: "tenant" | "buyer" } | null = null;
+  const contractParties = linkedContract?.parties ?? [];
+  if (contractParties.length === 1) {
+    const party = contractParties[0];
+    tenantOrBuyer = { name: party.name, document: party.document ?? null, role: party.partyType === "buyer" ? "buyer" : "tenant" };
+  } else if (contractParties.length > 1) {
+    warnings.push("Mais de uma parte (inquilino/comprador) vinculada ao contrato desta vistoria: secao omitida para evitar ambiguidade.");
+  }
+
+  const broker = assignedUser
+    ? { name: assignedUser.name, creci: assignedUser.party?.roles.find((role: any) => role.brokerProfile)?.brokerProfile?.creciNumber ?? null }
+    : null;
+
+  const evidenceByRoom = new Map<string, any[]>();
+  const evidenceByItem = new Map<string, any[]>();
+  for (const row of evidence) {
+    if (row.itemId) {
+      const list = evidenceByItem.get(row.itemId) ?? [];
+      list.push(row);
+      evidenceByItem.set(row.itemId, list);
+    } else if (row.roomId) {
+      const list = evidenceByRoom.get(row.roomId) ?? [];
+      list.push(row);
+      evidenceByRoom.set(row.roomId, list);
+    }
+  }
+
+  async function toReportEvidence(row: any) {
+    const storedFile = row.storedFile;
+    const mimeType: string | null = storedFile?.mimeType ?? null;
+    let buffer: Buffer | null = null;
+    if (storedFile && (mimeType === "image/jpeg" || mimeType === "image/png")) {
+      try {
+        buffer = await readStoredFileBuffer(storedFile);
+      } catch {
+        warnings.push(`Nao foi possivel ler os bytes da evidencia ${row.id} no storage; ela sera omitida do laudo.`);
+      }
+    } else if (storedFile) {
+      warnings.push(`Evidencia ${row.id} em formato nao incorporavel (${mimeType ?? "desconhecido"}): o laudo exibira um aviso no lugar da foto.`);
+    }
+    return { id: row.id, caption: row.caption ?? null, buffer, mimeType };
+  }
+
+  const rooms = [];
+  for (const room of inspection.rooms ?? []) {
+    const generalEvidence = await Promise.all((evidenceByRoom.get(room.id) ?? []).map(toReportEvidence));
+    const items: any[] = [];
+    for (const item of room.items ?? []) {
+      const itemEvidence = await Promise.all((evidenceByItem.get(item.id) ?? []).map(toReportEvidence));
+      items.push({ id: item.id, name: item.name, condition: item.condition, notes: item.notes ?? null, evidence: itemEvidence });
+    }
+    rooms.push({ id: room.id, name: room.name, notes: room.notes ?? null, generalEvidence, items });
+  }
+
+  const input = {
+    inspection: {
+      id: inspection.id, type: inspection.type, status: inspection.status, notes: inspection.notes ?? null,
+      completedAt: inspection.completedAt ? new Date(inspection.completedAt).toISOString() : null,
+      createdAt: new Date(inspection.createdAt).toISOString(),
+    },
+    company: company
+      ? { name: company.name, document: company.document ?? null, phone: company.phone ?? null, email: company.email ?? null, logo: logoBuffer }
+      : { name: "ImobiFlow", document: null, phone: null, email: null, logo: logoBuffer },
+    property: property
+      ? {
+          code: property.code ?? null, title: property.title, propertyType: property.propertyType ?? null,
+          street: property.street ?? null, number: property.number ?? null, complement: property.complement ?? null,
+          neighborhood: property.neighborhood ?? null, city: property.city ?? null, state: property.state ?? null, zipCode: property.zipCode ?? null,
+          condominiumName: property.condominiumName ?? null, privateArea: property.privateArea ?? null, totalArea: property.totalArea ?? null,
+          bedrooms: property.bedrooms ?? null, suites: property.suites ?? null, bathrooms: property.bathrooms ?? null, parkingSpaces: property.parkingSpaces ?? null,
+          iptuCents: property.iptuCents ?? null, condominiumFeeCents: property.condominiumFeeCents ?? null, coverPhoto: null,
+        }
+      : null,
+    owner: owner ? { name: owner.name, document: owner.document ?? null } : null,
+    tenantOrBuyer,
+    broker,
+    rooms,
+    generatedAt: new Date().toISOString(),
+    snapshotHash: snapshotHashValue,
+  };
+
+  return { input, warnings, propertyCode: property?.code ?? null };
+}
+
 mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   let uploaded: any = null;
   try {
@@ -499,23 +670,20 @@ mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage
     const snapshot = buildInspectionSnapshot(inspection, evidence);
     const hash = snapshotHash(snapshot);
     const reportId = randomUUID();
-    const sections = [
-      `Inspection: ${snapshot.inspection_id} | Tipo: ${snapshot.type} | Status: ${snapshot.status}`,
-      `Empresa: ${snapshot.company_id}`,
-      `Imóvel: ${snapshot.property?.code ?? ""} ${snapshot.property?.title ?? ""}`,
-      `Responsável: ${snapshot.assigned_user?.name ?? "Não definido"} | Concluída em: ${snapshot.completed_at ?? "não concluída"}`,
-      `Observações: ${snapshot.notes ?? "-"}`,
-      ...snapshot.rooms.flatMap((room) => [`Ambiente: ${room.name} — ${room.notes ?? ""}`, ...room.items.map((item) => `Item: ${item.name} | Condição: ${item.condition} | Observações: ${item.notes ?? "-"}`)]),
-      `Evidências: ${snapshot.evidence.map((item) => item.file_name ?? item.id).join(", ") || "nenhuma"}`,
-      `Hash do snapshot: ${hash}`,
-    ];
-    const body = buildPdfBuffer("Laudo de vistoria", sections);
-    const policy = validateUploadFile({ purpose: "inspection_report", fileName: `inspection-${inspection.id}-${reportId}.pdf`, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
+    const { input: reportInput, warnings: reportWarnings, propertyCode } = await buildReportInput(access, inspection, evidence, hash);
+    const { buffer: body, warnings: pdfWarnings } = await buildProfessionalInspectionReport(reportInput);
+    const allWarnings = [...reportWarnings, ...pdfWarnings];
+    if (allWarnings.length) {
+      // Avisos tecnicos ficam so no log do servidor (nunca expostos ao cliente).
+      console.warn(`[inspection.report] vistoria ${inspection.id}: ${allWarnings.join(" | ")}`);
+    }
+    const fileName = buildReportFileName({ propertyCode, type: inspection.type as "entry" | "exit", generatedAt: reportInput.generatedAt });
+    const policy = validateUploadFile({ purpose: "inspection_report", fileName, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
     const key = resolveIdempotencyKey(req, `inspection.report:${inspection.id}:${regenerate ? reportId : "latest"}`);
     const { result, replayed } = await withIdempotency(access.company.id, "inspection.report", key, async () => {
       const storage = getStorageProvider();
-      uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, purpose: "inspection_report", fileName: `inspection-${inspection.id}-${reportId}.pdf`, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_report", inspectionId: inspection.id }), deliveryAccess: deliveryAccessForPurpose("inspection_report") });
-      await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_report", metadata: { inspection_id: inspection.id, inspection_version: inspection.version, snapshot, snapshot_hash: hash, generated_at: new Date().toISOString() } });
+      uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, purpose: "inspection_report", fileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_report", inspectionId: inspection.id }), deliveryAccess: deliveryAccessForPurpose("inspection_report") });
+      await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_report", metadata: { inspection_id: inspection.id, inspection_version: inspection.version, snapshot, snapshot_hash: hash, generated_at: reportInput.generatedAt, file_name: fileName, warning_count: allWarnings.length } });
       await getPrisma().$transaction(async (tx) => event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.report_generated", { report_id: reportId, inspection_version: inspection.version, snapshot_hash: hash, regenerated: regenerate }));
       return { report_id: reportId, snapshot_hash: hash };
     });
@@ -532,6 +700,31 @@ mysqlInspectionsRouter.get("/:id/reports", requirePermission("inspections.view")
     const inspection = await findInspection(req, String(req.params.id), "inspections.view");
     const rows = await artifactFiles(req.access!.company.id, "inspection_report", inspection.id, "inspection_report");
     res.json({ reports: await Promise.all(rows.map(async (row: any) => artifactDto(row, row.metadataJson, await privateArtifactUrl(row, "inspection_report")))) });
+  } catch (error) { next(error); }
+});
+
+// Sub-bloco 5B - download autenticado canonico do laudo. Resolve o gap de
+// signed_url: null para Local/R2 (so Cloudinary implementa
+// getAuthenticatedDownloadUrl hoje): le os bytes via readStoredFileBuffer
+// (funciona nos 3 providers) e serve o PDF diretamente por esta rota
+// autenticada, sem depender de URL temporaria do navegador. Escopo de
+// tenant identico as demais rotas (findInspection + artifactFiles filtram
+// por companyId do access context) - empresa A nunca encontra o laudo de
+// empresa B, mesmo sabendo publicId/UUID/nome de arquivo.
+mysqlInspectionsRouter.get("/:id/report/download", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    const rows = await artifactFiles(access.company.id, "inspection_report", inspection.id, "inspection_report");
+    const reportIdParam = typeof req.query.report_id === "string" ? req.query.report_id : undefined;
+    const file = reportIdParam ? rows.find((row: any) => row.entityId === reportIdParam) : rows[0];
+    if (!file) throw invalid("Gere o laudo antes de fazer o download.", "INSPECTION_REPORT_NOT_FOUND");
+    const body = await readStoredFileBuffer(file);
+    const fileName = file.originalFilename || `laudo-vistoria-${inspection.id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/["\\]/g, "")}"`);
+    res.setHeader("Content-Length", String(body.byteLength));
+    res.status(200).send(body);
   } catch (error) { next(error); }
 });
 
