@@ -19,8 +19,6 @@ import { financeRouter } from "./routes/finance.js";
 import { importsRouter } from "./routes/imports.js";
 import { inspectionsRouter } from "./routes/inspections.js";
 import { mysqlInspectionsRouter } from "./routes/inspections-mysql.js";
-// TEMP (diagnostic, remove after archive-bug investigation closes):
-import { inspectionArchiveDiagnosticRouter } from "./routes/inspection-archive-diagnostic.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { operationsRouter } from "./routes/operations.js";
@@ -160,8 +158,6 @@ export function createApp() {
   // F5B: rota canônica MySQL/Prisma. O caminho legado `/inspections` segue
   // isolado durante a migração; nenhum endpoint novo de Vistoria usa Supabase.
   app.use("/real-estate/inspections", mysqlInspectionsRouter);
-  // TEMP (diagnostic, remove after archive-bug investigation closes):
-  app.use("/diagnostics/inspection-archive", inspectionArchiveDiagnosticRouter);
   app.use("/integrations", integrationsRouter);
   app.use("/notifications", notificationsRouter);
   app.use("/operations", operationsRouter);
