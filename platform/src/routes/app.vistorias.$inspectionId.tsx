@@ -33,6 +33,7 @@ import { InspectionSuggestedRoomsBanner } from "@/components/app/inspections/Ins
 import { InspectionRoomWorkspace } from "@/components/app/inspections/InspectionRoomWorkspace";
 import { InspectionSummaryPanel } from "@/components/app/inspections/InspectionSummaryPanel";
 import { InspectionSaveStatus } from "@/components/app/inspections/InspectionSaveStatus";
+import { InspectionSigningSection } from "@/components/app/inspections/InspectionSigningSection";
 import { buildInspectionPropertyBrief } from "@/product/inspection-property-brief";
 import { buildSuggestedInspectionRooms } from "@/product/inspection-rooms";
 import { buildSuggestedInspectionItems } from "@/product/inspection-item-presets";
@@ -307,6 +308,7 @@ function InspectionDetailPageIntegrated() {
 
         {error ? <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
         <InspectionF5FActions inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
+        <InspectionSigningSection inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <NotesEditor inspection={inspection} editable={canEditRecord && mutable && editMode} onSave={saveNotes} saving={false} />
 
         {/* SUB-BLOCO 3 — mobile/tablet (<lg): seletor de ambientes em pills,
