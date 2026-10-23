@@ -217,7 +217,15 @@ async function findInspection(req: RequestWithAccess, inspectionId: string, perm
   return inspection;
 }
 
-function ensureMutable(inspection: { status: string }, requestedStatus?: string, hasOtherChanges = false) {
+function isAdministrativeInspectionRole(access: AccessContext) {
+  return administrativeInspectionRoles.has(access.appUser.role?.toLowerCase() ?? "");
+}
+
+function ensureMutable(inspection: { status: string }, access: AccessContext, requestedStatus?: string, hasOtherChanges = false) {
+  // Owner/admin/manager podem corrigir integralmente o conteúdo de uma
+  // vistoria já concluída/arquivada. O status continua protegido por
+  // nextStatus(); esta exceção só libera edição de dados/estrutura/evidências.
+  if (isAdministrativeInspectionRole(access)) return;
   const isArchivingCompleted = inspection.status === "completed" && requestedStatus === "archived" && !hasOtherChanges;
   if (inspection.status === "archived" || (inspection.status === "completed" && !isArchivingCompleted)) {
     throw Object.assign(new Error("Vistoria concluída ou arquivada não pode ser alterada."), { statusCode: 409, code: "INSPECTION_NOT_MUTABLE" });
@@ -349,7 +357,7 @@ mysqlInspectionsRouter.post("/:id/evidence", requirePermission("inspections.mana
   try {
     const access = req.access!;
     const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const input = evidenceCreateSchema.parse(req.body);
     const body = decodeBase64File(input.content_base64);
     const policy = validateUploadFile({ purpose: "inspection_evidence", fileName: input.file_name, mimeType: input.mime_type, declaredSizeBytes: input.size_bytes, body });
@@ -409,7 +417,7 @@ mysqlInspectionsRouter.post("/:id/evidence", requirePermission("inspections.mana
 mysqlInspectionsRouter.patch("/:id/evidence/order", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const input = evidenceOrderSchema.parse(req.body);
     const ids = input.evidence.map((entry) => entry.id);
     const rows = await getPrisma().inspectionEvidence.findMany({ where: { id: { in: ids }, inspectionId: inspection.id, companyId: access.company.id }, select: { id: true } });
@@ -426,7 +434,7 @@ mysqlInspectionsRouter.patch("/:id/evidence/order", requirePermission("inspectio
 mysqlInspectionsRouter.patch("/:id/evidence/:evidenceId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const input = evidencePatchSchema.parse(req.body);
     const existing = await getPrisma().inspectionEvidence.findFirst({ where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }, include: { storedFile: true } });
     if (!existing) throw notFound();
@@ -439,7 +447,7 @@ mysqlInspectionsRouter.patch("/:id/evidence/:evidenceId", requirePermission("ins
 mysqlInspectionsRouter.delete("/:id/evidence/:evidenceId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const access = req.access!, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const existing = await getPrisma().inspectionEvidence.findFirst({ where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }, include: { storedFile: true } });
     if (!existing) throw notFound();
     const { expected_version } = versionSchema.parse(req.body);
@@ -468,7 +476,7 @@ mysqlInspectionsRouter.patch("/:id", requirePermission("inspections.manage"), as
     const status = input.status === undefined ? undefined : nextStatus(existing.status, input.status);
     const hasOtherChanges = input.assigned_user_id !== undefined || input.notes !== undefined;
     if (hasOtherChanges || status === "archived") requireAdministrativeRole(access);
-    ensureMutable(existing, status, hasOtherChanges);
+    ensureMutable(existing, access, status, hasOtherChanges);
     const assignedUserId = input.assigned_user_id === undefined ? undefined : await resolveAssignee(companyId, input.assigned_user_id, access.appUser.id);
     const updated = await getPrisma().$transaction(async (tx) => {
       await bumpVersion(tx, existing.id, companyId, input.expected_version, { ...(input.notes !== undefined ? { notes: input.notes } : {}), ...(assignedUserId ? { assignedUserId } : {}), ...(status ? { status, ...(status === "completed" ? { completedAt: new Date() } : {}), ...(status === "archived" ? { archivedAt: new Date() } : {}) } : {}) });
@@ -480,10 +488,64 @@ mysqlInspectionsRouter.patch("/:id", requirePermission("inspections.manage"), as
   } catch (error) { next(error); }
 });
 
+mysqlInspectionsRouter.delete("/:id", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    requireAdministrativeRole(access);
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    const prisma = getPrisma();
+
+    const [evidenceRows, signingProcesses, companyFiles] = await Promise.all([
+      prisma.inspectionEvidence.findMany({
+        where: { companyId: access.company.id, inspectionId: inspection.id },
+        include: { storedFile: true },
+      }),
+      prisma.inspectionSigningProcess.findMany({
+        where: { companyId: access.company.id, inspectionId: inspection.id },
+        include: { reportFile: true, parties: { include: { signatureFile: true } } },
+      }),
+      prisma.storedFile.findMany({ where: { companyId: access.company.id } }),
+    ]);
+
+    const files = new Map<string, any>();
+    for (const row of evidenceRows) files.set(row.storedFile.id, row.storedFile);
+    for (const process of signingProcesses) {
+      files.set(process.reportFile.id, process.reportFile);
+      for (const party of process.parties) if (party.signatureFile) files.set(party.signatureFile.id, party.signatureFile);
+    }
+    for (const file of companyFiles) {
+      if ((file.metadataJson as any)?.inspection_id === inspection.id) files.set(file.id, file);
+    }
+    const fileIds = [...files.keys()];
+
+    await prisma.$transaction(async (tx) => {
+      await tx.inspectionSigningProcess.deleteMany({ where: { companyId: access.company.id, inspectionId: inspection.id } });
+      await tx.inspectionEvidence.deleteMany({ where: { companyId: access.company.id, inspectionId: inspection.id } });
+      if (fileIds.length) await tx.storedFile.deleteMany({ where: { companyId: access.company.id, id: { in: fileIds } } });
+      await tx.inspection.delete({ where: { id: inspection.id } });
+    });
+
+    let storageCleanupPending = 0;
+    for (const file of files.values()) {
+      try {
+        await getStorageProviderForName(file.provider as any).deleteFile({
+          publicId: file.publicId,
+          resourceType: file.resourceType as StorageResourceType,
+          deliveryAccess: deliveryAccessForPurpose(file.purpose),
+        });
+      } catch {
+        storageCleanupPending += 1;
+      }
+    }
+
+    res.json({ ok: true, deleted_id: inspection.id, storage_cleanup_pending: storageCleanupPending });
+  } catch (error) { next(error); }
+});
+
 mysqlInspectionsRouter.post("/:id/rooms", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = roomSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const key = resolveIdempotencyKey(req, `inspection.room.create:${input.id}`);
     const { result, replayed } = await withIdempotency(companyId, "inspection.room.create", key, async () => {
       const room = await getPrisma().$transaction(async (tx) => {
@@ -501,7 +563,7 @@ mysqlInspectionsRouter.post("/:id/rooms", requirePermission("inspections.manage"
 mysqlInspectionsRouter.patch("/:id/rooms/:roomId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = roomPatchSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const room = await getPrisma().inspectionRoom.findFirst({ where: { id: String(req.params.roomId), inspectionId: inspection.id, companyId } });
     if (!room) throw notFound();
     const updated = await getPrisma().$transaction(async (tx) => {
@@ -517,7 +579,7 @@ mysqlInspectionsRouter.patch("/:id/rooms/:roomId", requirePermission("inspection
 mysqlInspectionsRouter.delete("/:id/rooms/:roomId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = versionSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const room = await getPrisma().inspectionRoom.findFirst({ where: { id: String(req.params.roomId), inspectionId: inspection.id, companyId }, select: { id: true } });
     if (!room) throw notFound();
     await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, companyId, input.expected_version); await tx.inspectionRoom.delete({ where: { id: room.id } }); await event(tx, companyId, inspection.id, access.appUser.id, "inspection.room_removed", { room_id: room.id }); });
@@ -528,7 +590,7 @@ mysqlInspectionsRouter.delete("/:id/rooms/:roomId", requirePermission("inspectio
 mysqlInspectionsRouter.post("/:id/rooms/:roomId/items", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = itemSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const room = await getPrisma().inspectionRoom.findFirst({ where: { id: String(req.params.roomId), inspectionId: inspection.id, companyId }, select: { id: true } });
     if (!room) throw notFound();
     const key = resolveIdempotencyKey(req, `inspection.item.create:${input.id}`);
@@ -543,7 +605,7 @@ mysqlInspectionsRouter.post("/:id/rooms/:roomId/items", requirePermission("inspe
 mysqlInspectionsRouter.patch("/:id/rooms/:roomId/items/:itemId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = itemPatchSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const item = await getPrisma().inspectionItem.findFirst({ where: { id: String(req.params.itemId), roomId: String(req.params.roomId), companyId, room: { inspectionId: inspection.id } } });
     if (!item) throw notFound();
     const updated = await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, companyId, input.expected_version); const row = await tx.inspectionItem.update({ where: { id: item.id }, data: { ...(input.name !== undefined ? { name: input.name } : {}), ...(input.condition !== undefined ? { condition: input.condition } : {}), ...(input.position !== undefined ? { position: input.position } : {}), ...(input.notes !== undefined ? { notes: input.notes } : {}) } }); await event(tx, companyId, inspection.id, access.appUser.id, "inspection.item_updated", { item_id: row.id }); return row; });
@@ -554,7 +616,7 @@ mysqlInspectionsRouter.patch("/:id/rooms/:roomId/items/:itemId", requirePermissi
 mysqlInspectionsRouter.delete("/:id/rooms/:roomId/items/:itemId", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   try {
     const input = versionSchema.parse(req.body), access = req.access!, companyId = access.company.id, inspection = await findInspection(req, String(req.params.id), "inspections.manage");
-    await ensureMutable(inspection);
+    ensureMutable(inspection, req.access!);
     const item = await getPrisma().inspectionItem.findFirst({ where: { id: String(req.params.itemId), roomId: String(req.params.roomId), companyId, room: { inspectionId: inspection.id } }, select: { id: true } });
     if (!item) throw notFound();
     await getPrisma().$transaction(async (tx) => { await bumpVersion(tx, inspection.id, companyId, input.expected_version); await tx.inspectionItem.delete({ where: { id: item.id } }); await event(tx, companyId, inspection.id, access.appUser.id, "inspection.item_removed", { item_id: item.id }); });
