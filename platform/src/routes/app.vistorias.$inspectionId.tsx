@@ -5,7 +5,7 @@ import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
 import {
-  canGenerateInspectionReport, createMysqlInspectionSignature, createMysqlItem, createMysqlRoom,
+  canGenerateInspectionReport, createMysqlItem, createMysqlRoom,
   downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport,
   getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue,
   getMysqlInspectionComparison, downloadMysqlInspectionComparison, listMysqlInspections,
@@ -104,7 +104,8 @@ function InspectionDetailPageIntegrated() {
   // O backend reforça exatamente a mesma regra (nunca confiar só na UI).
   const canEditRecord = canEdit && isAdministrative(session?.access.appUser);
   const evidenceState = useInspectionEvidence(inspectionId, (e) => setError(getSafeApiErrorMessage(e, "Não foi possível carregar as evidências.")));
-  const mutable = Boolean(inspection && inspection.status !== "completed" && inspection.status !== "archived");
+  const lifecycleMutable = Boolean(inspection && inspection.status !== "completed" && inspection.status !== "archived");
+  const contentEditable = Boolean(inspection && canEdit && (lifecycleMutable || (canEditRecord && editMode)));
   const propertyDetail = useInspectionPropertyDetail(inspection?.property_id ?? null);
   // SUB-BLOCO 3 — sugestão determinística (sem IA) de ambientes a partir do
   // cadastro do imóvel. Só é oferecida enquanto a vistoria não tiver nenhum
@@ -241,7 +242,7 @@ function InspectionDetailPageIntegrated() {
   // derivado só de sinais reais (ver resolveInspectionSaveStatus): nunca
   // mostra "Salvo"/"Sincronizado" com fila pendente ou conflito em aberto.
   const saveStatusInput: InspectionSaveStatusInput = { saving, justSaved, offline, pending, conflicts, syncing };
-  const showSuggestedRoomsBanner = canEdit && mutable && currentInspection.rooms.length === 0 && suggestedRooms.length > 0 && !suggestedRoomsDismissed;
+  const showSuggestedRoomsBanner = contentEditable && currentInspection.rooms.length === 0 && suggestedRooms.length > 0 && !suggestedRoomsDismissed;
   const selectedRoom = currentInspection.rooms.find((room) => room.id === selectedRoomId) ?? null;
   const mainContent = showSuggestedRoomsBanner ? (
     <InspectionSuggestedRoomsBanner suggestions={suggestedRooms} busy={creatingRooms} onAccept={acceptSuggestedRooms} onDismiss={() => setSuggestedRoomsDismissed(true)} />
@@ -249,7 +250,7 @@ function InspectionDetailPageIntegrated() {
     <InspectionRoomWorkspace
       inspection={currentInspection}
       room={selectedRoom}
-      canEdit={canEdit && mutable}
+      canEdit={contentEditable}
       evidence={evidenceState.evidence}
       evidenceLoading={evidenceState.loading}
       onEvidenceChanged={evidenceState.refresh}
@@ -282,11 +283,9 @@ function InspectionDetailPageIntegrated() {
             </div>
             {canEditRecord ? (
               <div className="flex flex-wrap gap-2">
-                {mutable ? (
-                  <button type="button" onClick={() => setEditMode((v) => !v)} className="h-9 rounded-md border border-border px-3 text-sm font-medium">
-                    {editMode ? "Concluir edição" : "Editar vistoria"}
-                  </button>
-                ) : null}
+                <button type="button" onClick={() => setEditMode((v) => !v)} className="h-9 rounded-md border border-border px-3 text-sm font-medium">
+                  {editMode ? "Concluir edição" : "Editar vistoria"}
+                </button>
                 {inspection.status !== "archived" ? (
                   <button type="button" onClick={() => setArchiveModalOpen(true)} className="h-9 rounded-md border border-destructive/40 px-3 text-sm font-medium text-destructive">
                     Arquivar vistoria
@@ -295,7 +294,7 @@ function InspectionDetailPageIntegrated() {
               </div>
             ) : null}
           </div>
-          {!editMode || !canEditRecord || !mutable ? (
+          {!editMode || !canEditRecord ? (
             <p className="mt-2 text-sm">Responsável: {inspection.assigned_user?.name || "Não definido"}</p>
           ) : (
             <AssigneeEditor inspection={inspection} users={users} loadingUsers={loadingUsers} saving={false} onSave={saveAssignee} />
@@ -309,18 +308,18 @@ function InspectionDetailPageIntegrated() {
         {error ? <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
         <InspectionF5FActions inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <InspectionSigningSection inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
-        <NotesEditor inspection={inspection} editable={canEditRecord && mutable && editMode} onSave={saveNotes} saving={false} />
+        <NotesEditor inspection={inspection} editable={canEditRecord && editMode} onSave={saveNotes} saving={false} />
 
         {/* SUB-BLOCO 3 — mobile/tablet (<lg): seletor de ambientes em pills,
             workspace central e resumo como accordion. */}
         <div className="space-y-4 lg:hidden">
           <InspectionRoomSidebar rooms={currentInspection.rooms} selectedRoomId={selectedRoomId} onSelect={setSelectedRoomId} variant="pills" />
-          {canEdit && mutable ? <InspectionAddRoom onAdd={addRoomManually} busy={creatingRooms} /> : null}
+          {contentEditable ? <InspectionAddRoom onAdd={addRoomManually} busy={creatingRooms} /> : null}
           {mainContent}
           <details className="rounded-lg border border-border bg-card">
             <summary className="cursor-pointer p-3 text-sm font-semibold">Resumo da vistoria</summary>
             <div className="border-t border-border p-3">
-              <InspectionSummaryPanel inspection={currentInspection} evidence={evidenceState.evidence} canEdit={canEdit} mutable={mutable} busy={saving} onStart={() => void move("in_progress")} onComplete={completeWithConfirmation} />
+              <InspectionSummaryPanel inspection={currentInspection} evidence={evidenceState.evidence} canEdit={canEdit} mutable={lifecycleMutable} busy={saving} onStart={() => void move("in_progress")} onComplete={completeWithConfirmation} />
             </div>
           </details>
         </div>
@@ -330,10 +329,10 @@ function InspectionDetailPageIntegrated() {
         <div className="hidden gap-4 lg:grid lg:grid-cols-[220px_1fr_280px]">
           <div className="space-y-3">
             <InspectionRoomSidebar rooms={currentInspection.rooms} selectedRoomId={selectedRoomId} onSelect={setSelectedRoomId} variant="sidebar" />
-            {canEdit && mutable ? <InspectionAddRoom onAdd={addRoomManually} busy={creatingRooms} /> : null}
+            {contentEditable ? <InspectionAddRoom onAdd={addRoomManually} busy={creatingRooms} /> : null}
           </div>
           <div className="rounded-lg border border-border bg-card p-4">{mainContent}</div>
-          <InspectionSummaryPanel inspection={currentInspection} evidence={evidenceState.evidence} canEdit={canEdit} mutable={mutable} busy={saving} onStart={() => void move("in_progress")} onComplete={completeWithConfirmation} />
+          <InspectionSummaryPanel inspection={currentInspection} evidence={evidenceState.evidence} canEdit={canEdit} mutable={lifecycleMutable} busy={saving} onStart={() => void move("in_progress")} onComplete={completeWithConfirmation} />
         </div>
       </div>
       <InspectionArchiveConfirmModal open={archiveModalOpen} busy={archiving} onConfirm={() => void archiveInspection()} onCancel={() => setArchiveModalOpen(false)} />
@@ -536,7 +535,7 @@ function InspectionComparisonPanel({ data, exitInspectionId, filter, onFilterCha
 
 function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: MysqlInspection; canEdit: boolean; onError: (error: unknown) => void }) {
   const canReport = canGenerateInspectionReport(inspection.status, canEdit);
-  const [busy, setBusy] = useState(false); const [report, setReport] = useState<{ signed_url: string | null } | null>(null); const [signer, setSigner] = useState(""); const [signature, setSignature] = useState("");
+  const [busy, setBusy] = useState(false); const [report, setReport] = useState<{ signed_url: string | null } | null>(null);
   // Trava sincrona: `disabled` so vale apos o proximo render, entao cliques
   // no mesmo tick (duplo toque) disparavam varios POSTs de laudo.
   const inFlight = useRef(false);
@@ -565,7 +564,6 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
       setDownloading(false);
     }
   }
-  async function sign() { if (!signer || !signature) return; await exclusive(async () => { try { await createMysqlInspectionSignature(inspection.id, { signer_name: signer, signer_role: "responsible", accepted_terms: true, signature_base64: signature }); setSigner(""); setSignature(""); } catch (error) { onError(error); } }); }
 
   // Bloco 5 - estado da comparacao Entrada x Saida. `activeComparison` e o
   // que esta exibido no painel (seja a comparacao ja existente, carregada
@@ -677,7 +675,7 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
     );
   }
 
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Documentos</h2><button type="button" disabled={busy || !canReport} onClick={() => void generate()} aria-describedby={canReport ? undefined : "inspection-report-hint"} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Exportar PDF</button>{report ? <button type="button" disabled={downloading} onClick={() => void downloadPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar laudo (PDF)</button> : null}</div>{canEdit && !canReport ? <p id="inspection-report-hint" className="text-xs text-muted-foreground">O laudo fica disponivel depois que a vistoria for concluida.</p> : null}{canEdit && inspection.status === "completed" ? <div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">Nome do signatario<input value={signer} onChange={(event) => setSigner(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="text-sm">Imagem da assinatura<input type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setSignature(String(reader.result)); reader.readAsDataURL(file); }} className="mt-1 block w-full text-sm" /></label><button type="button" disabled={busy || !signer || !signature} onClick={() => void sign()} className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2">Registrar assinatura eletronica simples</button></div> : null}
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Documentos</h2><button type="button" disabled={busy || !canReport} onClick={() => void generate()} aria-describedby={canReport ? undefined : "inspection-report-hint"} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Exportar PDF</button>{report ? <button type="button" disabled={downloading} onClick={() => void downloadPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar laudo (PDF)</button> : null}</div>{canEdit && !canReport ? <p id="inspection-report-hint" className="text-xs text-muted-foreground">O laudo fica disponivel depois que a vistoria for concluida.</p> : null}
 
     {!loadingContext && comparisonButton ? <div className="border-t border-border pt-3">{comparisonButton}</div> : null}
     {panelOpen && activeComparison && activeExitId ? <InspectionComparisonPanel data={activeComparison} exitInspectionId={activeExitId} filter={comparisonFilter} onFilterChange={setComparisonFilter} /> : null}
