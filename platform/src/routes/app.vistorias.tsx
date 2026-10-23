@@ -1,4 +1,4 @@
-import { Archive, ChevronRight, Loader2, MoreVertical, Plus, Search } from "lucide-react";
+import { Archive, Eye, Loader2, MoreVertical, Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { EmptyState } from "@/components/app/empty-state";
@@ -15,6 +15,7 @@ import {
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
 import {
+  deleteMysqlInspection,
   listMysqlInspections,
   patchMysqlInspection,
   type MysqlInspection,
@@ -64,6 +65,7 @@ function InspectionsPage() {
   const module = getModuleByKey("inspections");
   const canCreate = canManage(session?.access.appUser, "inspections.manage");
   const canArchive = canCreate && isAdministrative(session?.access.appUser);
+  const canDelete = canArchive;
 
   // Debounce da busca — evita 1 requisição por tecla digitada.
   useEffect(() => {
@@ -104,10 +106,23 @@ function InspectionsPage() {
     }
   }
 
+  async function deleteInspection(target: MysqlInspection) {
+    if (!canDelete) return;
+    const label = target.property?.code ? `Imóvel ${target.property.code}` : "esta vistoria";
+    if (!window.confirm(`Excluir permanentemente a vistoria de ${label}? Esta ação remove ambientes, itens, fotos, relatórios e assinaturas vinculadas e não pode ser desfeita.`)) return;
+    setError(null);
+    try {
+      await deleteMysqlInspection(target.id);
+      await refresh();
+      void dashboard.refresh();
+    } catch (e) {
+      setError(getSafeApiErrorMessage(e, "Não foi possível excluir a vistoria."));
+    }
+  }
+
   const hasActiveFilters = Boolean(status || type || search);
   const statusChips: Array<{ key: MysqlInspectionStatus | "all"; label: string }> = useMemo(
     () => [
-      { key: "all", label: "Todas" },
       { key: "draft", label: inspectionStatusLabels.draft },
       { key: "in_progress", label: inspectionStatusLabels.in_progress },
       { key: "completed", label: inspectionStatusLabels.completed },
@@ -122,20 +137,16 @@ function InspectionsPage() {
   return (
     <ModulePage session={session} module={module}>
       <div className="space-y-4">
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold">Vistorias</h1>
-            <p className="text-sm text-muted-foreground">Acompanhe as vistorias dos imóveis da sua operação.</p>
-          </div>
-          {canCreate ? (
+        {canCreate ? (
+          <div className="flex justify-end">
             <Link
               to="/app/vistorias/nova"
               className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
             >
               <Plus className="h-4 w-4" aria-hidden="true" />Nova vistoria
             </Link>
-          ) : null}
-        </header>
+          </div>
+        ) : null}
 
         {dashboard.error ? <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{dashboard.error}</div> : null}
         <InspectionStats kpis={dashboard.kpis} loading={dashboard.loading} onSelectStatus={selectStatus} />
@@ -155,12 +166,12 @@ function InspectionsPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             {statusChips.map((chip) => {
-              const active = chip.key === "all" ? !status : status === chip.key;
+              const active = status === chip.key;
               return (
                 <button
                   key={chip.key}
                   type="button"
-                  onClick={() => selectStatus(chip.key === "all" ? undefined : (chip.key as MysqlInspectionStatus))}
+                  onClick={() => selectStatus(status === chip.key ? undefined : (chip.key as MysqlInspectionStatus))}
                   aria-pressed={active}
                   className={`h-9 rounded-full border px-3 text-xs font-medium ${active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
                 >
@@ -226,7 +237,9 @@ function InspectionsPage() {
                     key={inspection.id}
                     inspection={inspection}
                     canArchive={canArchive}
+                    canDelete={canDelete}
                     onArchive={() => setArchiveTarget(inspection)}
+                    onDelete={() => void deleteInspection(inspection)}
                   />
                 ))}
               </ul>
@@ -264,15 +277,18 @@ function InspectionsPage() {
 function InspectionRow({
   inspection,
   canArchive,
+  canDelete,
   onArchive,
+  onDelete,
 }: {
   inspection: MysqlInspection;
   canArchive: boolean;
+  canDelete: boolean;
   onArchive: () => void;
+  onDelete: () => void;
 }) {
   const progress = overallProgress(inspection.rooms);
   const address = shortAddress(inspection.property);
-  const primaryLabel = inspection.status === "draft" || inspection.status === "in_progress" ? "Continuar vistoria" : "Ver vistoria";
   const canArchiveThis = canArchive && inspection.status !== "archived";
 
   const identity = (
@@ -287,7 +303,8 @@ function InspectionRow({
     inspection.status !== "completed" && inspection.status !== "archived" && progress.total > 0 ? (
       <p className="text-xs text-muted-foreground">{progress.reviewed}/{progress.total} itens vistoriados</p>
     ) : null;
-  const actionsMenu = canArchiveThis ? (
+
+  const actionsMenu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" aria-label="Mais ações" className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border">
@@ -295,61 +312,62 @@ function InspectionRow({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onArchive} className="text-destructive focus:text-destructive">
-          <Archive className="mr-2 h-4 w-4" aria-hidden="true" />Arquivar vistoria
+        <DropdownMenuItem asChild>
+          <Link to="/app/vistorias/$inspectionId" params={{ inspectionId: inspection.id }}>
+            <Eye className="mr-2 h-4 w-4" aria-hidden="true" />Ver vistoria
+          </Link>
         </DropdownMenuItem>
+        {canArchiveThis ? (
+          <DropdownMenuItem onSelect={onArchive}>
+            <Archive className="mr-2 h-4 w-4" aria-hidden="true" />Arquivar vistoria
+          </DropdownMenuItem>
+        ) : null}
+        {canDelete ? (
+          <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
+            <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />Excluir vistoria
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
-  ) : null;
+  );
 
   return (
     <li>
-      {/* Desktop (>=lg): linha em grid, sem tabela literal — evita scroll
-          horizontal ruim e mantém a mesma lógica de dados do card mobile. */}
       <div className="hidden items-center gap-3 px-4 py-3 lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto]">
-        {identity}
-        <span className="text-sm">{inspectionTypeLabels[inspection.type]}</span>
-        <span className="text-sm">{inspection.assigned_user?.name || "Não definido"}</span>
-        <span className="text-sm text-muted-foreground">{new Date(inspection.updated_at).toLocaleDateString("pt-BR")}</span>
-        <div className="space-y-1">
-          {statusBadge}
-          {progressLine}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/app/vistorias/$inspectionId"
-            params={{ inspectionId: inspection.id }}
-            className="inline-flex h-9 items-center gap-1 rounded-md border border-border px-3 text-sm font-medium hover:border-primary"
-          >
-            {primaryLabel}
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-          </Link>
-          {actionsMenu}
-        </div>
+        <Link
+          to="/app/vistorias/$inspectionId"
+          params={{ inspectionId: inspection.id }}
+          className="contents"
+          aria-label={`Abrir vistoria ${inspection.property?.code ?? inspection.id}`}
+        >
+          <div className="rounded-md transition hover:bg-muted/40">{identity}</div>
+          <span className="text-sm">{inspectionTypeLabels[inspection.type]}</span>
+          <span className="text-sm">{inspection.assigned_user?.name || "Não definido"}</span>
+          <span className="text-sm text-muted-foreground">{new Date(inspection.updated_at).toLocaleDateString("pt-BR")}</span>
+          <div className="space-y-1">{statusBadge}{progressLine}</div>
+        </Link>
+        <div className="flex justify-end">{actionsMenu}</div>
       </div>
 
-      {/* Mobile/tablet (<lg): card empilhado, sem scroll horizontal. */}
-      <div className="flex flex-col gap-3 p-4 lg:hidden">
-        <div className="flex items-start justify-between gap-3">
-          {identity}
-          {statusBadge}
-        </div>
-        <dl className="grid grid-cols-2 gap-3 text-sm">
-          <div><dt className="text-xs text-muted-foreground">Tipo</dt><dd>{inspectionTypeLabels[inspection.type]}</dd></div>
-          <div><dt className="text-xs text-muted-foreground">Responsável</dt><dd>{inspection.assigned_user?.name || "Não definido"}</dd></div>
-          <div><dt className="text-xs text-muted-foreground">Atualizada</dt><dd>{new Date(inspection.updated_at).toLocaleDateString("pt-BR")}</dd></div>
-          {progressLine ? <div><dt className="text-xs text-muted-foreground">Progresso</dt><dd>{progress.reviewed}/{progress.total}</dd></div> : null}
-        </dl>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/app/vistorias/$inspectionId"
-            params={{ inspectionId: inspection.id }}
-            className="inline-flex h-10 flex-1 items-center justify-center gap-1 rounded-md border border-border px-3 text-sm font-medium"
-          >
-            {primaryLabel}
-          </Link>
-          {actionsMenu}
-        </div>
+      <div className="p-4 lg:hidden">
+        <Link
+          to="/app/vistorias/$inspectionId"
+          params={{ inspectionId: inspection.id }}
+          className="block rounded-md"
+          aria-label={`Abrir vistoria ${inspection.property?.code ?? inspection.id}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            {identity}
+            {statusBadge}
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <div><dt className="text-xs text-muted-foreground">Tipo</dt><dd>{inspectionTypeLabels[inspection.type]}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">Responsável</dt><dd>{inspection.assigned_user?.name || "Não definido"}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">Atualizada</dt><dd>{new Date(inspection.updated_at).toLocaleDateString("pt-BR")}</dd></div>
+            {progressLine ? <div><dt className="text-xs text-muted-foreground">Progresso</dt><dd>{progress.reviewed}/{progress.total}</dd></div> : null}
+          </dl>
+        </Link>
+        <div className="mt-3 flex justify-end">{actionsMenu}</div>
       </div>
     </li>
   );
