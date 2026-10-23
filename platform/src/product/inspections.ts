@@ -196,6 +196,14 @@ export async function patchMysqlInspection(id: string, input: { expected_version
   await saveInspectionSnapshot(response.inspection);
   return response;
 }
+export async function deleteMysqlInspection(id: string) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Excluir vistoria exige conexão."), { code: "OFFLINE_DELETE_UNSUPPORTED" });
+  return apiRequest<{ ok: true; deleted_id: string; storage_cleanup_pending: number }>(`/real-estate/inspections/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    token: mysqlToken(),
+  });
+}
+
 export async function createMysqlRoom(inspectionId: string, input: { id: string; expected_version: number; name: string; position: number; notes?: string | null }, options?: { offline?: boolean }) {
   if (options?.offline === true || isOfflineRuntime()) {
     const scope = getInspectionOfflineScope();
