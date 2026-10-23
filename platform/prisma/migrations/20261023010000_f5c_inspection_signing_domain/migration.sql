@@ -62,7 +62,13 @@ CREATE TABLE `inspection_signing_parties` (
   INDEX `insp_signing_parties_company_process_status_idx` (`company_id`, `process_id`, `status`),
   CONSTRAINT `inspection_signing_parties_company_id_fkey` FOREIGN KEY (`company_id`) REFERENCES `companies`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `inspection_signing_parties_process_id_fkey` FOREIGN KEY (`process_id`) REFERENCES `inspection_signing_processes`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `inspection_signing_parties_company_id_party_id_fkey` FOREIGN KEY (`company_id`, `party_id`) REFERENCES `parties`(`company_id`, `id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  -- party_id referencia Party.id diretamente (Party.id e @id, globalmente
+  -- unico) em vez da FK composta [company_id, party_id] usada em outros
+  -- modelos: aqui party_id e opcional e precisa de ON DELETE SET NULL, o que
+  -- exigiria company_id tambem nullable numa FK composta (quebraria tenant
+  -- isolation). O SERVICO deve validar parties.company_id = esta linha de
+  -- inspection_signing_parties.company_id ao associar/trocar um Party.
+  CONSTRAINT `inspection_signing_parties_party_id_fkey` FOREIGN KEY (`party_id`) REFERENCES `parties`(`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `inspection_signing_parties_signature_stored_file_id_fkey` FOREIGN KEY (`signature_stored_file_id`) REFERENCES `stored_files`(`id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

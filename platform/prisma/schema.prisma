@@ -2076,7 +2076,17 @@ model InspectionSigningParty {
 
   company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   process       InspectionSigningProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
-  party         Party?                   @relation(fields: [companyId, partyId], references: [companyId, id], onDelete: SetNull)
+  // Party.id ja e @id (chave primaria global, unica por si so) - nao
+  // precisamos da FK composta [companyId, partyId] -> [companyId, id] usada
+  // em outros modelos (ex.: AppUser.party) so para contornar companyId
+  // obrigatorio. Aqui, como partyId e opcional e queremos onDelete: SetNull,
+  // uma FK composta exigiria companyId tambem nullable (quebraria
+  // tenant isolation) - Prisma rejeita isso (P1012). Por isso: FK simples
+  // partyId -> Party.id, e o SERVICO (nao o schema) deve validar
+  // Party.companyId === InspectionSigningParty.companyId sempre que
+  // associar/trocar um Party, exatamente como qualquer outra leitura de
+  // Party ja precisa filtrar por companyId.
+  party         Party?                   @relation(fields: [partyId], references: [id], onDelete: SetNull)
   signatureFile StoredFile?              @relation("SigningPartySignatureFile", fields: [signatureStoredFileId], references: [id], onDelete: SetNull)
   events        InspectionSigningEvent[]
 
