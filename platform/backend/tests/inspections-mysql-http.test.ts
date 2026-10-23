@@ -733,6 +733,41 @@ describe("laudo", () => {
     const crossTenant = await callRaw("adminB", "GET", `/${ids.entryA}/report/download`);
     expect(crossTenant.status).toBe(404);
   });
+
+  it("embute evidência WebP no laudo como imagem real (não cai no placeholder)", async () => {
+    // Regressão: toReportEvidence só lia o buffer do storage para
+    // image/jpeg e image/png, então evidência WebP nunca chegava ao
+    // otimizador (Sharp) — mesmo esse já suportando WebP — e o laudo
+    // sempre caía no aviso/placeholder de "formato não suportado".
+    // WebP de 4x4px gerado via Sharp (backend já usa Sharp como dependência).
+    const webpBase64 =
+      "UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoEAAQAAUAmJaACdLoAA5gA/vp5X/9+0v++0v++0v9e34rfUDNIAAAA";
+    const webpBuffer = Buffer.from(webpBase64, "base64");
+
+    const evidence = await call("adminA", "POST", `/${ids.entryA2}/evidence`, {
+      id: randomUUID(),
+      file_name: "qa-webp.webp",
+      mime_type: "image/webp",
+      size_bytes: webpBuffer.byteLength,
+      content_base64: webpBase64,
+    });
+    expect(evidence.status).toBe(201);
+    expect(evidence.body.evidence.mime_type).toBe("image/webp");
+
+    const generated = await call("adminA", "POST", `/${ids.entryA2}/report`, {});
+    expect(generated.status).toBe(201);
+
+    const download = await callRaw("adminA", "GET", `/${ids.entryA2}/report/download`);
+    expect(download.status).toBe(200);
+    const pdfText = download.buffer.toString("latin1");
+    // Imagem real embutida via pdf-lib (Sharp reencoda WebP -> JPEG antes do embed).
+    expect(pdfText).toContain("/Subtype /Image");
+    expect(pdfText).toContain("/Filter /DCTDecode");
+    // O caminho de placeholder (regressão) nunca gera /XObject com imagem -
+    // só desenha um retângulo + texto no content stream. A presença de
+    // /Subtype /Image acima já comprova que a evidência WebP foi embutida
+    // como foto real, e não substituída pelo aviso.
+  });
 });
 
 describe("F5G — editar registro principal e arquivar exigem cargo administrativo", () => {

@@ -601,7 +601,7 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     const storedFile = row.storedFile;
     const mimeType: string | null = storedFile?.mimeType ?? null;
     let buffer: Buffer | null = null;
-    if (storedFile && (mimeType === "image/jpeg" || mimeType === "image/png")) {
+    if (storedFile && (mimeType === "image/jpeg" || mimeType === "image/png" || mimeType === "image/webp")) {
       try {
         buffer = await readStoredFileBuffer(storedFile);
       } catch {
