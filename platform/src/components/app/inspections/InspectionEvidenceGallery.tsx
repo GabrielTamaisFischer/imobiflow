@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Upload } from "lucide-react";
+import { Camera, Upload } from "lucide-react";
 import { InspectionEvidenceThumbnail } from "./InspectionEvidenceThumbnail";
 import { InspectionEvidenceLightbox } from "./InspectionEvidenceLightbox";
 import type { InspectionEvidenceRow, MysqlInspectionEvidence } from "@/product/inspections";
@@ -41,11 +41,25 @@ export function InspectionEvidenceGallery({ rows, loading, editable, isCaptionEd
           {rows.length} {rows.length === 1 ? "foto" : "fotos"}
         </p>
         {editable ? (
-          <label className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-md border border-border px-3 text-sm">
-            <Upload className="h-4 w-4" />
-            Adicionar fotos
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" onChange={handleUploadChange} disabled={busy} />
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-md border border-primary bg-primary px-3 text-sm font-medium text-primary-foreground">
+              <Camera className="h-4 w-4" />
+              Tirar foto
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                capture="environment"
+                className="sr-only"
+                onChange={handleUploadChange}
+                disabled={busy}
+              />
+            </label>
+            <label className="inline-flex h-9 cursor-pointer items-center gap-1 rounded-md border border-border px-3 text-sm">
+              <Upload className="h-4 w-4" />
+              Escolher fotos
+              <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="sr-only" onChange={handleUploadChange} disabled={busy} />
+            </label>
+          </div>
         ) : null}
       </div>
       {loading ? (
