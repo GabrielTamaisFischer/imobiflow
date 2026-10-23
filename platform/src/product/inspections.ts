@@ -36,6 +36,50 @@ export type MysqlInspection = {
 export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } };
 export type MysqlInspectionArtifact = { id: string; entity_id: string; purpose: string; file_name: string; mime_type: string; size_bytes: number | null; created_at: string; metadata: Record<string, unknown>; signed_url: string | null };
 
+/**
+ * Bloco 5 - Comparacao Entrada x Saida. Espelha exatamente o shape que o
+ * backend monta em compareInspections/decorateComparisonWithEvidence
+ * (inspection-f5f.ts + inspections-mysql.ts). Os outcomes nunca atribuem
+ * culpa - so descrevem a diferenca estrutural registrada.
+ */
+export type MysqlInspectionItemOutcome = "same" | "better" | "worse" | "not_comparable" | "new" | "absent";
+export type MysqlInspectionRoomOutcome = "matched" | "new" | "absent";
+export const MYSQL_ITEM_OUTCOME_LABELS: Record<MysqlInspectionItemOutcome, string> = {
+  same: "Sem alteracao",
+  better: "Melhor estado",
+  worse: "Pior estado",
+  not_comparable: "Nao comparavel",
+  new: "Item novo",
+  absent: "Ausente na saida",
+};
+export const MYSQL_ROOM_OUTCOME_LABELS: Record<MysqlInspectionRoomOutcome, string> = {
+  matched: "Comparado",
+  new: "Ambiente novo",
+  absent: "Ambiente ausente na saida",
+};
+export type MysqlInspectionComparisonItem = {
+  name: string; entry: MysqlInspectionCondition | null; exit: MysqlInspectionCondition | null;
+  outcome: MysqlInspectionItemOutcome; changed: boolean; entry_notes: string | null; exit_notes: string | null;
+  entry_item_id: string | null; exit_item_id: string | null;
+  entry_evidence: MysqlInspectionEvidence[]; exit_evidence: MysqlInspectionEvidence[];
+};
+export type MysqlInspectionComparisonRoom = {
+  name: string; entry_notes: string | null; exit_notes: string | null; outcome: MysqlInspectionRoomOutcome;
+  entry_room_id: string | null; exit_room_id: string | null;
+  entry_evidence: MysqlInspectionEvidence[]; exit_evidence: MysqlInspectionEvidence[];
+  items: MysqlInspectionComparisonItem[];
+};
+export type MysqlInspectionComparison = {
+  entry_inspection_id: string; exit_inspection_id: string; property_id: string; rooms: MysqlInspectionComparisonRoom[];
+};
+export type MysqlInspectionComparisonSummary = {
+  total: number; same: number; changed: number; better: number; worse: number; not_comparable: number; new: number; absent: number;
+};
+export type MysqlInspectionComparisonResponse = {
+  comparison: MysqlInspectionComparison; summary: MysqlInspectionComparisonSummary; disclaimer: string;
+  report: MysqlInspectionArtifact; replayed?: boolean;
+};
+
 function mysqlToken() { return getStoredToken() ?? undefined; }
 function idempotencyKey(id: string) { return { "Idempotency-Key": id }; }
 function isOfflineError(error: unknown) { return isOfflineRuntime() || (error instanceof TypeError && /fetch|network/i.test(error.message)) || (error instanceof Error && /failed to fetch|network|offline|conectar/i.test(error.message)); }
@@ -118,12 +162,13 @@ export async function listMysqlInspections(
   page = 1,
   pageSize = 25,
   status?: MysqlInspectionStatus,
-  options?: { type?: "entry" | "exit"; search?: string },
+  options?: { type?: "entry" | "exit"; search?: string; property_id?: string },
 ) {
   const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (status) query.set("status", status);
   if (options?.type) query.set("type", options.type);
   if (options?.search?.trim()) query.set("search", options.search.trim());
+  if (options?.property_id) query.set("property_id", options.property_id);
   return apiRequest<MysqlInspectionPage>(`/real-estate/inspections?${query}`, { token: mysqlToken() });
 }
 export async function getMysqlInspection(id: string) {
@@ -294,7 +339,50 @@ export async function createMysqlInspectionSignature(inspectionId: string, input
 }
 export async function generateMysqlInspectionComparison(inspectionId: string, baselineInspectionId: string, regenerate = false) {
   if (isOfflineRuntime()) throw Object.assign(new Error("Comparar vistorias exige conexão."), { code: "OFFLINE_COMPARISON_UNSUPPORTED" });
-  return apiRequest<{ comparison: unknown; report: MysqlInspectionArtifact }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison`, { method: "POST", body: JSON.stringify({ baseline_inspection_id: baselineInspectionId, regenerate }), token: mysqlToken() });
+  return apiRequest<MysqlInspectionComparisonResponse>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison`, { method: "POST", body: JSON.stringify({ baseline_inspection_id: baselineInspectionId, regenerate }), token: mysqlToken() });
+}
+
+/**
+ * Bloco 5 - leitura da comparacao ja gerada, sem efeito colateral (GET puro,
+ * nunca gera nem faz upload). Usada pela tela de detalhe para decidir o
+ * label do botao ("Comparar com vistoria de entrada" vs "Ver comparacao").
+ * Devolve null em 404 (nenhuma comparacao gerada ainda) em vez de lancar,
+ * ja que esse e o estado normal/esperado para a maioria das vistorias.
+ */
+export async function getMysqlInspectionComparison(inspectionId: string) {
+  if (isOfflineRuntime()) return null;
+  try {
+    return await apiRequest<MysqlInspectionComparisonResponse>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison`, { token: mysqlToken() });
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * Bloco 5 - download autenticado do PDF comparativo, espelhando
+ * downloadMysqlInspectionReport (a rota devolve bytes de PDF, nao JSON).
+ */
+export async function downloadMysqlInspectionComparison(inspectionId: string) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Baixar a comparação exige conexão."), { code: "OFFLINE_COMPARISON_DOWNLOAD_UNSUPPORTED" });
+  const token = mysqlToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/real-estate/inspections/${encodeURIComponent(inspectionId)}/comparison/download`, { headers });
+  } catch {
+    throw Object.assign(new Error("Não foi possível conectar para baixar a comparação. Tente novamente."), { code: "NETWORK_UNAVAILABLE" });
+  }
+  if (!response.ok) {
+    const message = await response.json().catch(() => null);
+    throw new Error((message as { message?: string } | null)?.message ?? "Não foi possível baixar a comparação.");
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const fileName = match?.[1] ?? `comparacao-vistoria-${inspectionId}.pdf`;
+  const blob = await response.blob();
+  return { blob, fileName };
 }
 
 /** Busca a versão do servidor sem gravar snapshot local (usada pela sincronização). */

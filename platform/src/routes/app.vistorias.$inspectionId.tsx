@@ -1,10 +1,20 @@
 import { ArrowLeft, Loader2, Save } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
-import { canGenerateInspectionReport, createMysqlInspectionSignature, createMysqlItem, createMysqlRoom, downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport, getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue, type MysqlInspection } from "@/product/inspections";
+import {
+  canGenerateInspectionReport, createMysqlInspectionSignature, createMysqlItem, createMysqlRoom,
+  downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport,
+  getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue,
+  getMysqlInspectionComparison, downloadMysqlInspectionComparison, listMysqlInspections,
+  MYSQL_ITEM_OUTCOME_LABELS, MYSQL_ROOM_OUTCOME_LABELS,
+  type MysqlInspection, type MysqlInspectionComparisonResponse, type MysqlInspectionComparisonItem,
+  type MysqlInspectionItemOutcome, type MysqlInspectionCondition,
+} from "@/product/inspections";
+import { InspectionEvidenceLightbox } from "@/components/app/inspections/InspectionEvidenceLightbox";
+import type { InspectionEvidenceRow } from "@/product/inspections";
 import { useSessionGuard } from "@/product/use-session-guard";
 import { inspectionStatusLabels } from "@/product/inspection-dashboard";
 import { listPropertyEligibleUsers } from "@/product/real-estate";
@@ -336,16 +346,166 @@ function InspectionDetailPageIntegrated() {
   );
 }
 
+
+/**
+ * Bloco 5 - Comparacao Entrada x Saida.
+ *
+ * Labels PT-BR de condicao dos itens, so para apresentacao (o dominio real
+ * tem 7 valores - ver inspection-item-status.ts - a comparacao so LE,
+ * nunca grava, entao pode mostrar todos os 7, nao so os 4 do picker).
+ */
+const COMPARISON_CONDITION_LABELS: Record<MysqlInspectionCondition, string> = {
+  not_inspected: "Nao vistoriado",
+  excellent: "Otimo",
+  good: "Bom",
+  fair: "Atencao",
+  poor: "Ruim",
+  damaged: "Avaria",
+  not_applicable: "Nao se aplica",
+};
+
+type ComparisonFilterKey = "all" | "changed" | "same" | "better" | "worse" | "new" | "with_photos";
+const COMPARISON_FILTERS: Array<{ key: ComparisonFilterKey; label: string }> = [
+  { key: "all", label: "Todos" },
+  { key: "changed", label: "Alterados" },
+  { key: "same", label: "Sem alteracao" },
+  { key: "worse", label: "Pior estado" },
+  { key: "better", label: "Melhor estado" },
+  { key: "new", label: "Novos" },
+  { key: "with_photos", label: "Com fotos" },
+];
+function itemMatchesComparisonFilter(item: MysqlInspectionComparisonItem, filter: ComparisonFilterKey): boolean {
+  if (filter === "all") return true;
+  if (filter === "with_photos") return item.entry_evidence.length > 0 || item.exit_evidence.length > 0;
+  if (filter === "new") return item.outcome === "new" || item.outcome === "absent";
+  if (filter === "changed") return item.changed;
+  return item.outcome === (filter as MysqlInspectionItemOutcome);
+}
+
+/** Linha de fotos Entrada|Saida de um ambiente ou item - lado a lado no
+ * desktop, empilhada no mobile (grid-cols-1 sm:grid-cols-2), sempre com o
+ * rotulo do lado visivel. Abre em lightbox ao clicar; associacao e 100%
+ * deterministica (vem pronta do backend via id de ambiente/item). */
+function ComparisonPhotoRow({ entryEvidence, exitEvidence, onOpen }: { entryEvidence: InspectionEvidenceRow[]; exitEvidence: InspectionEvidenceRow[]; onOpen: (rows: InspectionEvidenceRow[], index: number) => void }) {
+  if (entryEvidence.length === 0 && exitEvidence.length === 0) return null;
+  function Thumbs({ label, rows }: { label: string; rows: InspectionEvidenceRow[] }) {
+    if (rows.length === 0) return <div className="text-xs text-muted-foreground">{label}: sem fotos</div>;
+    return (
+      <div>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">{label}</p>
+        <div className="flex flex-wrap gap-2">
+          {rows.map((evidence, index) => (
+            <button key={evidence.id} type="button" onClick={() => onOpen(rows, index)} className="block h-16 w-16 overflow-hidden rounded border border-border">
+              {evidence.signed_url ? <img src={evidence.signed_url} alt={evidence.caption ?? evidence.file_name ?? "foto"} className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center bg-muted text-[10px] text-muted-foreground">sem preview</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 grid gap-3 sm:grid-cols-2">
+      <Thumbs label="Entrada" rows={entryEvidence} />
+      <Thumbs label="Saida" rows={exitEvidence} />
+    </div>
+  );
+}
+
+function InspectionComparisonPanel({ data, exitInspectionId, filter, onFilterChange }: { data: MysqlInspectionComparisonResponse; exitInspectionId: string; filter: ComparisonFilterKey; onFilterChange: (filter: ComparisonFilterKey) => void }) {
+  const [lightbox, setLightbox] = useState<{ rows: InspectionEvidenceRow[]; index: number } | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  async function downloadComparisonPdf() {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const { blob, fileName } = await downloadMysqlInspectionComparison(exitInspectionId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }
+  const { comparison, summary } = data;
+  const visibleRooms = comparison.rooms
+    .map((room) => ({ ...room, items: room.items.filter((item) => itemMatchesComparisonFilter(item, filter)) }))
+    .filter((room) => filter === "all" || room.items.length > 0);
+  return (
+    <div className="space-y-4 rounded-md border border-border p-4">
+      <div>
+        <h3 className="text-base font-semibold">Comparacao Entrada x Saida</h3>
+        <p className="mt-1 text-xs text-muted-foreground">{data.disclaimer}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+        {([
+          ["Itens", summary.total],
+          ["Sem alteracao", summary.same],
+          ["Alterados", summary.changed],
+          ["Melhor estado", summary.better],
+          ["Pior estado", summary.worse],
+          ["Novos", summary.new],
+          ["Ausentes", summary.absent],
+          ["Nao comparaveis", summary.not_comparable],
+        ] as Array<[string, number]>).map(([label, value]) => (
+          <div key={label} className="rounded-md border border-border bg-muted/30 p-2 text-center">
+            <p className="text-lg font-semibold leading-none">{value}</p>
+            <p className="mt-1 text-[10px] text-muted-foreground">{label}</p>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {COMPARISON_FILTERS.map(({ key, label }) => (
+          <button key={key} type="button" onClick={() => onFilterChange(key)} className={`h-9 rounded-md border px-3 text-xs ${filter === key ? "bg-muted font-semibold" : "border-border"}`}>{label}</button>
+        ))}
+      </div>
+      <div className="space-y-3">
+        {visibleRooms.length === 0 ? <p className="text-sm text-muted-foreground">Nenhum item corresponde a este filtro.</p> : null}
+        {visibleRooms.map((room) => (
+          <div key={`${room.entry_room_id ?? ""}-${room.exit_room_id ?? ""}-${room.name}`} className="rounded-md border border-border p-3">
+            <p className="text-sm font-semibold">{room.name} <span className="ml-2 text-xs font-normal text-muted-foreground">{MYSQL_ROOM_OUTCOME_LABELS[room.outcome]}</span></p>
+            <ComparisonPhotoRow entryEvidence={room.entry_evidence} exitEvidence={room.exit_evidence} onOpen={(rows, index) => setLightbox({ rows, index })} />
+            <div className="mt-2 space-y-2 border-t border-border pt-2">
+              {room.items.map((item) => (
+                <div key={`${item.entry_item_id ?? ""}-${item.exit_item_id ?? ""}-${item.name}`} className="text-sm">
+                  <p>
+                    <span className="font-medium">{item.name}</span>
+                    <span className="ml-2 text-muted-foreground">
+                      {item.entry ? COMPARISON_CONDITION_LABELS[item.entry] : "-"} {"→"} {item.exit ? COMPARISON_CONDITION_LABELS[item.exit] : "-"}
+                    </span>
+                    <span className="ml-2 rounded-full border border-border px-2 py-0.5 text-xs">{MYSQL_ITEM_OUTCOME_LABELS[item.outcome]}</span>
+                  </p>
+                  <ComparisonPhotoRow entryEvidence={item.entry_evidence} exitEvidence={item.exit_evidence} onOpen={(rows, index) => setLightbox({ rows, index })} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2 border-t border-border pt-3">
+        <button type="button" disabled={downloading} onClick={() => void downloadComparisonPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">
+          {downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar relatorio comparativo
+        </button>
+      </div>
+      {lightbox ? <InspectionEvidenceLightbox rows={lightbox.rows} index={lightbox.index} contextLabel="Comparacao Entrada x Saida" onNavigate={(index) => setLightbox((current) => (current ? { ...current, index } : current))} onClose={() => setLightbox(null)} /> : null}
+    </div>
+  );
+}
+
 function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: MysqlInspection; canEdit: boolean; onError: (error: unknown) => void }) {
   const canReport = canGenerateInspectionReport(inspection.status, canEdit);
-  const [busy, setBusy] = useState(false); const [report, setReport] = useState<{ signed_url: string | null } | null>(null); const [comparison, setComparison] = useState<any>(null); const [comparisonFilter, setComparisonFilter] = useState("all"); const [signer, setSigner] = useState(""); const [signature, setSignature] = useState(""); const [baseline, setBaseline] = useState("");
-  // Trava síncrona: `disabled` só vale após o próximo render, então cliques
-  // no mesmo tick (duplo toque) disparavam vários POSTs de laudo.
+  const [busy, setBusy] = useState(false); const [report, setReport] = useState<{ signed_url: string | null } | null>(null); const [signer, setSigner] = useState(""); const [signature, setSignature] = useState("");
+  // Trava sincrona: `disabled` so vale apos o proximo render, entao cliques
+  // no mesmo tick (duplo toque) disparavam varios POSTs de laudo.
   const inFlight = useRef(false);
   async function exclusive(run: () => Promise<void>) { if (inFlight.current) return; inFlight.current = true; setBusy(true); try { await run(); } finally { inFlight.current = false; setBusy(false); } }
   async function generate() { await exclusive(async () => { try { const result = await generateMysqlInspectionReport(inspection.id); setReport(result.report); } catch (error) { onError(error); } }); }
-  // Sub-bloco 5B - download real do laudo (bytes autenticados), não mais um
-  // link para signed_url (que é null hoje para os providers Local/R2). A
+  // Sub-bloco 5B - download real do laudo (bytes autenticados), nao mais um
+  // link para signed_url (que e null hoje para os providers Local/R2). A
   // trava `downloading` evita duplo clique disparando dois downloads.
   const [downloading, setDownloading] = useState(false);
   async function downloadPdf() {
@@ -368,7 +528,115 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
     }
   }
   async function sign() { if (!signer || !signature) return; await exclusive(async () => { try { await createMysqlInspectionSignature(inspection.id, { signer_name: signer, signer_role: "responsible", accepted_terms: true, signature_base64: signature }); setSigner(""); setSignature(""); } catch (error) { onError(error); } }); }
-  async function compare() { if (!baseline) return; await exclusive(async () => { try { const result = await generateMysqlInspectionComparison(inspection.id, baseline); setComparison(result.comparison); } catch (error) { onError(error); } }); }
-  const visibleRooms = comparison?.rooms?.map((room: any) => ({ ...room, items: room.items.filter((item: any) => comparisonFilter === "all" || (comparisonFilter === "changed" && item.changed) || (comparisonFilter === "worse" && item.outcome === "worse") || (comparisonFilter === "new" && ["new", "absent"].includes(item.outcome))) })).filter((room: any) => comparisonFilter === "all" || room.items.length > 0);
-  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Documentos</h2><button type="button" disabled={busy || !canReport} onClick={() => void generate()} aria-describedby={canReport ? undefined : "inspection-report-hint"} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Exportar PDF</button>{report ? <button type="button" disabled={downloading} onClick={() => void downloadPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar laudo (PDF)</button> : null}</div>{canEdit && !canReport ? <p id="inspection-report-hint" className="text-xs text-muted-foreground">O laudo fica disponível depois que a vistoria for concluída.</p> : null}{canEdit && inspection.status === "completed" ? <div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">Nome do signatário<input value={signer} onChange={(event) => setSigner(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="text-sm">Imagem da assinatura<input type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setSignature(String(reader.result)); reader.readAsDataURL(file); }} className="mt-1 block w-full text-sm" /></label><button type="button" disabled={busy || !signer || !signature} onClick={() => void sign()} className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2">Registrar assinatura eletrônica simples</button></div> : null}<div className="grid gap-2 sm:grid-cols-[1fr_auto]"><label className="text-sm">ID da vistoria de entrada<input value={baseline} onChange={(event) => setBaseline(event.target.value)} placeholder="UUID da entrada" className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><button type="button" disabled={busy || !canEdit || !baseline || inspection.type !== "exit" || (inspection.status !== "completed" && inspection.status !== "archived")} onClick={() => void compare()} className="h-10 self-end rounded-md border border-border px-3 text-sm">Comparar entrada</button></div>{comparison ? <div className="space-y-2 rounded-md border border-border p-3"><div className="flex flex-wrap gap-2">{[ ["all", "Todos"], ["changed", "Alterados"], ["worse", "Pioraram"], ["new", "Novos/ausentes"] ].map(([value, label]) => <button key={value} type="button" onClick={() => setComparisonFilter(value)} className={`h-9 rounded-md border px-3 text-xs ${comparisonFilter === value ? "bg-muted font-semibold" : ""}`}>{label}</button>)}</div>{visibleRooms.map((room: any) => <div key={room.name}><p className="text-sm font-semibold">{room.name} · {room.outcome}</p>{room.items.map((item: any) => <p key={item.name} className="text-xs text-muted-foreground">{item.name}: {item.entry ?? "—"} → {item.exit ?? "—"} ({item.outcome})</p>)}</div>)}</div> : null}<p className="text-xs text-muted-foreground">A comparação aponta diferenças registradas entre as vistorias e não atribui responsabilidade. Relatórios e assinaturas exigem conexão e são armazenados como documentos privados.</p></section>;
+
+  // Bloco 5 - estado da comparacao Entrada x Saida. `activeComparison` e o
+  // que esta exibido no painel (seja a comparacao ja existente, carregada
+  // via GET sem efeito colateral, seja uma recem-gerada via POST).
+  const [activeComparison, setActiveComparison] = useState<MysqlInspectionComparisonResponse | null>(null);
+  const [activeExitId, setActiveExitId] = useState<string | null>(null);
+  const [comparisonFilter, setComparisonFilter] = useState<ComparisonFilterKey>("all");
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [loadingContext, setLoadingContext] = useState(true);
+  // SAIDA: entradas do mesmo imovel, compativeis para comparar.
+  const [candidateEntries, setCandidateEntries] = useState<MysqlInspection[]>([]);
+  const [selectedEntryId, setSelectedEntryId] = useState("");
+  const canCompare = inspection.type === "exit" && (inspection.status === "completed" || inspection.status === "archived");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadContext() {
+      setLoadingContext(true);
+      try {
+        if (inspection.type === "exit") {
+          const existing = await getMysqlInspectionComparison(inspection.id);
+          if (cancelled) return;
+          if (existing) {
+            setActiveComparison(existing);
+            setActiveExitId(inspection.id);
+            return;
+          }
+          if (!canCompare) return;
+          const [completed, archived] = await Promise.all([
+            listMysqlInspections(1, 50, "completed", { type: "entry", property_id: inspection.property_id }),
+            listMysqlInspections(1, 50, "archived", { type: "entry", property_id: inspection.property_id }),
+          ]);
+          if (cancelled) return;
+          const entries = [...completed.inspections, ...archived.inspections];
+          setCandidateEntries(entries);
+          if (entries.length === 1) setSelectedEntryId(entries[0].id);
+        } else if (inspection.type === "entry") {
+          const [completed, archived, inProgress, draft] = await Promise.all([
+            listMysqlInspections(1, 50, "completed", { type: "exit", property_id: inspection.property_id }),
+            listMysqlInspections(1, 50, "archived", { type: "exit", property_id: inspection.property_id }),
+            listMysqlInspections(1, 50, "in_progress", { type: "exit", property_id: inspection.property_id }),
+            listMysqlInspections(1, 50, "draft", { type: "exit", property_id: inspection.property_id }),
+          ]);
+          if (cancelled) return;
+          const exits = [...completed.inspections, ...archived.inspections, ...inProgress.inspections, ...draft.inspections];
+          for (const exit of exits) {
+            const result = await getMysqlInspectionComparison(exit.id);
+            if (cancelled) return;
+            if (result && result.comparison.entry_inspection_id === inspection.id) {
+              setActiveComparison(result);
+              setActiveExitId(exit.id);
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        if (!cancelled) onError(error);
+      } finally {
+        if (!cancelled) setLoadingContext(false);
+      }
+    }
+    void loadContext();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspection.id, inspection.type, inspection.property_id, inspection.status]);
+
+  async function compare() {
+    if (!selectedEntryId) return;
+    await exclusive(async () => {
+      try {
+        const result = await generateMysqlInspectionComparison(inspection.id, selectedEntryId);
+        setActiveComparison(result);
+        setActiveExitId(inspection.id);
+        setPanelOpen(true);
+      } catch (error) {
+        onError(error);
+      }
+    });
+  }
+
+  // Botao contextual: nunca mostrado na dashboard, so aqui dentro da
+  // vistoria, e nunca desabilitado ocupando espaco sem utilidade.
+  let comparisonButton: ReactNode = null;
+  if (inspection.type === "exit") {
+    if (activeComparison) {
+      comparisonButton = <button type="button" onClick={() => setPanelOpen((v) => !v)} className="h-10 rounded-md border border-border px-3 text-sm font-medium">{panelOpen ? "Ocultar comparacao" : "Ver comparacao"}</button>;
+    } else if (canCompare && candidateEntries.length > 0) {
+      comparisonButton = (
+        <div className="flex flex-wrap items-end gap-2">
+          {candidateEntries.length > 1 ? (
+            <label className="text-sm">Vistoria de entrada
+              <select value={selectedEntryId} onChange={(event) => setSelectedEntryId(event.target.value)} className="mt-1 h-10 rounded-md border border-input px-2 text-sm">
+                <option value="">Selecione...</option>
+                {candidateEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.property?.code ?? entry.id.slice(0, 8)} - {entry.assigned_user?.name ?? "sem responsavel"}</option>)}
+              </select>
+            </label>
+          ) : null}
+          <button type="button" disabled={busy || !selectedEntryId} onClick={() => void compare()} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Comparar com vistoria de entrada</button>
+        </div>
+      );
+    }
+  } else if (inspection.type === "entry" && activeComparison) {
+    comparisonButton = <button type="button" onClick={() => setPanelOpen((v) => !v)} className="h-10 rounded-md border border-border px-3 text-sm font-medium">{panelOpen ? "Ocultar comparacao" : "Ver comparacao Entrada x Saida"}</button>;
+  }
+
+  return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Documentos</h2><button type="button" disabled={busy || !canReport} onClick={() => void generate()} aria-describedby={canReport ? undefined : "inspection-report-hint"} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Exportar PDF</button>{report ? <button type="button" disabled={downloading} onClick={() => void downloadPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar laudo (PDF)</button> : null}</div>{canEdit && !canReport ? <p id="inspection-report-hint" className="text-xs text-muted-foreground">O laudo fica disponivel depois que a vistoria for concluida.</p> : null}{canEdit && inspection.status === "completed" ? <div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">Nome do signatario<input value={signer} onChange={(event) => setSigner(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="text-sm">Imagem da assinatura<input type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setSignature(String(reader.result)); reader.readAsDataURL(file); }} className="mt-1 block w-full text-sm" /></label><button type="button" disabled={busy || !signer || !signature} onClick={() => void sign()} className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2">Registrar assinatura eletronica simples</button></div> : null}
+
+    {!loadingContext && comparisonButton ? <div className="border-t border-border pt-3">{comparisonButton}</div> : null}
+    {panelOpen && activeComparison && activeExitId ? <InspectionComparisonPanel data={activeComparison} exitInspectionId={activeExitId} filter={comparisonFilter} onFilterChange={setComparisonFilter} /> : null}
+
+    <p className="text-xs text-muted-foreground">A comparacao aponta diferencas registradas entre as vistorias e nao atribui responsabilidade. Relatorios e assinaturas exigem conexao e sao armazenados como documentos privados.</p></section>;
 }
