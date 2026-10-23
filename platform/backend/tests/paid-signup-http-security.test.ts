@@ -29,6 +29,19 @@ const billing = vi.hoisted(() => ({
   plans: vi.fn(async () => []),
 }));
 
+// Este branch de staging habilita cadastro aberto (REGISTRATION_ENABLED=true)
+// para QA (ver comentario em routes/auth.ts e Diretriz Mestre do MVP). Esse
+// teste valida o comportamento comercial de producao - o endpoint antigo
+// bloqueado com 403 - que independe de qual flag de ambiente este branch usa
+// para QA. Sem este mock, isFreeRegistrationEnabled() lia o ambiente real do
+// branch (aberto) e o fluxo caia na validacao do schema (400) em vez do
+// bloqueio comercial (403): nao e uma regressao de codigo, e o teste
+// precisando simular o estado de producao independente do branch.
+vi.mock("../src/config/env.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/config/env.js")>();
+  return { ...actual, isFreeRegistrationEnabled: () => false };
+});
+
 vi.mock("../src/services/account-activation.js", () => ({
   validateAccountActivation: activation.validate,
   activatePaidAccount: activation.activate,

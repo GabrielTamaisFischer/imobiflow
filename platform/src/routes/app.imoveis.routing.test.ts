@@ -2,7 +2,18 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { getPropertyValidationDetails, parsePropertiesSearch, resolveSubmitIntent } from "./app.imoveis";
 
-const propertyRouteSource = readFileSync(new URL("./app.imoveis.tsx", import.meta.url), "utf8");
+// .normalize: app.imoveis.tsx tem alguma linha com final CRLF (ambiente
+// Windows do dev) misturado com o resto do arquivo em LF. O assert abaixo
+// compara contra um literal com \n puro; sem normalizar, o \r sobra entre
+// "{" e a quebra de linha e o toContain falha mesmo com o onClick intacto.
+// Isso nao e causado pelos arquivos protegidos (este arquivo nao e um
+// deles) nem e uma regressao de comportamento - e so a leitura bruta do
+// arquivo carregando o final de linha do SO. Normalizar aqui no teste em
+// vez de reescrever o arquivo fonte por um detalhe de whitespace.
+const propertyRouteSource = readFileSync(new URL("./app.imoveis.tsx", import.meta.url), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 // full-page-imoveis (2026-09-11): este projeto não tem jsdom/React Testing
 // Library configurado (vitest.config.ts roda em "environment: node" e só
