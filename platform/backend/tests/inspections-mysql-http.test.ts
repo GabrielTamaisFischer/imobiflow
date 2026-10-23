@@ -744,8 +744,32 @@ describe("laudo", () => {
       "UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoEAAQAAUAmJaACdLoAA5gA/vp5X/9+0v++0v++0v9e34rfUDNIAAAA";
     const webpBuffer = Buffer.from(webpBase64, "base64");
 
-    const evidence = await call("adminA", "POST", `/${ids.entryA2}/evidence`, {
+    // IMPORTANTE: evidência só pode ser adicionada a uma vistoria mutável
+    // (draft/in_progress) - ensureMutable() rejeita com 409
+    // INSPECTION_NOT_MUTABLE para uma vistoria "completed" como ids.entryA2
+    // (seedada já concluída no beforeEach, igual ids.entryA/exitA). Por isso
+    // este teste cria sua própria vistoria draft, anexa a evidência enquanto
+    // ainda é mutável e só então avança o status até completed - mesma
+    // sequência que a rota exige em produção (draft -> in_progress ->
+    // completed, conferido também na homologação manual em staging real).
+    const webpInspectionId = randomUUID();
+    state.tables.inspection.push(
+      inspection(webpInspectionId, COMPANY_A, ids.propA, "entry", "draft", ids.adminA),
+    );
+    // A evidência precisa estar associada a um ambiente/item: o laudo só
+    // percorre evidências agrupadas por room_id/item_id (ver evidenceByRoom
+    // / evidenceByItem em buildReportInput) - evidência "solta" (sem room_id
+    // nem item_id) nunca entra em rooms[] e é silenciosamente ignorada no
+    // PDF, independente do formato. Mesmo padrão usado na reprodução manual
+    // em staging real.
+    seedRoomWithItem(webpInspectionId, COMPANY_A, "good");
+    const [room] = state.tables.inspectionRoom.filter((row) => row.inspectionId === webpInspectionId);
+    const [item] = state.tables.inspectionItem.filter((row) => row.roomId === room.id);
+
+    const evidence = await call("adminA", "POST", `/${webpInspectionId}/evidence`, {
       id: randomUUID(),
+      room_id: room.id,
+      item_id: item.id,
       file_name: "qa-webp.webp",
       mime_type: "image/webp",
       size_bytes: webpBuffer.byteLength,
@@ -754,10 +778,22 @@ describe("laudo", () => {
     expect(evidence.status).toBe(201);
     expect(evidence.body.evidence.mime_type).toBe("image/webp");
 
-    const generated = await call("adminA", "POST", `/${ids.entryA2}/report`, {});
+    // version 3 (fixture inicial) -> 4 após o POST /evidence acima.
+    const started = await call("adminA", "PATCH", `/${webpInspectionId}`, {
+      status: "in_progress",
+      expected_version: 4,
+    });
+    expect(started.status).toBe(200);
+    const completed = await call("adminA", "PATCH", `/${webpInspectionId}`, {
+      status: "completed",
+      expected_version: 5,
+    });
+    expect(completed.status).toBe(200);
+
+    const generated = await call("adminA", "POST", `/${webpInspectionId}/report`, {});
     expect(generated.status).toBe(201);
 
-    const download = await callRaw("adminA", "GET", `/${ids.entryA2}/report/download`);
+    const download = await callRaw("adminA", "GET", `/${webpInspectionId}/report/download`);
     expect(download.status).toBe(200);
     const pdfText = download.buffer.toString("latin1");
     // Imagem real embutida via pdf-lib (Sharp reencoda WebP -> JPEG antes do embed).
