@@ -19,6 +19,7 @@ import { financeRouter } from "./routes/finance.js";
 import { importsRouter } from "./routes/imports.js";
 import { inspectionsRouter } from "./routes/inspections.js";
 import { mysqlInspectionsRouter } from "./routes/inspections-mysql.js";
+import { mysqlInspectionSigningRouter, publicInspectionSigningRouter } from "./routes/inspection-signing.js";
 import { integrationsRouter } from "./routes/integrations.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { operationsRouter } from "./routes/operations.js";
@@ -158,11 +159,13 @@ export function createApp() {
   // F5B: rota canônica MySQL/Prisma. O caminho legado `/inspections` segue
   // isolado durante a migração; nenhum endpoint novo de Vistoria usa Supabase.
   app.use("/real-estate/inspections", mysqlInspectionsRouter);
+  app.use("/real-estate/inspection-signing", mysqlInspectionSigningRouter);
   app.use("/integrations", integrationsRouter);
   app.use("/notifications", notificationsRouter);
   app.use("/operations", operationsRouter);
   app.use("/portal-integrations", portalIntegrationsRouter);
   app.use("/public/inspections", publicInspectionsRouter);
+  app.use("/public/inspection-signing", publicInspectionSigningRouter);
   app.use("/public/portals", publicPortalsRouter);
   app.use("/public/sites", publicSitesRouter);
   // F8A: token-bound, privacy-safe aggregates for external tenant/buyer portals.
