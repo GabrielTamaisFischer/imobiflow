@@ -234,6 +234,7 @@ testLabRouter.delete(
         rooms: 0,
         items: 0,
         media: 0,
+        inspection_evidence: 0,
         signatures: 0,
         leads: 0,
         site_leads: 0,
@@ -254,7 +255,53 @@ testLabRouter.delete(
         cleared.appointments += (await prisma().appointment.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } })).count;
         cleared.media += (await prisma().propertyMedia.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } })).count;
         await prisma().propertyOwnerLink.deleteMany({ where: { companyId, propertyId: { in: propertyIds } } });
-        cleared.properties += (await prisma().property.deleteMany({ where: { companyId, id: { in: propertyIds } } })).count;
+
+        // C - Inspection.property usa onDelete: Restrict (schema.prisma), entao
+        // qualquer vistoria apontando para um imovel QA bloqueia a exclusao do
+        // imovel com erro de FK (500). O gerador /generate hoje nao cria
+        // vistorias, mas uma vistoria pode ter sido criada manualmente (ex.:
+        // durante um teste manual) referenciando um imovel QA. Como o filtro
+        // abaixo usa so propertyId IN (imoveis QA desta empresa), a exclusao
+        // nunca alcanca uma vistoria de imovel real: o proprio imovel ja e
+        // sintetico, entao a vistoria presa a ele tambem e lixo de teste.
+        // Rooms/items/evidence/events cascada no banco via onDelete: Cascade a
+        // partir de Inspection (ver schema.prisma) - nao e preciso apaga-los
+        // manualmente. O StoredFile binario referenciado pela evidencia usa
+        // onDelete: Restrict e fica orfao (nao e removido aqui); e uma
+        // pendencia separada, fora do escopo desta correcao, registrada no
+        // relatorio de homologacao.
+        const inspections = await prisma().inspection.findMany({
+          where: { companyId, propertyId: { in: propertyIds } },
+          select: { id: true },
+        });
+        if (inspections.length > 0) {
+          const inspectionIds = inspections.map((inspection) => inspection.id);
+          const [roomCount, itemCount, evidenceCount] = await Promise.all([
+            prisma().inspectionRoom.count({ where: { companyId, inspectionId: { in: inspectionIds } } }),
+            prisma().inspectionItem.count({ where: { companyId, room: { inspectionId: { in: inspectionIds } } } }),
+            prisma().inspectionEvidence.count({ where: { companyId, inspectionId: { in: inspectionIds } } }),
+          ]);
+          // Transacional: ou a vistoria e o imovel QA saem juntos, ou nenhum
+          // dos dois e alterado - nunca deixamos o imovel preso sem o motivo
+          // (vistoria) ja removido, nem a vistoria removida com o imovel ainda
+          // de pe por uma falha intermediaria.
+          const result = await prisma().$transaction(async (tx) => {
+            const deletedInspections = await tx.inspection.deleteMany({
+              where: { companyId, id: { in: inspectionIds } },
+            });
+            const deletedProperties = await tx.property.deleteMany({
+              where: { companyId, id: { in: propertyIds } },
+            });
+            return { deletedInspections, deletedProperties };
+          });
+          cleared.rooms += roomCount;
+          cleared.items += itemCount;
+          cleared.inspection_evidence += evidenceCount;
+          cleared.inspections += result.deletedInspections.count;
+          cleared.properties += result.deletedProperties.count;
+        } else {
+          cleared.properties += (await prisma().property.deleteMany({ where: { companyId, id: { in: propertyIds } } })).count;
+        }
       }
 
       cleared.leads += (await prisma().lead.deleteMany({ where: { companyId, source: "qa-test-lab" } })).count;
