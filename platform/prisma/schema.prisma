@@ -68,6 +68,9 @@ model Company {
   ownerChecks     OwnerCheck[]
   ownerDocuments  OwnerDocumentRecord[]
   ownerConflicts   OwnerConflict[]
+  inspectionSigningProcesses InspectionSigningProcess[]
+  inspectionSigningParties   InspectionSigningParty[]
+  inspectionSigningEvents    InspectionSigningEvent[]
 
   @@index([status])
   @@map("companies")
@@ -131,6 +134,7 @@ model AppUser {
   createdProposals    Proposal[] @relation("ProposalCreator")
   proposalEvents      ProposalEvent[]
   resolvedOwnerPropertyUpdates OwnerPropertyUpdateRequest[] @relation("OwnerPropertyUpdateResolver")
+  createdInspectionSigningProcesses InspectionSigningProcess[] @relation("SigningProcessCreator")
 
   @@unique([companyId, email])
   @@unique([companyId, partyId])
@@ -615,6 +619,7 @@ model Party {
   buyerLeads      Lead[]
   contractSources ContractParty[] @relation("ContractPartySource")
   appUsers        AppUser[]        @relation("AppUserParty")
+  inspectionSigningParties InspectionSigningParty[]
 
   @@unique([companyId, id])
   // C1.1 (ajuste pós-auditoria) — unique tenant-safe para identidade
@@ -868,6 +873,8 @@ model StoredFile {
   purpose          String?  @db.VarChar(40)
   inspectionEvidence InspectionEvidence?
   ownerDocument      OwnerDocumentRecord?
+  inspectionSigningProcessReports InspectionSigningProcess[] @relation("SigningProcessReportFile")
+  inspectionSigningPartySignatures InspectionSigningParty[]  @relation("SigningPartySignatureFile")
 
   @@unique([provider, publicId])
   @@index([companyId, entityType, entityId])
@@ -904,6 +911,7 @@ model Inspection {
   events         InspectionEvent[]
   contractEntryLinks Contract[] @relation("ContractEntryInspection")
   contractExitLinks  Contract[] @relation("ContractExitInspection")
+  signingProcesses   InspectionSigningProcess[]
 
   @@index([companyId, status, createdAt])
   @@index([companyId, propertyId, createdAt])
@@ -1980,4 +1988,119 @@ model WebsiteAuditLog {
   @@index([companyId, websiteId, createdAt])
   @@index([companyId, action, createdAt])
   @@map("website_audit_logs")
+}
+
+
+// Assinatura Online de Vistoria - domínio NOVO e SEPARADO do mecanismo
+// interno/presencial já existente (inspection_signature via StoredFile,
+// mantido intacto). Nunca altera Inspection.status. Vinculado à versão EXATA
+// do documento apresentado para assinatura (reportStoredFileId + hash
+// SHA-256 do PDF em documentHash): trocar o laudo nunca revalida
+// silenciosamente assinaturas antigas - um novo processo precisa ser criado
+// e o processo anterior permanece intacto/auditável.
+model InspectionSigningProcess {
+  id                 String    @id @default(uuid()) @db.Char(36)
+  companyId          String    @map("company_id") @db.Char(36)
+  inspectionId       String    @map("inspection_id") @db.Char(36)
+  reportStoredFileId String    @map("report_stored_file_id") @db.Char(36)
+  documentHash       String    @map("document_hash") @db.Char(64)
+  status             String    @default("pending") @db.VarChar(20)
+  // Trava de "só um processo ATIVO por documento" compatível com MySQL: fica
+  // em 1 enquanto o processo é pending/partially_signed e vira NULL quando
+  // o processo encerra (completed/expired/cancelled). MySQL trata cada NULL
+  // como distinto numa unique key, então vários processos JÁ ENCERRADOS para
+  // o mesmo documento nunca colidem entre si - só impede dois processos
+  // simultaneamente ativos para a mesma empresa+vistoria+versão do laudo.
+  activeSlot         Int?      @map("active_slot")
+  createdBy          String?   @map("created_by") @db.Char(36)
+  completedAt        DateTime? @map("completed_at")
+  cancelledAt        DateTime? @map("cancelled_at")
+  expiredAt          DateTime? @map("expired_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  company    Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  inspection Inspection               @relation(fields: [inspectionId], references: [id], onDelete: Restrict)
+  reportFile StoredFile               @relation("SigningProcessReportFile", fields: [reportStoredFileId], references: [id], onDelete: Restrict)
+  creator    AppUser?                 @relation("SigningProcessCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  parties    InspectionSigningParty[]
+  events     InspectionSigningEvent[]
+
+  @@unique([companyId, inspectionId, reportStoredFileId, activeSlot])
+  @@index([companyId, inspectionId, status])
+  @@map("inspection_signing_processes")
+}
+
+// Snapshot do signatário no momento em que o link foi gerado/assinado.
+// partyId é referência de IDENTIDADE (quando existe Party correspondente -
+// proprietário/locatário/comprador reaproveitam Party/roles existentes);
+// os campos *Snapshot são a FONTE DE VERDADE para exibir quem assinou um
+// documento histórico - Party pode mudar depois (nome, telefone, etc.) e
+// isso nunca deve reescrever retroativamente um processo já concluído.
+// Testemunha não exige Party (signerNameSnapshot sozinho é suficiente).
+model InspectionSigningParty {
+  id                     String    @id @default(uuid()) @db.Char(36)
+  companyId              String    @map("company_id") @db.Char(36)
+  processId              String    @map("process_id") @db.Char(36)
+  partyId                String?   @map("party_id") @db.Char(36)
+  role                   String    @db.VarChar(20)
+  signerNameSnapshot     String    @map("signer_name_snapshot") @db.VarChar(180)
+  signerDocumentSnapshot String?   @map("signer_document_snapshot") @db.VarChar(32)
+  signerEmailSnapshot    String?   @map("signer_email_snapshot") @db.VarChar(180)
+  signerPhoneSnapshot    String?   @map("signer_phone_snapshot") @db.VarChar(40)
+  status                 String    @default("pending") @db.VarChar(20)
+  // Token público: só o HASH fica no banco (nunca o plaintext). Reemissão
+  // sobrescreve este campo (o token antigo para de autenticar), mas o
+  // histórico de emissão/revogação/visualização continua em
+  // InspectionSigningEvent - nada é perdido, só o ponteiro "token ativo" é
+  // que é único por linha.
+  tokenHash              String?   @unique @map("token_hash") @db.Char(64)
+  tokenExpiresAt         DateTime? @map("token_expires_at")
+  // drawn | typed. Para "typed", typedText+typedFontId são os dados
+  // estruturados originais (fonte da verdade); uma imagem no PDF final é só
+  // representação visual derivada, nunca o único registro.
+  signatureMethod        String?   @map("signature_method") @db.VarChar(10)
+  typedText              String?   @map("typed_text") @db.VarChar(180)
+  typedFontId            String?   @map("typed_font_id") @db.VarChar(40)
+  signatureStoredFileId  String?   @map("signature_stored_file_id") @db.Char(36)
+  consentedAt            DateTime? @map("consented_at")
+  linkCreatedAt          DateTime? @map("link_created_at")
+  viewedAt               DateTime? @map("viewed_at")
+  signedAt               DateTime? @map("signed_at")
+  revokedAt              DateTime? @map("revoked_at")
+  expiredAt              DateTime? @map("expired_at")
+  ipAddress              String?   @map("ip_address") @db.VarChar(64)
+  userAgent              String?   @map("user_agent") @db.VarChar(400)
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  company       Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  process       InspectionSigningProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  party         Party?                   @relation(fields: [companyId, partyId], references: [companyId, id], onDelete: SetNull)
+  signatureFile StoredFile?              @relation("SigningPartySignatureFile", fields: [signatureStoredFileId], references: [id], onDelete: SetNull)
+  events        InspectionSigningEvent[]
+
+  @@index([companyId, processId, status])
+  @@map("inspection_signing_parties")
+}
+
+// Trilha de auditoria append-only - nunca é sobrescrita por reenvio/
+// reemissão de link; cada ação nova é uma linha nova.
+model InspectionSigningEvent {
+  id           String   @id @default(uuid()) @db.Char(36)
+  companyId    String   @map("company_id") @db.Char(36)
+  processId    String   @map("process_id") @db.Char(36)
+  partyId      String?  @map("party_id") @db.Char(36)
+  eventType    String   @map("event_type") @db.VarChar(40)
+  metadataJson Json?    @map("metadata_json")
+  ipAddress    String?  @map("ip_address") @db.VarChar(64)
+  userAgent    String?  @map("user_agent") @db.VarChar(400)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  company Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  process InspectionSigningProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  party   InspectionSigningParty?  @relation(fields: [partyId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, processId, createdAt])
+  @@map("inspection_signing_events")
 }
