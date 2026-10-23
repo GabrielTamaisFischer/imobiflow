@@ -782,6 +782,95 @@ describe("comparação entrada × saída", () => {
     });
     expect(state.storageUploads).toHaveLength(2);
   });
+
+  function seedComparisonEvidence() {
+    const entryRoomId = state.tables.inspectionRoom.find((row) => row.inspectionId === ids.entryA)!.id;
+    const entryItemId = state.tables.inspectionItem.find((row) => row.roomId === entryRoomId)!.id;
+    const exitRoomId = state.tables.inspectionRoom.find((row) => row.inspectionId === ids.exitA)!.id;
+    const exitItemId = state.tables.inspectionItem.find((row) => row.roomId === exitRoomId)!.id;
+    function addEvidence(companyId: string, inspectionId: string, roomId: string, itemId: string | null, fileName: string) {
+      const storedFileId = randomUUID();
+      const evidenceId = randomUUID();
+      state.tables.storedFile.push({
+        id: storedFileId, companyId, entityType: "inspection_evidence", entityId: evidenceId,
+        provider: "fake", publicId: `imobiflow/evidence/${evidenceId}`, resourceType: "image", format: "jpg",
+        purpose: "inspection_evidence", originalFilename: fileName, mimeType: "image/jpeg", sizeBytes: 10, createdAt: new Date(),
+      });
+      state.tables.inspectionEvidence.push({
+        id: evidenceId, companyId, inspectionId, roomId, itemId, storedFileId, position: 0, caption: null, createdAt: new Date(),
+      });
+      return evidenceId;
+    }
+    // Evidência geral do ambiente (item_id null) na entrada, evidência do item na saída —
+    // cobre os dois casos de associação determinística por id.
+    const entryGeneralId = addEvidence(COMPANY_A, ids.entryA, entryRoomId, null, "entrada-sala.jpg");
+    const exitItemEvidenceId = addEvidence(COMPANY_A, ids.exitA, exitRoomId, exitItemId, "saida-piso.jpg");
+    return { entryItemId, exitItemId, entryGeneralId, exitItemEvidenceId };
+  }
+
+  it("Bloco 5 — anexa fotos de entrada/saída por ambiente e por item (associação determinística por id)", async () => {
+    const { entryGeneralId, exitItemEvidenceId } = seedComparisonEvidence();
+    const { status, body } = await call("adminA", "POST", `/${ids.exitA}/comparison`, {
+      baseline_inspection_id: ids.entryA,
+    });
+    expect(status).toBe(201);
+    const room = (body.comparison.rooms as Row[])[0];
+    expect(room.entry_evidence.map((e: Row) => e.id)).toEqual([entryGeneralId]);
+    expect(room.exit_evidence).toEqual([]);
+    const item = room.items[0];
+    expect(item.entry_evidence).toEqual([]);
+    expect(item.exit_evidence.map((e: Row) => e.id)).toEqual([exitItemEvidenceId]);
+    // summary conta por outcome de item, não de ambiente.
+    expect(body.summary).toMatchObject({ total: 1, worse: 1, same: 0, better: 0, new: 0, absent: 0, not_comparable: 0 });
+  });
+
+  it("Bloco 5 — GET /:id/comparison antes de gerar responde 404 sem efeito colateral", async () => {
+    const { status, body } = await call("adminA", "GET", `/${ids.exitA}/comparison`);
+    expect(status).toBe(404);
+    expect(body.error).toBe("COMPARISON_NOT_FOUND");
+    expect(state.storageUploads).toHaveLength(0);
+  });
+
+  it("Bloco 5 — GET /:id/comparison depois do POST devolve a mesma comparação decorada, sem gerar de novo", async () => {
+    seedComparisonEvidence();
+    const generated = await call("adminA", "POST", `/${ids.exitA}/comparison`, {
+      baseline_inspection_id: ids.entryA,
+    });
+    expect(generated.status).toBe(201);
+    const read = await call("adminA", "GET", `/${ids.exitA}/comparison`);
+    expect(read.status).toBe(200);
+    expect(read.body.summary).toEqual(generated.body.summary);
+    expect((read.body.comparison.rooms as Row[])[0].items[0]).toMatchObject({ name: "Piso", entry: "good", exit: "damaged", outcome: "worse" });
+    expect(state.storageUploads).toHaveLength(1);
+  });
+
+  it("Bloco 5 — GET /:id/comparison de outra empresa responde 404 sem revelar existência", async () => {
+    const generated = await call("adminA", "POST", `/${ids.exitA}/comparison`, {
+      baseline_inspection_id: ids.entryA,
+    });
+    expect(generated.status).toBe(201);
+    const crossTenant = await call("adminB", "GET", `/${ids.exitA}/comparison`);
+    expect(crossTenant.status).toBe(404);
+  });
+
+  it("Bloco 5 — download do PDF comparativo: 404 antes de gerar, bytes reais depois, 404 cross-tenant", async () => {
+    const before = await callRaw("adminA", "GET", `/${ids.exitA}/comparison/download`);
+    expect(before.status).toBe(404);
+
+    const generated = await call("adminA", "POST", `/${ids.exitA}/comparison`, {
+      baseline_inspection_id: ids.entryA,
+    });
+    expect(generated.status).toBe(201);
+
+    const download = await callRaw("adminA", "GET", `/${ids.exitA}/comparison/download`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toBe("application/pdf");
+    expect(download.buffer.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(download.buffer.byteLength).toBeGreaterThan(50);
+
+    const crossTenant = await callRaw("adminB", "GET", `/${ids.exitA}/comparison/download`);
+    expect(crossTenant.status).toBe(404);
+  });
 });
 
 async function callRaw(session: keyof typeof sessions, method: string, path: string) {

@@ -20,6 +20,25 @@ export const CONDITION_LABELS: Record<string, string> = {
   damaged: "Danificado",
 };
 
+// Bloco 5 — Comparação Entrada × Saída: labels PT-BR dos outcomes já
+// produzidos por compareInspections/compareConditions. Nunca atribuem culpa
+// (ex.: nunca "dano causado pelo locatário") — só descrevem a diferença
+// estrutural registrada.
+export const ITEM_OUTCOME_LABELS: Record<string, string> = {
+  same: "Sem alteração",
+  better: "Melhor estado",
+  worse: "Pior estado",
+  not_comparable: "Não comparável",
+  new: "Item novo",
+  absent: "Ausente na saída",
+};
+
+export const ROOM_OUTCOME_LABELS: Record<string, string> = {
+  matched: "Comparado",
+  new: "Ambiente novo",
+  absent: "Ambiente ausente na saída",
+};
+
 export type InspectionSnapshot = {
   inspection_id: string;
   company_id: string;
@@ -68,13 +87,60 @@ export function compareInspections(entry: InspectionSnapshot, exit: InspectionSn
     const items = Array.from(new Set([...entryItems.keys(), ...exitItems.keys()])).map((itemKey) => {
       const first = entryItems.get(itemKey);
       const second = exitItems.get(itemKey);
-      if (!first || !second) return { name: (second ?? first)!.name, entry: first?.condition ?? null, exit: second?.condition ?? null, outcome: second ? "new" : "absent", changed: true, entry_notes: first?.notes ?? null, exit_notes: second?.notes ?? null };
+      if (!first || !second) {
+        return {
+          name: (second ?? first)!.name,
+          entry: first?.condition ?? null,
+          exit: second?.condition ?? null,
+          outcome: second ? "new" : "absent",
+          changed: true,
+          entry_notes: first?.notes ?? null,
+          exit_notes: second?.notes ?? null,
+          // Bloco 5 — ids reais do item em cada lado, usados pela camada HTTP
+          // (não por esta função pura) para anexar as evidências/fotos
+          // correspondentes sem precisar refazer o casamento por nome+posição.
+          entry_item_id: first?.id ?? null,
+          exit_item_id: second?.id ?? null,
+        };
+      }
       const result = compareConditions(first.condition, second.condition);
-      return { name: second.name, entry: first.condition, exit: second.condition, ...result, entry_notes: first.notes, exit_notes: second.notes };
+      return { name: second.name, entry: first.condition, exit: second.condition, ...result, entry_notes: first.notes, exit_notes: second.notes, entry_item_id: first.id, exit_item_id: second.id };
     });
-    return { name: after?.name ?? before?.name ?? key, entry_notes: before?.notes ?? null, exit_notes: after?.notes ?? null, outcome: before && after ? "matched" : after ? "new" : "absent", items };
+    return {
+      name: after?.name ?? before?.name ?? key,
+      entry_notes: before?.notes ?? null,
+      exit_notes: after?.notes ?? null,
+      outcome: before && after ? "matched" : after ? "new" : "absent",
+      entry_room_id: before?.id ?? null,
+      exit_room_id: after?.id ?? null,
+      items,
+    };
   });
   return { entry_inspection_id: entry.inspection_id, exit_inspection_id: exit.inspection_id, property_id: entry.property.id, rooms };
+}
+
+export type InspectionComparisonResult = ReturnType<typeof compareInspections>;
+
+/**
+ * Agrega os outcomes de ITEM (não de ambiente) em contagens para o resumo da
+ * tela de comparação. "total" conta todos os itens presentes em qualquer um
+ * dos dois lados (inclusive novos/ausentes) — não só os comparáveis.
+ */
+export function summarizeComparison(comparison: Pick<InspectionComparisonResult, "rooms">) {
+  const summary = { total: 0, same: 0, changed: 0, better: 0, worse: 0, not_comparable: 0, new: 0, absent: 0 };
+  for (const room of comparison.rooms) {
+    for (const item of room.items) {
+      summary.total += 1;
+      if (item.outcome === "same") summary.same += 1;
+      else if (item.outcome === "better") summary.better += 1;
+      else if (item.outcome === "worse") summary.worse += 1;
+      else if (item.outcome === "not_comparable") summary.not_comparable += 1;
+      else if (item.outcome === "new") summary.new += 1;
+      else if (item.outcome === "absent") summary.absent += 1;
+      if (item.changed) summary.changed += 1;
+    }
+  }
+  return summary;
 }
 
 export function snapshotHash(snapshot: unknown) {

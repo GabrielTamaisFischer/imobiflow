@@ -10,7 +10,16 @@ import { getStorageProvider, getStorageProviderForName, buildStorageFolder } fro
 import { deliveryAccessForPurpose } from "../services/storage/purposes.js";
 import { validateUploadFile } from "../services/storage/file-policy.js";
 import { createStoredFileRecord } from "../services/storage/stored-files.js";
-import { buildInspectionSnapshot, buildPdfBuffer, compareInspections, snapshotHash } from "../services/inspection-f5f.js";
+import {
+  buildInspectionSnapshot,
+  buildPdfBuffer,
+  CONDITION_LABELS,
+  compareInspections,
+  ITEM_OUTCOME_LABELS,
+  ROOM_OUTCOME_LABELS,
+  snapshotHash,
+  summarizeComparison,
+} from "../services/inspection-f5f.js";
 import { readStoredFileBuffer } from "../services/storage/read-file.js";
 import { findStoredFileForEntity } from "../services/storage/stored-files.js";
 import { WATERMARK_LOGO_ENTITY_TYPE } from "../services/mysql-real-estate.js";
@@ -255,6 +264,12 @@ mysqlInspectionsRouter.get("/", requirePermission("inspections.view"), async (re
     if (status && !inspectionStatuses.includes(status as any)) throw invalid("Status inválido.", "INVALID_INSPECTION_STATUS");
     const type = typeof req.query.type === "string" ? req.query.type : undefined;
     if (type && !inspectionTypes.includes(type as any)) throw invalid("Tipo de vistoria inválido.", "INVALID_INSPECTION_TYPE");
+    // Bloco 5 — seleção de entrada compatível para comparação: o frontend
+    // usa este filtro para listar candidatas (mesmo imóvel) sem precisar de
+    // uma rota dedicada. O escopo de tenant/propriedade continua garantido
+    // pelo buildInspectionScopeFilter abaixo, não por este parâmetro.
+    const propertyId = typeof req.query.property_id === "string" ? req.query.property_id : undefined;
+    if (propertyId && !/^[0-9a-f-]{36}$/i.test(propertyId)) throw invalid("Imóvel inválido.", "INVALID_PROPERTY_ID");
     // Busca server-side (UX /app/vistorias): código/título/endereço do
     // imóvel e nome do responsável. MySQL com collation utf8mb4_unicode_ci
     // (padrão do projeto) já compara `contains` sem diferenciar
@@ -284,6 +299,7 @@ mysqlInspectionsRouter.get("/", requirePermission("inspections.view"), async (re
         buildInspectionScopeFilter(req.access!, "inspections.view", "INSPECT"),
         ...(status ? [{ status }] : []),
         ...(type ? [{ type }] : []),
+        ...(propertyId ? [{ propertyId }] : []),
         ...(searchFilter ? [searchFilter] : []),
       ],
     };
@@ -813,6 +829,46 @@ mysqlInspectionsRouter.get("/:id/signatures", requirePermission("inspections.vie
 // diferenças estruturais; nunca atribui responsabilidade.
 const comparisonSchema = z.object({ baseline_inspection_id: z.string().uuid(), regenerate: z.boolean().optional().default(false) });
 const COMPARISON_DISCLAIMER = "Comparação estrutural: indica diferenças registradas entre as vistorias e não atribui responsabilidade.";
+
+// Bloco 5 — anexa as fotos (já com signed_url, via loadEvidence) de cada lado
+// em cada ambiente/item da comparação, usando os ids reais que
+// compareInspections expõe (entry_room_id/exit_room_id/entry_item_id/
+// exit_item_id). item_id === null é evidência "geral" do ambiente, não de um
+// item específico. Associação 100% determinística pelos ids já existentes —
+// nunca por IA tentando casar fotos visualmente.
+function decorateComparisonWithEvidence(comparison: any, entryEvidence: any[], exitEvidence: any[]) {
+  for (const room of comparison.rooms) {
+    room.entry_evidence = room.entry_room_id ? entryEvidence.filter((ev: any) => ev.room_id === room.entry_room_id && ev.item_id === null) : [];
+    room.exit_evidence = room.exit_room_id ? exitEvidence.filter((ev: any) => ev.room_id === room.exit_room_id && ev.item_id === null) : [];
+    for (const item of room.items) {
+      item.entry_evidence = item.entry_item_id ? entryEvidence.filter((ev: any) => ev.item_id === item.entry_item_id) : [];
+      item.exit_evidence = item.exit_item_id ? exitEvidence.filter((ev: any) => ev.item_id === item.exit_item_id) : [];
+    }
+  }
+  return comparison;
+}
+
+// Bloco 5 — texto do PDF comparativo: identificação do imóvel, datas,
+// responsáveis, resumo e labels PT-BR. Nunca atribui culpa — só descreve a
+// diferença estrutural registrada (ex.: nunca "dano causado pelo locatário").
+function buildComparisonPdfSections(entry: any, exit: any, comparison: any, summary: ReturnType<typeof summarizeComparison>) {
+  const propertyLabel = exit.property ? [exit.property.code, exit.property.title].filter(Boolean).join(" — ") : exit.propertyId;
+  return [
+    `Imóvel: ${propertyLabel}`,
+    `Vistoria de entrada: ${entry.id}${entry.completedAt ? ` (concluída em ${entry.completedAt.toISOString()})` : ""}`,
+    `Vistoria de saída: ${exit.id}${exit.completedAt ? ` (concluída em ${exit.completedAt.toISOString()})` : ""}`,
+    `Responsável entrada: ${entry.assignedUser?.name ?? "-"}`,
+    `Responsável saída: ${exit.assignedUser?.name ?? "-"}`,
+    `Status da vistoria de saída: ${exit.status}`,
+    COMPARISON_DISCLAIMER,
+    `Resumo: ${summary.total} itens | sem alteração ${summary.same} | alterados ${summary.changed} | melhor estado ${summary.better} | pior estado ${summary.worse} | não comparáveis ${summary.not_comparable} | novos ${summary.new} | ausentes ${summary.absent}`,
+    ...comparison.rooms.flatMap((room: any) => [
+      `Ambiente ${room.name}: ${ROOM_OUTCOME_LABELS[room.outcome] ?? room.outcome}`,
+      ...room.items.map((item: any) => `  Item ${item.name}: ${item.entry ? (CONDITION_LABELS[item.entry] ?? item.entry) : "-"} -> ${item.exit ? (CONDITION_LABELS[item.exit] ?? item.exit) : "-"} (${ITEM_OUTCOME_LABELS[item.outcome] ?? item.outcome})`),
+    ]),
+  ];
+}
+
 mysqlInspectionsRouter.post("/:id/comparison", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   let uploaded: any = null;
   try {
@@ -824,28 +880,80 @@ mysqlInspectionsRouter.post("/:id/comparison", requirePermission("inspections.ma
     if (entry.companyId !== access.company.id || exit.companyId !== access.company.id || entry.propertyId !== exit.propertyId) throw invalid("A comparação exige vistorias do mesmo imóvel.", "COMPARISON_SCOPE_INVALID");
     if (entry.type !== "entry" || exit.type !== "exit") throw invalid("Compare uma vistoria de saída com uma vistoria de entrada.", "COMPARISON_TYPE_INVALID");
     if (!["completed", "archived"].includes(entry.status) || !["completed", "archived"].includes(exit.status)) throw invalid("A comparação exige vistorias concluídas.", "COMPARISON_REQUIRES_COMPLETED");
-    const [entryEvidence, exitEvidence] = await Promise.all([getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: entry.id }, include: { storedFile: true } }), getPrisma().inspectionEvidence.findMany({ where: { companyId: access.company.id, inspectionId: exit.id }, include: { storedFile: true } })]);
-    const comparison = compareInspections(buildInspectionSnapshot(entry, entryEvidence), buildInspectionSnapshot(exit, exitEvidence));
+    const [entryEvidence, exitEvidence] = await Promise.all([loadEvidence(access.company.id, entry.id), loadEvidence(access.company.id, exit.id)]);
+    const comparison = compareInspections(buildInspectionSnapshot(entry, entryEvidence as any), buildInspectionSnapshot(exit, exitEvidence as any));
     const hash = snapshotHash(comparison);
+    decorateComparisonWithEvidence(comparison, entryEvidence, exitEvidence);
+    const summary = summarizeComparison(comparison);
     // Reaproveita só o artefato gerado contra ESTA mesma entrada; antes qualquer
     // comparação anterior da saída era devolvida, mesmo com outra baseline.
     const existing = (await artifactFiles(access.company.id, "inspection_comparison", exit.id, "inspection_comparison"))
       .filter((row: any) => (row.metadataJson as any)?.baseline_inspection_id === entry.id);
-    if (existing.length && !input.regenerate) return res.json({ comparison, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(existing[0], existing[0].metadataJson, await privateArtifactUrl(existing[0], "inspection_comparison")), replayed: true });
+    if (existing.length && !input.regenerate) return res.json({ comparison, summary, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(existing[0], existing[0].metadataJson, await privateArtifactUrl(existing[0], "inspection_comparison")), replayed: true });
     const comparisonId = randomUUID();
     const fileName = `comparison-${exit.id}-${comparisonId}.pdf`;
-    const body = buildPdfBuffer("Comparação de vistorias", [`Entrada: ${entry.id}`, `Saída: ${exit.id}`, COMPARISON_DISCLAIMER, ...comparison.rooms.flatMap((room) => [ `Ambiente ${room.name}: ${room.outcome}`, ...room.items.map((item: any) => `Item ${item.name}: ${item.entry ?? "-"} -> ${item.exit ?? "-"} (${item.outcome})`) ]), `Hash: ${hash}` ]);
+    const body = buildPdfBuffer("Comparação de vistorias", buildComparisonPdfSections(entry, exit, comparison, summary).concat([`Hash: ${hash}`]));
     const policy = validateUploadFile({ purpose: "inspection_comparison", fileName, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
     const storage = getStorageProvider();
     uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison", fileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_comparison", inspectionId: exit.id }), deliveryAccess: deliveryAccessForPurpose("inspection_comparison") });
     await createStoredFileRecord({ companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, file: uploaded, uploadedBy: access.appUser.id, purpose: "inspection_comparison", metadata: { inspection_id: exit.id, baseline_inspection_id: entry.id, comparison, comparison_hash: hash } });
     await getPrisma().$transaction(async (tx) => event(tx, access.company.id, exit.id, access.appUser.id, "inspection.comparison_generated", { comparison_id: comparisonId, baseline_inspection_id: entry.id, comparison_hash: hash }));
     const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_comparison", entityId: comparisonId, purpose: "inspection_comparison" } });
-    res.status(201).json({ comparison, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_comparison")) });
+    res.status(201).json({ comparison, summary, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_comparison")) });
   } catch (error) {
     if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
     next(error);
   }
+});
+
+// Bloco 5 — leitura da comparação já gerada, sem efeito colateral (não gera
+// nem faz upload de nada). Usado pela tela de detalhe para decidir o label
+// do botão ("Comparar com vistoria de entrada" vs "Ver comparação") sem
+// disparar geração. 404 se nenhuma comparação foi gerada ainda.
+mysqlInspectionsRouter.get("/:id/comparison", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const exit = await findInspection(req, String(req.params.id), "inspections.view");
+    const rows = await artifactFiles(access.company.id, "inspection_comparison", exit.id, "inspection_comparison");
+    const file = rows[0];
+    if (!file) throw Object.assign(new Error("Nenhuma comparação foi gerada para esta vistoria."), { statusCode: 404, code: "COMPARISON_NOT_FOUND" });
+    const metadata = file.metadataJson as any;
+    const baselineId = metadata?.baseline_inspection_id as string | undefined;
+    if (!baselineId) throw Object.assign(new Error("Nenhuma comparação foi gerada para esta vistoria."), { statusCode: 404, code: "COMPARISON_NOT_FOUND" });
+    // Revalida escopo (tenant/imóvel) contra a entrada registrada no artefato —
+    // se ela não pertence mais ao escopo do usuário, 404 sem revelar nada.
+    const entry = await findInspection(req, baselineId, "inspections.view");
+    if (entry.companyId !== access.company.id || exit.companyId !== access.company.id || entry.propertyId !== exit.propertyId) {
+      throw Object.assign(new Error("Nenhuma comparação foi gerada para esta vistoria."), { statusCode: 404, code: "COMPARISON_NOT_FOUND" });
+    }
+    const comparison = metadata.comparison;
+    const [entryEvidence, exitEvidence] = await Promise.all([loadEvidence(access.company.id, entry.id), loadEvidence(access.company.id, exit.id)]);
+    decorateComparisonWithEvidence(comparison, entryEvidence, exitEvidence);
+    const summary = summarizeComparison(comparison);
+    res.json({ comparison, summary, disclaimer: COMPARISON_DISCLAIMER, report: artifactDto(file, metadata, await privateArtifactUrl(file, "inspection_comparison")) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Bloco 5 — download autenticado do PDF comparativo, espelhando
+// /:id/report/download: lê os bytes via readStoredFileBuffer para funcionar
+// nos 3 providers de storage (Local/R2 não implementam
+// getAuthenticatedDownloadUrl). Escopo de tenant idêntico às demais rotas.
+mysqlInspectionsRouter.get("/:id/comparison/download", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    const rows = await artifactFiles(access.company.id, "inspection_comparison", inspection.id, "inspection_comparison");
+    const file = rows[0];
+    if (!file) throw Object.assign(new Error("Gere a comparação antes de fazer o download."), { statusCode: 404, code: "COMPARISON_NOT_FOUND" });
+    const body = await readStoredFileBuffer(file);
+    const fileName = file.originalFilename || `comparacao-vistoria-${inspection.id}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName.replace(/["\\]/g, "")}"`);
+    res.setHeader("Content-Length", String(body.byteLength));
+    res.status(200).send(body);
+  } catch (error) { next(error); }
 });
 
 export { inspectionTypes, inspectionStatuses, itemConditions, nextStatus, ensureMutable, IdempotencyConflictError };
