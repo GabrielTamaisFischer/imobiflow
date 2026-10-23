@@ -34,34 +34,12 @@ type Props = {
  * clique de status/observação; em caso de erro (ex.: conflito de versão), o
  * tratamento padrão da página (handleMutationError) já recarrega do servidor.
  */
-function withItem(inspection: MysqlInspection, roomId: string, itemId: string, patch: Partial<MysqlInspectionItem>): MysqlInspection {
-  return {
-    ...inspection,
-    version: inspection.version + 1,
-    rooms: inspection.rooms.map((candidate) =>
-      candidate.id !== roomId ? candidate : { ...candidate, items: candidate.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)) },
-    ),
-  };
-}
 function withNewItem(inspection: MysqlInspection, roomId: string, item: MysqlInspectionItem): MysqlInspection {
   return {
     ...inspection,
     version: inspection.version + 1,
     rooms: inspection.rooms.map((candidate) => (candidate.id !== roomId ? candidate : { ...candidate, items: [...candidate.items, item] })),
   };
-}
-function withoutItem(inspection: MysqlInspection, roomId: string, itemId: string): MysqlInspection {
-  return {
-    ...inspection,
-    version: inspection.version + 1,
-    rooms: inspection.rooms.map((candidate) => (candidate.id !== roomId ? candidate : { ...candidate, items: candidate.items.filter((item) => item.id !== itemId) })),
-  };
-}
-function withRoomName(inspection: MysqlInspection, roomId: string, name: string): MysqlInspection {
-  return { ...inspection, version: inspection.version + 1, rooms: inspection.rooms.map((candidate) => (candidate.id !== roomId ? candidate : { ...candidate, name })) };
-}
-function withoutRoom(inspection: MysqlInspection, roomId: string): MysqlInspection {
-  return { ...inspection, version: inspection.version + 1, rooms: inspection.rooms.filter((candidate) => candidate.id !== roomId) };
 }
 
 /** Coluna central (SUB-BLOCO 3): cabeçalho do ambiente + itens + ações do ambiente. */
