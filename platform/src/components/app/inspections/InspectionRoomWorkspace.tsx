@@ -82,7 +82,7 @@ export function InspectionRoomWorkspace({ inspection, room, canEdit, evidence, e
     notifySaving(true);
     try {
       await patchMysqlRoom(inspection.id, room.id, { expected_version: inspection.version, name: trimmed });
-      onChanged(withRoomName(inspection, room.id, trimmed));
+      onChanged((await getMysqlInspection(inspection.id)).inspection);
     } catch (error) { onError(error); setRoomName(room.name); } finally { setBusy(false); notifySaving(false); }
   }
 
@@ -92,7 +92,7 @@ export function InspectionRoomWorkspace({ inspection, room, canEdit, evidence, e
     notifySaving(true);
     try {
       await deleteMysqlRoom(inspection.id, room.id, inspection.version);
-      onChanged(withoutRoom(inspection, room.id));
+      onChanged((await getMysqlInspection(inspection.id)).inspection);
       onRoomRemoved(room.id);
     } catch (error) { onError(error); } finally { setBusy(false); notifySaving(false); }
   }
@@ -101,7 +101,7 @@ export function InspectionRoomWorkspace({ inspection, room, canEdit, evidence, e
     notifySaving(true);
     try {
       await patchMysqlItem(inspection.id, room.id, itemId, { expected_version: inspection.version, ...patch });
-      onChanged(withItem(inspection, room.id, itemId, patch));
+      onChanged((await getMysqlInspection(inspection.id)).inspection);
     } catch (error) { onError(error); } finally { notifySaving(false); }
   }
 
@@ -111,7 +111,7 @@ export function InspectionRoomWorkspace({ inspection, room, canEdit, evidence, e
     notifySaving(true);
     try {
       await deleteMysqlItem(inspection.id, room.id, itemId, inspection.version);
-      onChanged(withoutItem(inspection, room.id, itemId));
+      onChanged((await getMysqlInspection(inspection.id)).inspection);
     } catch (error) { onError(error); } finally { setBusy(false); notifySaving(false); }
   }
 
@@ -127,6 +127,7 @@ export function InspectionRoomWorkspace({ inspection, room, canEdit, evidence, e
         current = withNewItem(current, room.id, item);
         onChanged(current);
       }
+      onChanged((await getMysqlInspection(inspection.id)).inspection);
     } catch (error) { onError(error); } finally { setBusy(false); notifySaving(false); }
   }
 
