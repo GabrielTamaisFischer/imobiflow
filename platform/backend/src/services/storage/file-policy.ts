@@ -93,6 +93,18 @@ const rules: Record<StoragePurpose, UploadRule> = {
     maxBytes: 2 * MiB,
     resourceType: "image",
   },
+  inspection_signing_artifact: {
+    mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+    extensions: [".png", ".jpg", ".jpeg", ".webp"],
+    maxBytes: 2 * MiB,
+    resourceType: "image",
+  },
+  inspection_signing_report: {
+    mimeTypes: ["application/pdf"],
+    extensions: [".pdf"],
+    maxBytes: 20 * MiB,
+    resourceType: "raw",
+  },
   contract_attachment: {
     mimeTypes: ["application/pdf", "image/jpeg", "image/png", "image/webp"],
     extensions: [".pdf", ".jpg", ".jpeg", ".png", ".webp"],

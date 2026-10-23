@@ -139,6 +139,8 @@ describe("[F4E fast-follow] delivery access para owner_document no Cloudinary", 
       contract_attachment: "authenticated",
       contract_signature: "authenticated",
       company_logo: "public",
+      inspection_signing_artifact: "authenticated",
+      inspection_signing_report: "authenticated",
     };
 
     for (const purpose of STORED_FILE_PURPOSES) {

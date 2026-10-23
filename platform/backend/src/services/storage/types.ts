@@ -17,6 +17,14 @@ export type StoragePurpose =
   | "inspection_report"
   | "inspection_comparison"
   | "inspection_signature"
+  // Assinatura Online (Bloco 5 — domínio novo, separado da assinatura
+  // interna simples acima). "artifact" é a imagem da assinatura (desenhada
+  // ou o texto digitado renderizado em canvas pelo cliente — a imagem é
+  // sempre uma representação derivada; os dados estruturados typedText/
+  // typedFontId continuam a fonte de verdade, ver InspectionSigningParty).
+  // "report" é o PDF final com certificado de assinatura anexado.
+  | "inspection_signing_artifact"
+  | "inspection_signing_report"
   | "contract_attachment"
   | "contract_signature"
   | "signature_evidence";
