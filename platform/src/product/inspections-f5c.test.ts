@@ -11,7 +11,7 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     const list = await source("../routes/app.vistorias.tsx");
     expect(client).toContain("/real-estate/inspections");
     expect(client).toContain("Idempotency-Key");
-    expect(list).toContain("listMysqlInspections(page, 25, status)");
+    expect(list).toContain("listMysqlInspections(page, PAGE_SIZE, status");
     expect(list).not.toContain("listInspections()");
   });
 
@@ -34,14 +34,20 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
     expect(list).toContain('canManage(session?.access.appUser, "inspections.manage")');
     expect(detail).toContain('canManage(session?.access.appUser, "inspections.manage")');
-    expect(list).toContain('actionLabel={canCreate ? "Criar vistoria" : undefined}');
+    // SUB-BLOCO UX /app/vistorias — "Nova vistoria" agora é a rota dedicada
+    // /app/vistorias/nova (link), não mais um formulário inline no dashboard.
+    expect(list).toContain('to="/app/vistorias/nova"');
   });
 
-  it("entrega a rota filha ao outlet em vez de cobri-la com a listagem", async () => {
+  it("entrega qualquer rota filha (detalhe ou nova vistoria) ao outlet em vez de cobri-la com a listagem", async () => {
+    // SUB-BLOCO UX /app/vistorias — além do detalhe (/$inspectionId), a
+    // criação dedicada (/nova) também é filha de /app/vistorias; em vez de
+    // enumerar cada routeId, o dashboard delega para o Outlet qualquer match
+    // que não seja o próprio "/app/vistorias".
     const list = await source("../routes/app.vistorias.tsx");
     expect(list).toContain("Outlet");
-    expect(list).toContain('match.routeId === "/app/vistorias/$inspectionId"');
-    expect(list).toContain("if (isDetailRoute) return <Outlet />");
+    expect(list).toContain('match.routeId !== "/app/vistorias" && match.routeId.startsWith("/app/vistorias/")');
+    expect(list).toContain("if (isChildRoute) return <Outlet />");
   });
 
   it("oferece criação de ambiente (SUB-BLOCO 3: sugestão + manual) somente enquanto a vistoria é mutável", async () => {
@@ -81,15 +87,21 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain("inspection.status !== \"completed\" && inspection.status !== \"archived\"");
   });
 
-  it("oferece arquivamento (\"apagar vistoria\") para draft/in_progress/completed, nunca para archived, com modal de confirmacao e locking", async () => {
+  it("oferece arquivamento (\"arquivar vistoria\", nunca \"apagar\") para draft/in_progress/completed, nunca para archived, com modal de confirmacao e locking", async () => {
+    // UX /app/vistorias — o botão e o modal nunca usam a palavra "apagar":
+    // o comportamento real é arquivar (preserva histórico), e o texto do
+    // modal precisa dizer isso explicitamente.
     const detail = await source("../routes/app.vistorias.$inspectionId.tsx");
     const modal = await source("../components/app/inspections/InspectionArchiveConfirmModal.tsx");
     expect(detail).toContain('inspection.status !== "archived"');
     expect(detail).toContain('currentInspection.status === "archived"');
-    expect(detail).toContain("Apagar vistoria");
+    expect(detail).toContain("Arquivar vistoria");
+    expect(detail).not.toContain("Apagar vistoria");
     expect(detail).toContain("InspectionArchiveConfirmModal");
     expect(detail).toContain("setArchiveModalOpen(true)");
-    expect(modal).toContain("A vistoria será arquivada e deixará de aparecer no fluxo operacional padrão.");
+    expect(modal).toContain("Arquivar esta vistoria?");
+    expect(modal).toContain("Ela continuará disponível no histórico, mas não poderá mais ser editada.");
+    expect(modal).not.toContain("Apagar vistoria");
     expect(detail).toContain('status: "archived"');
     expect(detail).toContain("expected_version: currentInspection.version");
     expect(detail).toContain("handleMutationError(e)");

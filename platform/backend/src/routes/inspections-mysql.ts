@@ -79,7 +79,10 @@ const evidencePatchSchema = z.object({
 const evidenceOrderSchema = z.object({ expected_version: z.number().int().positive(), evidence: z.array(z.object({ id: z.string().uuid(), position: z.number().int().min(0).max(9999) })).min(1).max(200) });
 
 const inspectionInclude = {
-  property: { select: { id: true, code: true, title: true, responsibleUserId: true } },
+  // street/neighborhood/city: usados só para montar um endereço curto na
+  // listagem (/app/vistorias) e para a busca server-side por endereço -
+  // nunca editados por este router.
+  property: { select: { id: true, code: true, title: true, responsibleUserId: true, street: true, neighborhood: true, city: true } },
   assignedUser: { select: { id: true, name: true } },
   rooms: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }], include: { items: { orderBy: [{ position: "asc" as const }, { createdAt: "asc" as const }] } } },
 } satisfies Prisma.InspectionInclude;
@@ -107,7 +110,16 @@ function serializeInspection(inspection: any) {
     archived_at: inspection.archivedAt?.toISOString() ?? null,
     created_at: inspection.createdAt.toISOString(),
     updated_at: inspection.updatedAt.toISOString(),
-    property: inspection.property ? { id: inspection.property.id, code: inspection.property.code, title: inspection.property.title } : undefined,
+    property: inspection.property
+      ? {
+          id: inspection.property.id,
+          code: inspection.property.code,
+          title: inspection.property.title,
+          street: inspection.property.street ?? null,
+          neighborhood: inspection.property.neighborhood ?? null,
+          city: inspection.property.city ?? null,
+        }
+      : undefined,
     assigned_user: inspection.assignedUser ? { id: inspection.assignedUser.id, name: inspection.assignedUser.name } : undefined,
     rooms: inspection.rooms?.map((room: any) => ({
       id: room.id, name: room.name, position: room.position, notes: room.notes,
@@ -241,7 +253,40 @@ mysqlInspectionsRouter.get("/", requirePermission("inspections.view"), async (re
     if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) throw invalid("Paginação inválida.", "INVALID_PAGINATION");
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     if (status && !inspectionStatuses.includes(status as any)) throw invalid("Status inválido.", "INVALID_INSPECTION_STATUS");
-    const where: Prisma.InspectionWhereInput = { AND: [buildInspectionScopeFilter(req.access!, "inspections.view", "INSPECT")], ...(status ? { status } : {}) };
+    const type = typeof req.query.type === "string" ? req.query.type : undefined;
+    if (type && !inspectionTypes.includes(type as any)) throw invalid("Tipo de vistoria inválido.", "INVALID_INSPECTION_TYPE");
+    // Busca server-side (UX /app/vistorias): código/título/endereço do
+    // imóvel e nome do responsável. MySQL com collation utf8mb4_unicode_ci
+    // (padrão do projeto) já compara `contains` sem diferenciar
+    // maiúsculas/minúsculas - não é preciso (e o provider MySQL do Prisma
+    // não aceita) `mode: "insensitive"`.
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+    const searchFilter: Prisma.InspectionWhereInput | undefined = search
+      ? {
+          OR: [
+            // id: não existe ainda um "código da vistoria" amigável
+            // sequencial persistido (exigiria uma coluna/contador novo no
+            // schema - fora do escopo desta passada de UX) - até lá, buscar
+            // pelo UUID da vistoria (ou um prefixo dele) cobre o caso de
+            // alguém colar o identificador copiado de outra tela/suporte.
+            { id: { contains: search } },
+            { property: { code: { contains: search } } },
+            { property: { title: { contains: search } } },
+            { property: { street: { contains: search } } },
+            { property: { neighborhood: { contains: search } } },
+            { property: { city: { contains: search } } },
+            { assignedUser: { name: { contains: search } } },
+          ],
+        }
+      : undefined;
+    const where: Prisma.InspectionWhereInput = {
+      AND: [
+        buildInspectionScopeFilter(req.access!, "inspections.view", "INSPECT"),
+        ...(status ? [{ status }] : []),
+        ...(type ? [{ type }] : []),
+        ...(searchFilter ? [searchFilter] : []),
+      ],
+    };
     const prisma = getPrisma();
     const [total, rows] = await prisma.$transaction([
       prisma.inspection.count({ where }),

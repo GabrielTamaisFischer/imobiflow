@@ -34,11 +34,16 @@ describe("buildInspectionKpis", () => {
     expect(kpis.find((kpi) => kpi.key === "completed")?.value).toBe(5);
   });
 
-  it("never fabricates a value for the signature KPI that has no backend status yet", () => {
+  it("usa o pendingCount real (aproximação sobre dados reais, não um status novo) no KPI de pendências", () => {
+    const kpis = buildInspectionKpis({ draft: 1 }, 4);
+    const pendingKpi = kpis.find((kpi) => kpi.key === "pending");
+    expect(pendingKpi?.value).toBe(4);
+    expect(pendingKpi?.availability).toBe("real");
+  });
+
+  it("pendingCount default é 0 quando omitido", () => {
     const kpis = buildInspectionKpis({ draft: 1 });
-    const signatureKpi = kpis.find((kpi) => kpi.key === "awaiting_signature");
-    expect(signatureKpi?.value).toBeNull();
-    expect(signatureKpi?.availability).toBe("pending_backend");
+    expect(kpis.find((kpi) => kpi.key === "pending")?.value).toBe(0);
   });
 
   it("defaults missing real counts to 0 instead of leaving them undefined", () => {

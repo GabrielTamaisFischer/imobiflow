@@ -26,18 +26,18 @@ export type InspectionKpiCard = {
 };
 
 /**
- * Monta os 4 KPIs do Home a partir das contagens reais por status
- * (MysqlInspectionStatus). "Aguardando assinatura" NÃO existe como status
- * persistido no modelo canônico hoje — a assinatura eletrônica online real
- * (fora o fluxo legado Supabase, desconectado deste módulo) ainda não foi
- * integrada, então o card fica visualmente preparado com value=null em vez
- * de fingir um número.
+ * Monta os 4 KPIs do topo de /app/vistorias: 3 contagens reais por status
+ * (MysqlInspectionStatus) + "Pendências", uma aproximação sobre dados reais
+ * (vistoria mutável criada nos últimos 7 dias - ver isPendingThisWeek), não
+ * um status novo persistido no backend. Nenhum KPI usa valor inventado nem
+ * um placeholder "em breve": o card de assinatura online foi removido daqui
+ * até a integração existir de verdade (ver Diretriz de custo/MVP).
  */
-export function buildInspectionKpis(counts: InspectionStatusCounts): InspectionKpiCard[] {
+export function buildInspectionKpis(counts: InspectionStatusCounts, pendingCount = 0): InspectionKpiCard[] {
   return [
     {
       key: "in_progress",
-      label: "Vistorias em andamento",
+      label: "Em andamento",
       value: counts.in_progress ?? 0,
       availability: "real",
       helper: "Status real: em andamento",
@@ -50,15 +50,15 @@ export function buildInspectionKpis(counts: InspectionStatusCounts): InspectionK
       helper: "Status real: rascunho",
     },
     {
-      key: "awaiting_signature",
-      label: "Aguardando assinatura",
-      value: null,
-      availability: "pending_backend",
-      helper: "Assinatura online ainda não integrada ao fluxo canônico",
+      key: "pending",
+      label: "Pendências",
+      value: pendingCount,
+      availability: "real",
+      helper: "Rascunho/em andamento criada nos últimos 7 dias",
     },
     {
       key: "completed",
-      label: "Vistorias concluídas",
+      label: "Concluídas",
       value: counts.completed ?? 0,
       availability: "real",
       helper: "Status real: concluída",

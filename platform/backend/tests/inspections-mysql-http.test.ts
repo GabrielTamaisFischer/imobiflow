@@ -37,8 +37,19 @@ function matches(table: string, row: Row, where: Row | undefined): boolean {
       return Boolean(room) && matches("inspectionRoom", room!, condition as Row);
     }
     if (key === "roleRecord") return true; // permissões do responsável não fazem parte destes cenários
+    if (key === "assignedUser") {
+      const assignedUser = state.tables.appUser.find((item) => item.id === row.assignedUserId);
+      return Boolean(assignedUser) && matches("appUser", assignedUser!, (condition as Row).is ?? condition);
+    }
     if (condition && typeof condition === "object" && !(condition instanceof Date)) {
       if ("in" in condition) return (condition as { in: unknown[] }).in.includes(row[key]);
+      // Busca server-side (/app/vistorias): comparação case-insensitive por
+      // substring, igual ao comportamento do MySQL com a collation
+      // utf8mb4_unicode_ci do projeto (CONTAINS não diferencia caixa).
+      if ("contains" in condition) {
+        const value = row[key];
+        return typeof value === "string" && value.toLowerCase().includes((condition as { contains: string }).contains.toLowerCase());
+      }
       throw new Error(`Filtro não suportado no fake: ${table}.${key}`);
     }
     return row[key] === condition;
@@ -371,6 +382,9 @@ beforeEach(() => {
       companyId: COMPANY_A,
       code: "A-1",
       title: "Apto A",
+      street: "Rua das Flores",
+      neighborhood: "Centro",
+      city: "Campinas",
       responsibleUserId: ids.adminA,
     },
     {
@@ -378,6 +392,9 @@ beforeEach(() => {
       companyId: COMPANY_A,
       code: "A-2",
       title: "Casa A",
+      street: "Avenida Brasil",
+      neighborhood: "Jardim América",
+      city: "Valinhos",
       responsibleUserId: ids.adminA,
     },
     {
@@ -385,6 +402,9 @@ beforeEach(() => {
       companyId: COMPANY_B,
       code: "B-1",
       title: "Apto B",
+      street: "Rua B",
+      neighborhood: "Bairro B",
+      city: "Cidade B",
       responsibleUserId: ids.adminB,
     },
   );
@@ -474,6 +494,79 @@ describe("router canônico de vistorias — isolamento A × B", () => {
   it("empresa B também não enxerga a vistoria da empresa A", async () => {
     const { status } = await call("adminB", "GET", `/${ids.entryA}`);
     expect(status).toBe(404);
+  });
+});
+
+// UX /app/vistorias — busca e filtros server-side adicionados à listagem
+// existente (GET /). Não depende do domínio novo de Assinatura Online.
+describe("GET / — busca e filtro de tipo", () => {
+  it("filtra por type=entry e devolve só vistorias de entrada da empresa", async () => {
+    const { status, body } = await call("adminA", "GET", "/?type=entry");
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual(expect.arrayContaining([ids.entryA, ids.entryA2, ids.draftA]));
+    expect(listed).not.toContain(ids.exitA);
+    expect(listed).not.toContain(ids.exitOtherPropA);
+  });
+
+  it("rejeita type inválido com 400 INVALID_INSPECTION_TYPE", async () => {
+    const { status, body } = await call("adminA", "GET", "/?type=mudanca");
+    expect(status).toBe(400);
+    expect(body.error).toBe("INVALID_INSPECTION_TYPE");
+  });
+
+  it("busca por código do imóvel (property.code)", async () => {
+    const { status, body } = await call("adminA", "GET", "/?search=A-2");
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual([ids.exitOtherPropA]);
+  });
+
+  it("busca por cidade do imóvel (property.city), case-insensitive", async () => {
+    const { status, body } = await call("adminA", "GET", "/?search=valinhos");
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual([ids.exitOtherPropA]);
+  });
+
+  it("busca por nome do responsável (assignedUser.name)", async () => {
+    const { status, body } = await call("adminA", "GET", "/?search=Ana");
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    // Todas as vistorias da empresa A estão atribuídas a Ana neste fixture.
+    expect(listed).toEqual(expect.arrayContaining([ids.entryA, ids.exitA, ids.draftA]));
+    expect(listed).not.toContain(ids.entryB);
+  });
+
+  it("busca pelo UUID completo da vistoria (id)", async () => {
+    // Os fixtures deste arquivo usam UUIDs com o mesmo prefixo (ex.:
+    // a3000000-...-0001, ...-0002) só variando o sufixo, então um prefixo
+    // curto bateria em várias de propósito - a busca real por id serve para
+    // quando alguém cola o UUID inteiro copiado de outra tela/suporte.
+    const { status, body } = await call("adminA", "GET", `/?search=${ids.exitA}`);
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual([ids.exitA]);
+  });
+
+  it("busca sem resultado devolve lista vazia, não erro", async () => {
+    const { status, body } = await call("adminA", "GET", "/?search=nao-existe-nenhuma-vistoria-assim");
+    expect(status).toBe(200);
+    expect(body.inspections).toEqual([]);
+    expect(body.pagination.total).toBe(0);
+  });
+
+  it("combina status + type + search", async () => {
+    const { status, body } = await call("adminA", "GET", "/?status=completed&type=exit&search=A-1");
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual([ids.exitA]);
+  });
+
+  it("nunca extravasa para a empresa B mesmo quando o termo buscado bate com dados da empresa B", async () => {
+    const { status, body } = await call("adminA", "GET", "/?search=Bruno");
+    expect(status).toBe(200);
+    expect(body.inspections).toEqual([]);
   });
 });
 

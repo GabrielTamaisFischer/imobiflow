@@ -29,7 +29,8 @@ export type MysqlInspectionRoom = { id: string; name: string; position: number; 
 export type MysqlInspection = {
   id: string; property_id: string; assigned_user_id: string | null; created_by: string; type: "entry" | "exit";
   status: MysqlInspectionStatus; notes: string | null; version: number; completed_at: string | null; archived_at: string | null;
-  created_at: string; updated_at: string; property?: { id: string; code: string | null; title: string };
+  created_at: string; updated_at: string;
+  property?: { id: string; code: string | null; title: string; street?: string | null; neighborhood?: string | null; city?: string | null };
   assigned_user?: { id: string; name: string }; rooms: MysqlInspectionRoom[];
 };
 export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } };
@@ -113,9 +114,16 @@ async function queueOffline(mutation: Omit<OfflineMutation, "id" | "createdAt" |
   return applyOfflineMutation({ ...mutation, id: "local", createdAt: localNow(), status: "pending" });
 }
 
-export async function listMysqlInspections(page = 1, pageSize = 25, status?: MysqlInspectionStatus) {
+export async function listMysqlInspections(
+  page = 1,
+  pageSize = 25,
+  status?: MysqlInspectionStatus,
+  options?: { type?: "entry" | "exit"; search?: string },
+) {
   const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (status) query.set("status", status);
+  if (options?.type) query.set("type", options.type);
+  if (options?.search?.trim()) query.set("search", options.search.trim());
   return apiRequest<MysqlInspectionPage>(`/real-estate/inspections?${query}`, { token: mysqlToken() });
 }
 export async function getMysqlInspection(id: string) {

@@ -369,7 +369,10 @@ describe("botão de laudo e busca de imóvel", () => {
   });
 
   it("busca de imóvel é server-side e não carrega lista fixa de 100", async () => {
-    const list = await readFile(new URL("../routes/app.vistorias.tsx", import.meta.url), "utf8");
+    // UX /app/vistorias — "Nova vistoria" é a rota dedicada
+    // app.vistorias.nova.tsx (não mais um formulário inline no dashboard),
+    // então a busca de imóvel migrou para lá.
+    const list = await readFile(new URL("../routes/app.vistorias.nova.tsx", import.meta.url), "utf8");
     expect(list).toContain(
       "listProperties({ search: term.trim() || undefined, page: 1, pageSize: 20 })",
     );
