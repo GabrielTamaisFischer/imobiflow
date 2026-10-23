@@ -354,7 +354,7 @@ function InspectionDetailPageIntegrated() {
  * tem 7 valores - ver inspection-item-status.ts - a comparacao so LE,
  * nunca grava, entao pode mostrar todos os 7, nao so os 4 do picker).
  */
-const COMPARISON_CONDITION_LABELS: Record<MysqlInspectionCondition, string> = {
+export const COMPARISON_CONDITION_LABELS: Record<MysqlInspectionCondition, string> = {
   not_inspected: "Nao vistoriado",
   excellent: "Otimo",
   good: "Bom",
@@ -364,8 +364,8 @@ const COMPARISON_CONDITION_LABELS: Record<MysqlInspectionCondition, string> = {
   not_applicable: "Nao se aplica",
 };
 
-type ComparisonFilterKey = "all" | "changed" | "same" | "better" | "worse" | "new" | "with_photos";
-const COMPARISON_FILTERS: Array<{ key: ComparisonFilterKey; label: string }> = [
+export type ComparisonFilterKey = "all" | "changed" | "same" | "better" | "worse" | "new" | "with_photos";
+export const COMPARISON_FILTERS: Array<{ key: ComparisonFilterKey; label: string }> = [
   { key: "all", label: "Todos" },
   { key: "changed", label: "Alterados" },
   { key: "same", label: "Sem alteracao" },
@@ -374,12 +374,48 @@ const COMPARISON_FILTERS: Array<{ key: ComparisonFilterKey; label: string }> = [
   { key: "new", label: "Novos" },
   { key: "with_photos", label: "Com fotos" },
 ];
-function itemMatchesComparisonFilter(item: MysqlInspectionComparisonItem, filter: ComparisonFilterKey): boolean {
+export function itemMatchesComparisonFilter(item: MysqlInspectionComparisonItem, filter: ComparisonFilterKey): boolean {
   if (filter === "all") return true;
   if (filter === "with_photos") return item.entry_evidence.length > 0 || item.exit_evidence.length > 0;
   if (filter === "new") return item.outcome === "new" || item.outcome === "absent";
   if (filter === "changed") return item.changed;
   return item.outcome === (filter as MysqlInspectionItemOutcome);
+}
+
+// Bloco 5 — decisao do botao contextual de comparacao (nunca generico na
+// dashboard, sempre dentro da vistoria). Extraida como funcao pura para
+// teste sem harness de renderizacao, seguindo o padrao de
+// portal.proprietario.$token.test.ts (ver nova.test.ts no mesmo Bloco 5).
+//
+//   - Saida com comparacao ja existente -> alternar exibicao (ver/ocultar).
+//   - Saida sem comparacao, elegivel (completed/archived) e com >=1 Entrada
+//     candidata do mesmo imovel -> selecionar e comparar.
+//   - Saida sem nenhuma Entrada candidata, ou nao elegivel -> nenhum botao.
+//   - Entrada com uma comparacao ja feita contra alguma Saida -> ver.
+//   - Entrada sem nenhuma comparacao feita, ou vistoria em outro tipo
+//     irrelevante -> nenhum botao.
+export type ComparisonButtonMode =
+  | { kind: "none" }
+  | { kind: "toggle_view"; viewingAs: "exit" | "entry" }
+  | { kind: "select_and_compare"; candidateCount: number; requiresSelection: boolean };
+
+export function resolveComparisonButtonMode(params: {
+  inspectionType: "entry" | "exit";
+  hasActiveComparison: boolean;
+  canCompare: boolean;
+  candidateEntryCount: number;
+}): ComparisonButtonMode {
+  const { inspectionType, hasActiveComparison, canCompare, candidateEntryCount } = params;
+  if (inspectionType === "exit") {
+    if (hasActiveComparison) return { kind: "toggle_view", viewingAs: "exit" };
+    if (canCompare && candidateEntryCount > 0) {
+      return { kind: "select_and_compare", candidateCount: candidateEntryCount, requiresSelection: candidateEntryCount > 1 };
+    }
+    return { kind: "none" };
+  }
+  // inspectionType === "entry"
+  if (hasActiveComparison) return { kind: "toggle_view", viewingAs: "entry" };
+  return { kind: "none" };
 }
 
 /** Linha de fotos Entrada|Saida de um ambiente ou item - lado a lado no
@@ -609,28 +645,34 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
   }
 
   // Botao contextual: nunca mostrado na dashboard, so aqui dentro da
-  // vistoria, e nunca desabilitado ocupando espaco sem utilidade.
+  // vistoria, e nunca desabilitado ocupando espaco sem utilidade. A decisao
+  // de QUAL variante mostrar (ou nenhuma) vem de resolveComparisonButtonMode
+  // (funcao pura, testada em app.vistorias.$inspectionId.test.ts) — aqui só
+  // traduzimos o modo resolvido para JSX.
+  const comparisonButtonMode = resolveComparisonButtonMode({
+    inspectionType: inspection.type,
+    hasActiveComparison: Boolean(activeComparison),
+    canCompare,
+    candidateEntryCount: candidateEntries.length,
+  });
   let comparisonButton: ReactNode = null;
-  if (inspection.type === "exit") {
-    if (activeComparison) {
-      comparisonButton = <button type="button" onClick={() => setPanelOpen((v) => !v)} className="h-10 rounded-md border border-border px-3 text-sm font-medium">{panelOpen ? "Ocultar comparacao" : "Ver comparacao"}</button>;
-    } else if (canCompare && candidateEntries.length > 0) {
-      comparisonButton = (
-        <div className="flex flex-wrap items-end gap-2">
-          {candidateEntries.length > 1 ? (
-            <label className="text-sm">Vistoria de entrada
-              <select value={selectedEntryId} onChange={(event) => setSelectedEntryId(event.target.value)} className="mt-1 h-10 rounded-md border border-input px-2 text-sm">
-                <option value="">Selecione...</option>
-                {candidateEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.property?.code ?? entry.id.slice(0, 8)} - {entry.assigned_user?.name ?? "sem responsavel"}</option>)}
-              </select>
-            </label>
-          ) : null}
-          <button type="button" disabled={busy || !selectedEntryId} onClick={() => void compare()} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Comparar com vistoria de entrada</button>
-        </div>
-      );
-    }
-  } else if (inspection.type === "entry" && activeComparison) {
-    comparisonButton = <button type="button" onClick={() => setPanelOpen((v) => !v)} className="h-10 rounded-md border border-border px-3 text-sm font-medium">{panelOpen ? "Ocultar comparacao" : "Ver comparacao Entrada x Saida"}</button>;
+  if (comparisonButtonMode.kind === "toggle_view") {
+    const label = comparisonButtonMode.viewingAs === "entry" ? "Ver comparacao Entrada x Saida" : "Ver comparacao";
+    comparisonButton = <button type="button" onClick={() => setPanelOpen((v) => !v)} className="h-10 rounded-md border border-border px-3 text-sm font-medium">{panelOpen ? "Ocultar comparacao" : label}</button>;
+  } else if (comparisonButtonMode.kind === "select_and_compare") {
+    comparisonButton = (
+      <div className="flex flex-wrap items-end gap-2">
+        {comparisonButtonMode.requiresSelection ? (
+          <label className="text-sm">Vistoria de entrada
+            <select value={selectedEntryId} onChange={(event) => setSelectedEntryId(event.target.value)} className="mt-1 h-10 rounded-md border border-input px-2 text-sm">
+              <option value="">Selecione...</option>
+              {candidateEntries.map((entry) => <option key={entry.id} value={entry.id}>{entry.property?.code ?? entry.id.slice(0, 8)} - {entry.assigned_user?.name ?? "sem responsavel"}</option>)}
+            </select>
+          </label>
+        ) : null}
+        <button type="button" disabled={busy || !selectedEntryId} onClick={() => void compare()} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Comparar com vistoria de entrada</button>
+      </div>
+    );
   }
 
   return <section className="space-y-3 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold">Documentos</h2><button type="button" disabled={busy || !canReport} onClick={() => void generate()} aria-describedby={canReport ? undefined : "inspection-report-hint"} className="h-10 rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{busy ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Exportar PDF</button>{report ? <button type="button" disabled={downloading} onClick={() => void downloadPdf()} className="inline-flex h-10 items-center rounded-md border border-border px-3 text-sm font-medium disabled:opacity-50">{downloading ? <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}Baixar laudo (PDF)</button> : null}</div>{canEdit && !canReport ? <p id="inspection-report-hint" className="text-xs text-muted-foreground">O laudo fica disponivel depois que a vistoria for concluida.</p> : null}{canEdit && inspection.status === "completed" ? <div className="grid gap-2 sm:grid-cols-2"><label className="text-sm">Nome do signatario<input value={signer} onChange={(event) => setSigner(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-input px-3" /></label><label className="text-sm">Imagem da assinatura<input type="file" accept="image/png,image/jpeg" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setSignature(String(reader.result)); reader.readAsDataURL(file); }} className="mt-1 block w-full text-sm" /></label><button type="button" disabled={busy || !signer || !signature} onClick={() => void sign()} className="h-10 rounded-md border border-border px-3 text-sm sm:col-span-2">Registrar assinatura eletronica simples</button></div> : null}
