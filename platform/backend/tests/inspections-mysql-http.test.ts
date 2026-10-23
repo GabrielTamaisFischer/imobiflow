@@ -568,6 +568,35 @@ describe("GET / — busca e filtro de tipo", () => {
     expect(status).toBe(200);
     expect(body.inspections).toEqual([]);
   });
+
+  // Bloco 5 — filtro property_id, usado por /app/vistorias/nova para listar
+  // Entradas compatíveis como referência de estrutura ao criar uma Saída.
+  it("filtra por property_id e devolve só vistorias daquele imóvel, mesmo havendo outras da mesma empresa", async () => {
+    const { status, body } = await call("adminA", "GET", `/?property_id=${ids.propA}`);
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed).toEqual(expect.arrayContaining([ids.entryA, ids.entryA2, ids.exitA, ids.draftA]));
+    expect(listed).not.toContain(ids.exitOtherPropA);
+  });
+
+  it("combina property_id + type=entry + status=completed — exatamente o filtro usado para listar candidatas à referência de estrutura", async () => {
+    const { status, body } = await call("adminA", "GET", `/?property_id=${ids.propA}&type=entry&status=completed`);
+    expect(status).toBe(200);
+    const listed = (body.inspections as Row[]).map((row) => row.id);
+    expect(listed.sort()).toEqual([ids.entryA, ids.entryA2].sort());
+  });
+
+  it("property_id de outra empresa nunca extravasa dados — filtro de escopo de tenant prevalece sobre o parâmetro", async () => {
+    const { status, body } = await call("adminA", "GET", `/?property_id=${ids.propB}`);
+    expect(status).toBe(200);
+    expect(body.inspections).toEqual([]);
+  });
+
+  it("rejeita property_id com formato inválido (não-UUID) com 400 INVALID_PROPERTY_ID", async () => {
+    const { status, body } = await call("adminA", "GET", "/?property_id=nao-e-um-uuid");
+    expect(status).toBe(400);
+    expect(body.error).toBe("INVALID_PROPERTY_ID");
+  });
 });
 
 describe("expected_version — proteção contra overwrite silencioso", () => {
@@ -1121,5 +1150,88 @@ describe("F5G — editar registro principal e arquivar exigem cargo administrati
     expect(body.error).toBe("INSPECTION_NOT_FOUND");
     expect(inspectionOf(ids.entryB).status).toBe(before.status);
     expect(inspectionOf(ids.entryB).version).toBe(before.version);
+  });
+});
+
+
+// Bloco 5 — "Criar vistoria de saída a partir da Entrada": o frontend
+// (app.vistorias.nova.tsx) não tem uma rota dedicada — ele lê a Entrada via
+// GET /:id e replica a estrutura chamando POST /:id/rooms e
+// POST /:id/rooms/:roomId/items sequencialmente. Este bloco cobre esse
+// fluxo na camada HTTP: mesma empresa/mesmo imóvel funciona e nunca copia
+// condition/notes/evidência; empresa B e imóvel diferente são bloqueados
+// pelos mesmos mecanismos de escopo já usados em toda a rota.
+describe("Bloco 5 — criar vistoria de saída a partir da Entrada (cópia de estrutura via rooms/items)", () => {
+  it("copia nome e posição de ambientes/itens da Entrada para uma Saída nova, sempre com condition not_inspected e sem notes", async () => {
+    const newExitId = randomUUID();
+    const createdExit = await call("adminA", "POST", "/", {
+      id: newExitId,
+      property_id: ids.propA,
+      type: "exit",
+    });
+    expect(createdExit.status).toBe(201);
+    let version = createdExit.body.inspection.version;
+
+    const reference = await call("adminA", "GET", `/${ids.entryA}`);
+    expect(reference.status).toBe(200);
+    const sourceRoom = reference.body.inspection.rooms[0];
+    expect(sourceRoom.name).toBe("Sala");
+    const sourceItem = sourceRoom.items[0];
+    expect(sourceItem.name).toBe("Piso");
+    expect(sourceItem.condition).toBe("good"); // confirma que a Entrada tem estado preenchido — é isso que NÃO deve ser copiado.
+
+    const roomCreated = await call("adminA", "POST", `/${newExitId}/rooms`, {
+      id: randomUUID(),
+      expected_version: version,
+      name: sourceRoom.name,
+      position: 0,
+    });
+    expect(roomCreated.status).toBe(201);
+    version += 1;
+
+    const itemCreated = await call("adminA", "POST", `/${newExitId}/rooms/${roomCreated.body.room.id}/items`, {
+      id: randomUUID(),
+      expected_version: version,
+      name: sourceItem.name,
+      condition: "not_inspected",
+      position: 0,
+    });
+    expect(itemCreated.status).toBe(201);
+    version += 1;
+
+    const final = await call("adminA", "GET", `/${newExitId}`);
+    expect(final.status).toBe(200);
+    expect(final.body.inspection.rooms).toHaveLength(1);
+    expect(final.body.inspection.rooms[0]).toMatchObject({ name: "Sala", position: 0, notes: null });
+    expect(final.body.inspection.rooms[0].items).toHaveLength(1);
+    expect(final.body.inspection.rooms[0].items[0]).toMatchObject({ name: "Piso", condition: "not_inspected", position: 0, notes: null });
+    // A Saída é uma vistoria própria e independente: seu id nunca coincide
+    // com o da Entrada, e seus ambientes/itens têm ids novos (nunca os
+    // mesmos da Entrada).
+    expect(final.body.inspection.id).toBe(newExitId);
+    expect(final.body.inspection.id).not.toBe(ids.entryA);
+    expect(final.body.inspection.rooms[0].id).not.toBe(sourceRoom.id);
+    expect(final.body.inspection.rooms[0].items[0].id).not.toBe(sourceItem.id);
+  });
+
+  it("empresa B não consegue ler a Entrada da empresa A para copiar estrutura (404, sem revelar existência)", async () => {
+    const read = await call("adminB", "GET", `/${ids.entryA}`);
+    expect(read.status).toBe(404);
+  });
+
+  it("empresa B não consegue criar ambiente numa Saída da empresa A mesmo sabendo o id (404)", async () => {
+    const { status } = await call("adminB", "POST", `/${ids.exitA}/rooms`, {
+      id: randomUUID(),
+      expected_version: 3,
+      name: "Sala",
+      position: 0,
+    });
+    expect(status).toBe(404);
+  });
+
+  it("uma Entrada de outro imóvel da MESMA empresa não aparece como candidata (filtro property_id exclui), prevenindo cópia cross-property por engano", async () => {
+    const { status, body } = await call("adminA", "GET", `/?property_id=${ids.propA2}&type=entry&status=completed`);
+    expect(status).toBe(200);
+    expect((body.inspections as Row[]).map((row) => row.id)).toEqual([]);
   });
 });

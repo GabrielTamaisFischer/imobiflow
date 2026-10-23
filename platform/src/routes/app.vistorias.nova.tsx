@@ -8,13 +8,56 @@ import { InspectionBrokerSearchField } from "@/components/app/inspections/Inspec
 import { useInspectionPropertyDetail } from "@/components/app/inspections/use-inspection-property-detail";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
-import { createMysqlInspection } from "@/product/inspections";
+import {
+  createMysqlInspection, createMysqlItem, createMysqlRoom, getMysqlInspection, listMysqlInspections,
+  type MysqlInspection,
+} from "@/product/inspections";
 import { listProperties, listPropertyEligibleUsers, type PropertySummary } from "@/product/real-estate";
 import { formatPropertySearchLabel } from "@/product/inspection-property-search";
 import type { EligibleUser } from "@/product/sharing";
 import { useSessionGuard } from "@/product/use-session-guard";
 
 export const Route = createFileRoute("/app/vistorias/nova")({ component: NewInspectionPage });
+
+// Bloco 5 — "Criar vistoria de saída a partir da Entrada": funções puras
+// extraídas do componente para permitir teste sem harness de renderização
+// (este repositório não usa @testing-library/react — ver
+// src/routes/portal.proprietario.$token.test.ts para o mesmo padrão).
+//
+// mergeCandidateEntries / pickDefaultReferenceEntryId decidem quais
+// Entradas são elegíveis como referência e se há pré-seleção automática.
+// buildStructureCopyPlan decide EXATAMENTE o que será copiado: só nomes e
+// posições de ambientes/itens, nunca condition/notes/evidência — todo item
+// do plano nasce com condition "not_inspected" e a ordem de chamadas segue
+// o mesmo padrão de versionamento otimista usado em
+// acceptSuggestedRooms (app.vistorias.$inspectionId.tsx).
+export function mergeCandidateEntries(completed: MysqlInspection[], archived: MysqlInspection[]): MysqlInspection[] {
+  return [...completed, ...archived];
+}
+
+export function pickDefaultReferenceEntryId(entries: MysqlInspection[]): string {
+  return entries.length === 1 ? entries[0].id : "";
+}
+
+export type RoomCopyStep = { kind: "room"; expectedVersion: number; name: string; position: number; sourceRoomId: string };
+export type ItemCopyStep = { kind: "item"; expectedVersion: number; name: string; position: number; condition: "not_inspected"; sourceRoomId: string; sourceItemId: string };
+export type StructureCopyStep = RoomCopyStep | ItemCopyStep;
+
+export function buildStructureCopyPlan(reference: { rooms: MysqlInspection["rooms"] }, startVersion: number): StructureCopyStep[] {
+  const steps: StructureCopyStep[] = [];
+  let version = startVersion;
+  const sortedRooms = [...reference.rooms].sort((a, b) => a.position - b.position);
+  for (const [roomIndex, sourceRoom] of sortedRooms.entries()) {
+    steps.push({ kind: "room", expectedVersion: version, name: sourceRoom.name, position: roomIndex, sourceRoomId: sourceRoom.id });
+    version += 1;
+    const sortedItems = [...sourceRoom.items].sort((a, b) => a.position - b.position);
+    for (const [itemIndex, sourceItem] of sortedItems.entries()) {
+      steps.push({ kind: "item", expectedVersion: version, name: sourceItem.name, position: itemIndex, condition: "not_inspected", sourceRoomId: sourceRoom.id, sourceItemId: sourceItem.id });
+      version += 1;
+    }
+  }
+  return steps;
+}
 
 // Busca server-side (código, título, endereço, cidade, bairro, proprietário)
 // — igual à usada no formulário antigo inline, só movida para a rota
@@ -95,6 +138,40 @@ function NewInspectionPage() {
   const [error, setError] = useState<string | null>(null);
   const propertyDetail = useInspectionPropertyDetail(property?.id ?? null);
 
+  // Bloco 5 — "Criar vistoria de saída a partir da Entrada": a Entrada
+  // serve só de referência para a ESTRUTURA (nomes/posições de ambientes e
+  // itens), nunca para estado/observação/evidência. Candidatas = vistorias
+  // de Entrada do MESMO imóvel, concluídas ou arquivadas (mesma regra de
+  // elegibilidade usada na comparação Entrada×Saída). O backend já garante
+  // mesma empresa via escopo de sessão em todas as chamadas abaixo.
+  const [useEntryReference, setUseEntryReference] = useState(false);
+  const [candidateEntries, setCandidateEntries] = useState<MysqlInspection[]>([]);
+  const [loadingCandidateEntries, setLoadingCandidateEntries] = useState(false);
+  const [selectedReferenceEntryId, setSelectedReferenceEntryId] = useState("");
+
+  useEffect(() => {
+    if (type !== "exit" || !property) {
+      setCandidateEntries([]);
+      setSelectedReferenceEntryId("");
+      return;
+    }
+    let cancelled = false;
+    setLoadingCandidateEntries(true);
+    Promise.all([
+      listMysqlInspections(1, 50, "completed", { type: "entry", property_id: property.id }),
+      listMysqlInspections(1, 50, "archived", { type: "entry", property_id: property.id }),
+    ])
+      .then(([completed, archived]) => {
+        if (cancelled) return;
+        const entries = mergeCandidateEntries(completed.inspections, archived.inspections);
+        setCandidateEntries(entries);
+        setSelectedReferenceEntryId(pickDefaultReferenceEntryId(entries));
+      })
+      .catch(() => { if (!cancelled) setCandidateEntries([]); })
+      .finally(() => { if (!cancelled) setLoadingCandidateEntries(false); });
+    return () => { cancelled = true; };
+  }, [type, property]);
+
   useEffect(() => {
     if (isLoading || !session) return;
     let cancelled = false;
@@ -137,6 +214,33 @@ function NewInspectionPage() {
         ...(assignedUserId ? { assigned_user_id: assignedUserId } : {}),
         notes: notes.trim() || null,
       });
+      // Bloco 5 — copia só a ESTRUTURA (ambientes/itens) da Entrada
+      // selecionada, sequencialmente, no mesmo padrão de acceptSuggestedRooms
+      // (app.vistorias.$inspectionId.tsx): cada criação bumpa a versão no
+      // backend, então o contador local precisa acompanhar. Nunca copia
+      // condition/notes/evidência — todo item novo nasce "not_inspected",
+      // sem observação, sem foto, porque é a Saída que deve preencher isso
+      // de forma independente. Falha aqui não desfaz a vistoria já criada:
+      // o usuário cai na tela de detalhe e pode montar a estrutura na mão.
+      if (type === "exit" && useEntryReference && selectedReferenceEntryId) {
+        try {
+          const reference = await getMysqlInspection(selectedReferenceEntryId);
+          const plan = buildStructureCopyPlan(reference.inspection, created.inspection.version);
+          const createdRoomIdBySourceRoomId = new Map<string, string>();
+          for (const step of plan) {
+            if (step.kind === "room") {
+              const { room } = await createMysqlRoom(created.inspection.id, { id: crypto.randomUUID(), expected_version: step.expectedVersion, name: step.name, position: step.position });
+              createdRoomIdBySourceRoomId.set(step.sourceRoomId, room.id);
+            } else {
+              const targetRoomId = createdRoomIdBySourceRoomId.get(step.sourceRoomId);
+              if (!targetRoomId) continue;
+              await createMysqlItem(created.inspection.id, targetRoomId, { id: crypto.randomUUID(), expected_version: step.expectedVersion, name: step.name, condition: step.condition, position: step.position });
+            }
+          }
+        } catch (structureError) {
+          setError(getSafeApiErrorMessage(structureError, "A vistoria foi criada, mas não foi possível copiar a estrutura da entrada. Monte os ambientes manualmente."));
+        }
+      }
       void navigate({ to: "/app/vistorias/$inspectionId", params: { inspectionId: created.inspection.id } });
     } catch (e) {
       setError(getSafeApiErrorMessage(e, "Não foi possível criar a vistoria."));
@@ -192,6 +296,48 @@ function NewInspectionPage() {
               </select>
             </label>
           </div>
+
+          {type === "exit" && property ? (
+            <div className="rounded-md border border-border p-3">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={useEntryReference}
+                  onChange={(e) => setUseEntryReference(e.target.checked)}
+                  disabled={loadingCandidateEntries || candidateEntries.length === 0}
+                />
+                Usar vistoria de entrada como referência
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Copia só os ambientes e itens (nomes e ordem) da entrada escolhida. Estados, observações e fotos nunca são copiados — a saída deve ser preenchida de forma independente.
+              </p>
+              {loadingCandidateEntries ? (
+                <p className="mt-2 text-xs text-muted-foreground">Buscando entradas compatíveis...</p>
+              ) : candidateEntries.length === 0 ? (
+                <p className="mt-2 text-xs text-muted-foreground">Nenhuma vistoria de entrada concluída ou arquivada para este imóvel.</p>
+              ) : useEntryReference ? (
+                candidateEntries.length > 1 ? (
+                  <label className="mt-2 block text-sm">
+                    Vistoria de entrada
+                    <select
+                      value={selectedReferenceEntryId}
+                      onChange={(e) => setSelectedReferenceEntryId(e.target.value)}
+                      className="mt-1 h-10 w-full rounded-md border border-input bg-background px-3 font-normal"
+                    >
+                      <option value="">Selecione...</option>
+                      {candidateEntries.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.assigned_user?.name ?? "sem responsável"} · {entry.completed_at ? new Date(entry.completed_at).toLocaleDateString("pt-BR") : "sem data"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">Entrada selecionada automaticamente (única compatível).</p>
+                )
+              ) : null}
+            </div>
+          ) : null}
 
           <label className="block text-sm font-medium">
             Observações gerais
