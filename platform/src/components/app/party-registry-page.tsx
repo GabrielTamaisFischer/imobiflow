@@ -17,6 +17,8 @@ import {
 } from "@/product/registrations";
 import { useSessionGuard } from "@/product/use-session-guard";
 import { isLocalFrontend } from "@/product/local-dev-session";
+import { listPropertyEligibleUsers } from "@/product/real-estate";
+import type { EligibleUser } from "@/product/sharing";
 
 type RegistryConfig = {
   role: RegistrationRole;
@@ -37,17 +39,32 @@ export function PartyRegistryPage({ config }: { config: RegistryConfig }) {
   const [showForm, setShowForm] = useState(false);
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [eligibleUsers, setEligibleUsers] = useState<EligibleUser[]>([]);
+  const [loadingEligibleUsers, setLoadingEligibleUsers] = useState(false);
 
   async function refresh() {
     setLoadingItems(true);
+    setLoadingEligibleUsers(config.role === "broker");
     setError(null);
     try {
       const response = await listRegistrations(config.role);
       setItems(response.registrations);
+      if (config.role === "broker") {
+        try {
+          const eligible = await listPropertyEligibleUsers();
+          setEligibleUsers(eligible.users);
+        } catch (eligibleError) {
+          setEligibleUsers([]);
+          setError(eligibleError instanceof Error ? eligibleError.message : "Não foi possível carregar os usuários habilitados.");
+        }
+      } else {
+        setEligibleUsers([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : `Não foi possível carregar ${config.plural.toLowerCase()}.`);
     } finally {
       setLoadingItems(false);
+      setLoadingEligibleUsers(false);
     }
   }
 
@@ -64,6 +81,21 @@ export function PartyRegistryPage({ config }: { config: RegistryConfig }) {
         .some((value) => String(value).toLowerCase().includes(term)),
     );
   }, [items, search]);
+
+  const linkedBrokerUserIds = useMemo(
+    () => new Set(items.flatMap((item) => item.linked_users.map((user) => user.id))),
+    [items],
+  );
+  const visibleEligibleUsers = useMemo(() => {
+    if (config.role !== "broker") return [];
+    const term = search.trim().toLowerCase();
+    return eligibleUsers.filter((user) => {
+      if (linkedBrokerUserIds.has(user.id)) return false;
+      if (!term) return true;
+      return [user.name, user.role, user.creci_number].filter(Boolean).some((value) => String(value).toLowerCase().includes(term));
+    });
+  }, [config.role, eligibleUsers, linkedBrokerUserIds, search]);
+  const hasAnyBrokerSource = config.role === "broker" && (items.length > 0 || eligibleUsers.length > 0);
 
   if (isLoading) return <main className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">Validando acesso...</main>;
 
@@ -84,12 +116,37 @@ export function PartyRegistryPage({ config }: { config: RegistryConfig }) {
 
       {error ? <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div> : null}
 
-      {items.length ? <div className="mb-4 rounded-lg border border-border bg-card p-4"><label className="relative block"><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Pesquisar ${config.singular.toLowerCase()} por nome, documento, contato${config.role === "broker" ? " ou CRECI" : ""}`} className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></label></div> : null}
+      {(items.length || hasAnyBrokerSource) ? <div className="mb-4 rounded-lg border border-border bg-card p-4"><label className="relative block"><Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Pesquisar ${config.singular.toLowerCase()} por nome, documento, contato${config.role === "broker" ? " ou CRECI" : ""}`} className="h-10 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring" /></label></div> : null}
 
-      {loadingItems ? <section className="flex min-h-[320px] items-center justify-center rounded-lg border border-border bg-card text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando {config.plural.toLowerCase()}...</section>
-      : items.length === 0 ? <EmptyState icon={UserRound} title={`Nenhum ${config.singular.toLowerCase()} cadastrado`} description={config.emptyDescription} actionLabel={`Cadastrar ${config.singular.toLowerCase()}`} onAction={() => setShowForm(true)} />
-      : filtered.length === 0 ? <EmptyState icon={UserRound} title="Nenhum cadastro encontrado" description="Ajuste a pesquisa para localizar o cadastro desejado." />
-      : <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((item) => <RegistrationCard key={item.id} item={item} />)}</section>}
+      {loadingItems || loadingEligibleUsers ? <section className="flex min-h-[320px] items-center justify-center rounded-lg border border-border bg-card text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando {config.plural.toLowerCase()}...</section>
+      : config.role === "broker" && !hasAnyBrokerSource ? <EmptyState icon={UserRound} title="Nenhum corretor cadastrado" description={config.emptyDescription} actionLabel="Cadastrar corretor" onAction={() => setShowForm(true)} />
+      : config.role !== "broker" && items.length === 0 ? <EmptyState icon={UserRound} title={`Nenhum ${config.singular.toLowerCase()} cadastrado`} description={config.emptyDescription} actionLabel={`Cadastrar ${config.singular.toLowerCase()}`} onAction={() => setShowForm(true)} />
+      : filtered.length === 0 && visibleEligibleUsers.length === 0 ? <EmptyState icon={UserRound} title="Nenhum cadastro encontrado" description="Ajuste a pesquisa para localizar o cadastro desejado." />
+      : <div className="space-y-4">
+          {visibleEligibleUsers.length > 0 ? (
+            <section>
+              <div className="mb-2">
+                <h2 className="text-sm font-semibold">Corretores e usuários habilitados</h2>
+                <p className="text-xs text-muted-foreground">Mesma base de usuários disponível para responsável de imóveis e vistorias. Cadastre a ficha completa quando quiser acrescentar CPF, endereço, CRECI e bio.</p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {visibleEligibleUsers.map((user) => (
+                  <article key={user.id} className="rounded-lg border border-border bg-card p-4">
+                    <div className="flex items-start gap-3">
+                      {user.photo_url ? <img src={user.photo_url} alt="" className="h-12 w-12 rounded-full object-cover" /> : <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted"><UserRound className="h-5 w-5 text-muted-foreground" /></div>}
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">{user.name}</p>
+                        <p className="text-xs text-muted-foreground">{user.role || "Usuário da operação"}</p>
+                        {user.creci_number ? <p className="mt-1 text-xs">CRECI {user.creci_number}</p> : null}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {filtered.length > 0 ? <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((item) => <RegistrationCard key={item.id} item={item} />)}</section> : null}
+        </div>}
     </ModulePage>
   );
 }
