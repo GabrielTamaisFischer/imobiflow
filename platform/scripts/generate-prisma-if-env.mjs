@@ -11,14 +11,16 @@ for (const envFile of [
   if (existsSync(envFile)) config({ path: envFile });
 }
 
-if (!process.env.DATABASE_URL) {
-  console.warn("[postinstall] DATABASE_URL ausente; Prisma Client sera gerado quando o banco estiver configurado.");
-  process.exit(0);
+const env = { ...process.env };
+if (!env.DATABASE_URL && !env.PRISMA_MIGRATE_DATABASE_URL) {
+  env.DATABASE_URL = "mysql://prisma:prisma@127.0.0.1:3306/prisma_generate_only";
+  console.warn("[postinstall] DATABASE_URL ausente; usando URL dummy somente para prisma generate (sem acesso ao banco).");
 }
 
 const result = spawnSync("npx", ["prisma", "generate", "--schema", "prisma/schema.prisma"], {
   stdio: "inherit",
   shell: process.platform === "win32",
+  env,
 });
 
 process.exit(result.status ?? 1);
