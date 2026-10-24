@@ -376,7 +376,9 @@ async function finalizeCompletedProcess(process: any) {
     }
     signers.push({
       name: party.signerNameSnapshot,
-      roleLabel: party.role,
+      role: party.role as SigningPartyRole,
+      roleLabel: SIGNING_PARTY_ROLE_LABELS[party.role as SigningPartyRole] ?? party.role,
+      document: party.signerDocumentSnapshot ?? null,
       signedAt: new Date(party.signedAt ?? Date.now()).toISOString(),
       method: (party.signatureMethod ?? "drawn") as "drawn" | "typed",
       consentText: SIGNING_CONSENT_TEXT,
@@ -384,7 +386,21 @@ async function finalizeCompletedProcess(process: any) {
       auditId: party.id,
     });
   }
-  const { buffer, warnings } = await buildSignedInspectionCertificate({ baseReportBytes: bytes, documentHash: process.documentHash, generatedAt: new Date().toISOString(), signers });
+  const inspectionLocation = await getPrisma().inspection.findFirst({
+    where: { id: process.inspectionId, companyId: process.companyId },
+    select: { property: { select: { city: true, state: true } } },
+  });
+  const signatureLocation = inspectionLocation?.property?.city
+    ? [inspectionLocation.property.city, inspectionLocation.property.state].filter(Boolean).join(" / ")
+    : null;
+
+  const { buffer, warnings } = await buildSignedInspectionCertificate({
+    baseReportBytes: bytes,
+    documentHash: process.documentHash,
+    generatedAt: new Date().toISOString(),
+    signatureLocation,
+    signers,
+  });
   if (warnings.length) console.warn(`[inspection.signing] processo ${process.id}: ${warnings.join(" | ")}`);
   const fileName = `laudo-assinado-${process.inspectionId}.pdf`;
   const policy = validateUploadFile({ purpose: "inspection_signing_report", fileName, mimeType: "application/pdf", declaredSizeBytes: buffer.byteLength, body: buffer });
