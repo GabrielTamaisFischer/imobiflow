@@ -5,7 +5,7 @@ import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
 import {
-  canGenerateInspectionReport, createMysqlItem, createMysqlRoom, createMysqlSuggestedRoomsBatch,
+  canGenerateInspectionReport, createMysqlRoom, createMysqlSuggestedRoomsBatch,
   downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport,
   getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue,
   getMysqlInspectionComparison, downloadMysqlInspectionComparison, listMysqlInspections,
