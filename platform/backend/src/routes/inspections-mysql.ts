@@ -806,12 +806,25 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     return { id: row.id, caption: row.caption ?? null, buffer, mimeType };
   }
 
+  // Pré-carrega todas as evidências com concorrência limitada. Antes, o
+  // carregamento acontecia item por item/ambiente por ambiente; em laudos
+  // grandes isso serializava dezenas ou centenas de leituras do storage.
+  const reportEvidenceById = new Map<string, Awaited<ReturnType<typeof toReportEvidence>>>();
+  const evidenceConcurrency = 8;
+  for (let start = 0; start < evidence.length; start += evidenceConcurrency) {
+    const batch = evidence.slice(start, start + evidenceConcurrency);
+    const prepared = await Promise.all(batch.map(toReportEvidence));
+    prepared.forEach((entry, index) => reportEvidenceById.set(batch[index]!.id, entry));
+  }
+  const resolvePrepared = (rows: any[]) =>
+    rows.map((row) => reportEvidenceById.get(row.id)).filter((entry): entry is Awaited<ReturnType<typeof toReportEvidence>> => Boolean(entry));
+
   const rooms = [];
   for (const room of inspection.rooms ?? []) {
-    const generalEvidence = await Promise.all((evidenceByRoom.get(room.id) ?? []).map(toReportEvidence));
+    const generalEvidence = resolvePrepared(evidenceByRoom.get(room.id) ?? []);
     const items: any[] = [];
     for (const item of room.items ?? []) {
-      const itemEvidence = await Promise.all((evidenceByItem.get(item.id) ?? []).map(toReportEvidence));
+      const itemEvidence = resolvePrepared(evidenceByItem.get(item.id) ?? []);
       items.push({ id: item.id, name: item.name, condition: item.condition, notes: item.notes ?? null, evidence: itemEvidence });
     }
     rooms.push({ id: room.id, name: room.name, notes: room.notes ?? null, generalEvidence, items });
@@ -849,6 +862,7 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
 
 mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
   let uploaded: any = null;
+  const reportStartedAt = Date.now();
   try {
     const access = req.access!;
     const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
@@ -863,8 +877,12 @@ mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage
     const snapshot = buildInspectionSnapshot(inspection, evidence);
     const hash = snapshotHash(snapshot);
     const reportId = randomUUID();
+    const inputStartedAt = Date.now();
     const { input: reportInput, warnings: reportWarnings, propertyCode } = await buildReportInput(access, inspection, evidence, hash);
+    const inputElapsedMs = Date.now() - inputStartedAt;
+    const pdfStartedAt = Date.now();
     const { buffer: body, warnings: pdfWarnings } = await buildProfessionalInspectionReport(reportInput);
+    const pdfElapsedMs = Date.now() - pdfStartedAt;
     const allWarnings = [...reportWarnings, ...pdfWarnings];
     if (allWarnings.length) {
       // Avisos tecnicos ficam so no log do servidor (nunca expostos ao cliente).
@@ -881,6 +899,15 @@ mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage
       return { report_id: reportId, snapshot_hash: hash };
     });
     const file = await getPrisma().storedFile.findFirstOrThrow({ where: { companyId: access.company.id, entityType: "inspection_report", entityId: result.report_id, purpose: "inspection_report" } });
+    console.info("[inspection.report.performance]", {
+      inspectionId: inspection.id,
+      evidenceCount: evidence.length,
+      roomCount: inspection.rooms?.length ?? 0,
+      inputElapsedMs,
+      pdfElapsedMs,
+      totalElapsedMs: Date.now() - reportStartedAt,
+      bytes: body.byteLength,
+    });
     return res.status(replayed ? 200 : 201).json({ report: artifactDto(file, file.metadataJson, await privateArtifactUrl(file, "inspection_report")), replayed });
   } catch (error) {
     if (uploaded) { try { await getStorageProviderForName(uploaded.provider as any).deleteFile({ publicId: uploaded.publicId, resourceType: uploaded.resourceType as StorageResourceType, deliveryAccess: "authenticated" }); } catch { /* best effort */ } }
