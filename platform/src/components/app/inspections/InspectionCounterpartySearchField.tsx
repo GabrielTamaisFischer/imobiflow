@@ -72,16 +72,13 @@ export function InspectionCounterpartySearchField({
   }, [term, value, disabled]);
 
   const role = value?.role ?? defaultRole;
-  const roleOptions = useMemo(() => {
-    if (!value) return ["tenant", "buyer"] as MysqlInspectionCounterpartyRole[];
-    const available = value.participant.available_roles;
-    return available.length > 0 ? available : (["tenant", "buyer"] as MysqlInspectionCounterpartyRole[]);
-  }, [value]);
+  const roleOptions = useMemo(
+    () => ["tenant", "buyer"] as MysqlInspectionCounterpartyRole[],
+    [],
+  );
 
   function select(participant: MysqlInspectionParticipantSearchResult) {
-    const preferred = participant.available_roles.includes(defaultRole)
-      ? defaultRole
-      : participant.available_roles[0] ?? defaultRole;
+    const preferred = defaultRole;
     onChange({ participant, role: preferred });
     setTerm("");
     setResults([]);
