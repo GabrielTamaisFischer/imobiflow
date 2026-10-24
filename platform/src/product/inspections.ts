@@ -204,6 +204,35 @@ export async function deleteMysqlInspection(id: string) {
   });
 }
 
+export async function createMysqlSuggestedRoomsBatch(
+  inspectionId: string,
+  input: {
+    expected_version: number;
+    rooms: Array<{
+      id: string;
+      name: string;
+      position: number;
+      notes?: string | null;
+      items: Array<{
+        id: string;
+        name: string;
+        condition: MysqlInspectionCondition;
+        position: number;
+        notes?: string | null;
+      }>;
+    }>;
+  },
+) {
+  if (isOfflineRuntime()) {
+    throw Object.assign(new Error("Criar ambientes sugeridos em lote exige conexão."), { code: "OFFLINE_BATCH_UNSUPPORTED" });
+  }
+  return apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/rooms/batch`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    token: mysqlToken(),
+  });
+}
+
 export async function createMysqlRoom(inspectionId: string, input: { id: string; expected_version: number; name: string; position: number; notes?: string | null }, options?: { offline?: boolean }) {
   if (options?.offline === true || isOfflineRuntime()) {
     const scope = getInspectionOfflineScope();
