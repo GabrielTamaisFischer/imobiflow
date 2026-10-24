@@ -5,6 +5,7 @@ import { ModulePage } from "@/components/app/module-page";
 import { InspectionStepper } from "@/components/app/inspections/InspectionStepper";
 import { InspectionPropertySummaryCard } from "@/components/app/inspections/InspectionPropertySummaryCard";
 import { InspectionBrokerSearchField } from "@/components/app/inspections/InspectionBrokerSearchField";
+import { InspectionCounterpartySearchField, type SelectedCounterparty } from "@/components/app/inspections/InspectionCounterpartySearchField";
 import { useInspectionPropertyDetail } from "@/components/app/inspections/use-inspection-property-detail";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
@@ -133,6 +134,7 @@ function NewInspectionPage() {
   const [property, setProperty] = useState<PropertySummary | null>(null);
   const [type, setType] = useState<"entry" | "exit">("entry");
   const [assignedUserId, setAssignedUserId] = useState<string | null>(null);
+  const [counterparty, setCounterparty] = useState<SelectedCounterparty | null>(null);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,6 +214,12 @@ function NewInspectionPage() {
         property_id: property.id,
         type,
         ...(assignedUserId ? { assigned_user_id: assignedUserId } : {}),
+        ...(counterparty
+          ? {
+              counterparty_party_id: counterparty.participant.party_id,
+              counterparty_role: counterparty.role,
+            }
+          : {}),
         notes: notes.trim() || null,
       });
       // Bloco 5 — copia só a ESTRUTURA (ambientes/itens) da Entrada
@@ -277,6 +285,19 @@ function NewInspectionPage() {
 
           {property ? (
             <InspectionPropertySummaryCard property={propertyDetail.property} loading={propertyDetail.loading} error={propertyDetail.error} />
+          ) : null}
+
+          {property ? (
+            <div className="rounded-md border border-border p-3">
+              <InspectionCounterpartySearchField
+                value={counterparty}
+                onChange={setCounterparty}
+                defaultRole={property.operation === "sale" ? "buyer" : "tenant"}
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                A pessoa é vinculada pelo cadastro central (Party). Nome, documento, telefone e e-mail não são duplicados na vistoria.
+              </p>
+            </div>
           ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
