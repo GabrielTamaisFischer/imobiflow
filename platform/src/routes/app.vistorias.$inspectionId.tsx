@@ -8,10 +8,11 @@ import {
   canGenerateInspectionReport, createMysqlRoom, createMysqlSuggestedRoomsBatch,
   downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport,
   getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue,
+  getMysqlInspectionCounterparty, updateMysqlInspectionCounterparty,
   getMysqlInspectionComparison, downloadMysqlInspectionComparison, listMysqlInspections,
   MYSQL_ITEM_OUTCOME_LABELS, MYSQL_ROOM_OUTCOME_LABELS,
   type MysqlInspection, type MysqlInspectionComparisonResponse, type MysqlInspectionComparisonItem,
-  type MysqlInspectionItemOutcome, type MysqlInspectionCondition,
+  type MysqlInspectionItemOutcome, type MysqlInspectionCondition, type MysqlInspectionCounterparty,
 } from "@/product/inspections";
 import { InspectionEvidenceLightbox } from "@/components/app/inspections/InspectionEvidenceLightbox";
 import type { InspectionEvidenceRow } from "@/product/inspections";
@@ -24,6 +25,7 @@ import { useInspectionEvidence } from "@/components/app/use-inspection-evidence"
 import { useInspectionPropertyDetail } from "@/components/app/inspections/use-inspection-property-detail";
 import { InspectionPropertySummaryCard } from "@/components/app/inspections/InspectionPropertySummaryCard";
 import { InspectionBrokerSearchField } from "@/components/app/inspections/InspectionBrokerSearchField";
+import { InspectionCounterpartySearchField, type SelectedCounterparty } from "@/components/app/inspections/InspectionCounterpartySearchField";
 import { InspectionArchiveConfirmModal } from "@/components/app/inspections/InspectionArchiveConfirmModal";
 import { InspectionCompletionModal } from "@/components/app/inspections/InspectionCompletionModal";
 import { InspectionStatusBanner } from "@/components/app/inspections/InspectionStatusBanner";
@@ -66,10 +68,78 @@ function AssigneeEditor({ inspection, users, loadingUsers, saving, onSave }: { i
   );
 }
 
+function CounterpartyEditor({
+  counterparty,
+  saving,
+  onSave,
+}: {
+  counterparty: MysqlInspectionCounterparty | null;
+  saving: boolean;
+  onSave: (value: SelectedCounterparty | null) => Promise<void>;
+}) {
+  const [value, setValue] = useState<SelectedCounterparty | null>(() =>
+    counterparty
+      ? {
+          participant: {
+            party_id: counterparty.party_id,
+            name: counterparty.name,
+            document: counterparty.document,
+            rg: counterparty.rg,
+            email: counterparty.email,
+            phone: counterparty.phone,
+            address: counterparty.address,
+            available_roles: [counterparty.role],
+          },
+          role: counterparty.role,
+        }
+      : null,
+  );
+
+  useEffect(() => {
+    setValue(
+      counterparty
+        ? {
+            participant: {
+              party_id: counterparty.party_id,
+              name: counterparty.name,
+              document: counterparty.document,
+              rg: counterparty.rg,
+              email: counterparty.email,
+              phone: counterparty.phone,
+              address: counterparty.address,
+              available_roles: [counterparty.role],
+            },
+            role: counterparty.role,
+          }
+        : null,
+    );
+  }, [counterparty]);
+
+  return (
+    <div className="mt-4 rounded-md border border-border p-3">
+      <InspectionCounterpartySearchField
+        value={value}
+        onChange={setValue}
+        defaultRole={counterparty?.role ?? "tenant"}
+      />
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => void onSave(value)}
+        className="mt-3 inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground"
+      >
+        <Save className="h-4 w-4" />
+        Salvar inquilino/comprador
+      </button>
+    </div>
+  );
+}
+
 function InspectionDetailPageIntegrated() {
   const { inspectionId } = Route.useParams();
   const { session, isLoading } = useSessionGuard();
   const [inspection, setInspection] = useState<MysqlInspection | null>(null);
+  const [counterparty, setCounterparty] = useState<MysqlInspectionCounterparty | null>(null);
   const [users, setUsers] = useState<EligibleUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +183,25 @@ function InspectionDetailPageIntegrated() {
   // ambiente ainda (nunca sobrescreve/duplica ambientes já preenchidos).
   const propertyBrief = useMemo(() => (propertyDetail.property ? buildInspectionPropertyBrief(propertyDetail.property) : null), [propertyDetail.property]);
   const suggestedRooms = useMemo(() => (propertyBrief ? buildSuggestedInspectionRooms(propertyBrief) : []), [propertyBrief]);
-  async function reload() { setLoading(true); setLoadingUsers(true); try { const [result, eligible] = await Promise.all([getMysqlInspection(inspectionId), listPropertyEligibleUsers()]); setInspection(result.inspection); setUsers(eligible.users); } catch (e) { setError(getSafeApiErrorMessage(e, "Não foi possível carregar a vistoria.")); } finally { setLoading(false); setLoadingUsers(false); } }
+  async function reload() {
+    setLoading(true);
+    setLoadingUsers(true);
+    try {
+      const [result, eligible, linkedCounterparty] = await Promise.all([
+        getMysqlInspection(inspectionId),
+        listPropertyEligibleUsers(),
+        getMysqlInspectionCounterparty(inspectionId),
+      ]);
+      setInspection(result.inspection);
+      setUsers(eligible.users);
+      setCounterparty(linkedCounterparty.counterparty);
+    } catch (e) {
+      setError(getSafeApiErrorMessage(e, "Não foi possível carregar a vistoria."));
+    } finally {
+      setLoading(false);
+      setLoadingUsers(false);
+    }
+  }
   useEffect(() => { if (!isLoading && session) void reload(); }, [isLoading, session, inspectionId]);
   async function refreshOfflineState() { setOffline(isOfflineRuntime()); setPending(await pendingInspectionMutationCount(inspectionId)); setConflicts(await inspectionOfflineConflictCount(inspectionId)); }
   async function syncOffline() { setSyncing(true); try { await syncMysqlInspectionOfflineQueue(inspectionId); await reload(); } finally { setSyncing(false); await refreshOfflineState(); } }
@@ -143,6 +231,23 @@ function InspectionDetailPageIntegrated() {
   if (!inspection) return <ModulePage session={session} module={getModuleByKey("inspections")}><p role="alert">{error || "Vistoria não encontrada."}</p></ModulePage>;
   const currentInspection = inspection;
   async function saveAssignee(id: string | null) { beginSaving(); try { setInspection((await patchMysqlInspection(currentInspection.id, { expected_version: currentInspection.version, assigned_user_id: id })).inspection); endSavingWithFlash(); } catch (e) { endSaving(); setError(getSafeApiErrorMessage(e, "Não foi possível salvar o responsável.")); if ((e as { code?: string }).code === "INSPECTION_VERSION_CONFLICT") void reload(); } }
+  async function saveCounterparty(value: SelectedCounterparty | null) {
+    beginSaving();
+    try {
+      const result = await updateMysqlInspectionCounterparty(currentInspection.id, {
+        expected_version: currentInspection.version,
+        party_id: value?.participant.party_id ?? null,
+        role: value?.role ?? null,
+      });
+      setInspection(result.inspection);
+      setCounterparty(result.counterparty);
+      endSavingWithFlash();
+    } catch (e) {
+      endSaving();
+      setError(getSafeApiErrorMessage(e, "Não foi possível salvar o inquilino/comprador."));
+      if ((e as { code?: string }).code === "INSPECTION_VERSION_CONFLICT") void reload();
+    }
+  }
   async function saveNotes(notes: string) { beginSaving(); try { setInspection((await patchMysqlInspection(currentInspection.id, { expected_version: currentInspection.version, notes })).inspection); endSavingWithFlash(); } catch (e) { endSaving(); setError(getSafeApiErrorMessage(e, "Não foi possível salvar.")); if ((e as { code?: string }).code === "INSPECTION_VERSION_CONFLICT") void reload(); } }
   async function move(status: "in_progress" | "completed" | "archived") {
     beginSaving();
@@ -302,9 +407,18 @@ function InspectionDetailPageIntegrated() {
             ) : null}
           </div>
           {!editMode || !canEditRecord ? (
-            <p className="mt-2 text-sm">Responsável: {inspection.assigned_user?.name || "Não definido"}</p>
+            <div className="mt-2 space-y-1 text-sm">
+              <p>Responsável: {inspection.assigned_user?.name || "Não definido"}</p>
+              <p>
+                {counterparty?.role === "buyer" ? "Comprador" : "Inquilino"}: {counterparty?.name || "Não definido"}
+              </p>
+              {counterparty?.document ? <p className="text-xs text-muted-foreground">Documento vinculado ao cadastro central.</p> : null}
+            </div>
           ) : (
-            <AssigneeEditor inspection={inspection} users={users} loadingUsers={loadingUsers} saving={false} onSave={saveAssignee} />
+            <>
+              <AssigneeEditor inspection={inspection} users={users} loadingUsers={loadingUsers} saving={saving} onSave={saveAssignee} />
+              <CounterpartyEditor counterparty={counterparty} saving={saving} onSave={saveCounterparty} />
+            </>
           )}
         </header>
 
