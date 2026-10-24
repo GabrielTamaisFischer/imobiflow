@@ -34,6 +34,7 @@ import { InspectionRoomWorkspace } from "@/components/app/inspections/Inspection
 import { InspectionSummaryPanel } from "@/components/app/inspections/InspectionSummaryPanel";
 import { InspectionSaveStatus } from "@/components/app/inspections/InspectionSaveStatus";
 import { InspectionSigningSection } from "@/components/app/inspections/InspectionSigningSection";
+import { InspectionGeneralInfoSection } from "@/components/app/inspections/InspectionGeneralInfoSection";
 import { buildInspectionPropertyBrief } from "@/product/inspection-property-brief";
 import { buildSuggestedInspectionRooms } from "@/product/inspection-rooms";
 import { buildSuggestedInspectionItems } from "@/product/inspection-item-presets";
@@ -315,6 +316,7 @@ function InspectionDetailPageIntegrated() {
         <InspectionF5FActions inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <InspectionSigningSection inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <NotesEditor inspection={inspection} editable={canEditRecord && editMode} onSave={saveNotes} saving={false} />
+        <InspectionGeneralInfoSection inspection={currentInspection} editable={contentEditable} onInspectionChanged={setInspection} onError={setError} />
 
         {/* SUB-BLOCO 3 — mobile/tablet (<lg): seletor de ambientes em pills,
             workspace central e resumo como accordion. */}
