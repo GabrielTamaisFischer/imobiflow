@@ -5,7 +5,7 @@ import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage, isAdministrative } from "@/product/app-access";
 import {
-  canGenerateInspectionReport, createMysqlItem, createMysqlRoom,
+  canGenerateInspectionReport, createMysqlItem, createMysqlRoom, createMysqlSuggestedRoomsBatch,
   downloadMysqlInspectionReport, generateMysqlInspectionComparison, generateMysqlInspectionReport,
   getMysqlInspection, patchMysqlInspection, syncMysqlInspectionOfflineQueue,
   getMysqlInspectionComparison, downloadMysqlInspectionComparison, listMysqlInspections,
@@ -196,25 +196,31 @@ function InspectionDetailPageIntegrated() {
   // já que criar ambiente/item sempre bumpa a versão no backend) e, ao
   // final, um refetch garante que o estado local bata com o servidor.
   async function acceptSuggestedRooms(selectedNames: string[]) {
+    if (creatingRooms || selectedNames.length === 0) return;
     setCreatingRooms(true);
+    setError(null);
     try {
-      let version = currentInspection.version;
-      let position = currentInspection.rooms.length;
-      for (const name of selectedNames) {
-        const { room } = await createMysqlRoom(currentInspection.id, { id: crypto.randomUUID(), expected_version: version, name, position });
-        version += 1;
-        position += 1;
-        const presetItems = buildSuggestedInspectionItems(name);
-        for (const [itemIndex, itemName] of presetItems.entries()) {
-          await createMysqlItem(currentInspection.id, room.id, { id: crypto.randomUUID(), expected_version: version, name: itemName, condition: "not_inspected", position: itemIndex });
-          version += 1;
-        }
-      }
-      const refreshed = await getMysqlInspection(currentInspection.id);
-      setInspection(refreshed.inspection);
+      const startPosition = currentInspection.rooms.length;
+      const rooms = selectedNames.map((name, roomIndex) => ({
+        id: crypto.randomUUID(),
+        name,
+        position: startPosition + roomIndex,
+        items: buildSuggestedInspectionItems(name).map((itemName, itemIndex) => ({
+          id: crypto.randomUUID(),
+          name: itemName,
+          condition: "not_inspected" as const,
+          position: itemIndex,
+        })),
+      }));
+      const result = await createMysqlSuggestedRoomsBatch(currentInspection.id, {
+        expected_version: currentInspection.version,
+        rooms,
+      });
+      setInspection(result.inspection);
       setSuggestedRoomsDismissed(true);
-      const created = refreshed.inspection.rooms.find((room) => selectedNames.includes(room.name));
-      setSelectedRoomId(created?.id ?? pickInitialRoomId(refreshed.inspection.rooms));
+      const createdIds = new Set(rooms.map((room) => room.id));
+      const created = result.inspection.rooms.find((room) => createdIds.has(room.id));
+      setSelectedRoomId(created?.id ?? pickInitialRoomId(result.inspection.rooms));
     } catch (e) {
       handleMutationError(e);
     } finally {
