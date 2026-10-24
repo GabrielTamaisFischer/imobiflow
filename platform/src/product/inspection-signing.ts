@@ -58,6 +58,7 @@ export type SigningProcess = {
   id: string;
   inspection_id: string;
   report_stored_file_id: string;
+  is_current_report: boolean;
   document_hash: string;
   status: SigningProcessStatus;
   progress_label: string;
