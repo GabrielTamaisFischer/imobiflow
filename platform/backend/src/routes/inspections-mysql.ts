@@ -300,7 +300,23 @@ async function resolveCounterpartyParty(companyId: string, partyId: string) {
   return party;
 }
 
-async function latestInspectionCounterparty(companyId: string, inspectionId: string) {
+type InspectionCounterpartyRole = (typeof counterpartyRoles)[number];
+
+type InspectionCounterpartySnapshot = {
+  party_id: string;
+  role: InspectionCounterpartyRole;
+  name: string;
+  document: string | null;
+  rg: string | null;
+  email: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  address: unknown;
+  status: string;
+  linked_at: string;
+};
+
+async function latestInspectionCounterparty(companyId: string, inspectionId: string): Promise<InspectionCounterpartySnapshot | null> {
   const row = await getPrisma().inspectionEvent.findFirst({
     where: {
       companyId,
@@ -313,7 +329,8 @@ async function latestInspectionCounterparty(companyId: string, inspectionId: str
   if (!row || row.eventType === "inspection.counterparty_removed") return null;
   const metadata = (row.metadataJson ?? {}) as Record<string, unknown>;
   const partyId = typeof metadata.party_id === "string" ? metadata.party_id : null;
-  const role = metadata.role === "buyer" ? "buyer" : metadata.role === "tenant" ? "tenant" : null;
+  const role: InspectionCounterpartyRole | null =
+    metadata.role === "buyer" ? "buyer" : metadata.role === "tenant" ? "tenant" : null;
   if (!partyId || !role) return null;
   const party = await getPrisma().party.findFirst({
     where: { id: partyId, companyId },
