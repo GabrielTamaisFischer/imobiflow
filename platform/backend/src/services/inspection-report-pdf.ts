@@ -1,4 +1,4 @@
-import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb, type Color } from "pdf-lib";
+import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb, type Color } from "pdf-lib";
 import { optimizeEvidenceImage, clearImageOptimizerCache, type OptimizeOptions } from "./inspection-report-image.js";
 
 /**
@@ -313,12 +313,14 @@ class ReportBuilder {
   inspectionCode: string;
   internalPageCount = 0;
   imageOptions: OptimizeOptions;
+  brandLogo: PDFImage | null;
 
-  constructor(doc: PDFDocument, fonts: Fonts, headerLabel: string, inspectionCode: string, imageOptions: OptimizeOptions = {}) {
+  constructor(doc: PDFDocument, fonts: Fonts, headerLabel: string, inspectionCode: string, brandLogo: PDFImage | null, imageOptions: OptimizeOptions = {}) {
     this.doc = doc;
     this.fonts = fonts;
     this.headerLabel = headerLabel;
     this.inspectionCode = inspectionCode;
+    this.brandLogo = brandLogo;
     this.imageOptions = imageOptions;
   }
 
@@ -337,7 +339,17 @@ class ReportBuilder {
     const { regular, bold } = this.fonts;
     this.page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 54, width: PAGE_WIDTH, height: 54, color: BLACK });
     this.page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 56, width: PAGE_WIDTH, height: 2, color: PURPLE });
-    this.page.drawText("ImobiFlow", { x: MARGIN_X, y: PAGE_HEIGHT - 33, size: 12, font: bold, color: WHITE });
+    if (this.brandLogo) {
+      const scaled = this.brandLogo.scaleToFit(104, 34);
+      this.page.drawImage(this.brandLogo, {
+        x: MARGIN_X,
+        y: PAGE_HEIGHT - 45,
+        width: scaled.width,
+        height: scaled.height,
+      });
+    } else {
+      this.page.drawText("ImobiFlow", { x: MARGIN_X, y: PAGE_HEIGHT - 33, size: 12, font: bold, color: WHITE });
+    }
     const label = this.headerLabel;
     const width = regular.widthOfTextAtSize(label, 9);
     this.page.drawText(label, { x: PAGE_WIDTH - MARGIN_X - width, y: PAGE_HEIGHT - 32, size: 9, font: regular, color: WHITE });
@@ -381,12 +393,23 @@ export async function buildProfessionalInspectionReport(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const fonts: Fonts = { regular, bold };
 
+  let brandLogo: PDFImage | null = null;
+  if (input.company.logo) {
+    try {
+      const logoBytes = new Uint8Array(input.company.logo.buffer);
+      brandLogo = input.company.logo.mimeType === "image/png"
+        ? await doc.embedPng(logoBytes)
+        : await doc.embedJpg(logoBytes);
+    } catch {
+      warnings.push("A logo do ImobiFlow nao pode ser incorporada; foi usado o fallback tipografico.");
+    }
+  }
+
   const propertyLabel = input.property?.code ? `Imovel #${input.property.code}` : "Imovel";
   const inspectionShortId = input.inspection.id.slice(0, 8);
-  const builder = new ReportBuilder(doc, fonts, propertyLabel, inspectionShortId, input.imageOptimization);
+  const builder = new ReportBuilder(doc, fonts, propertyLabel, inspectionShortId, brandLogo, input.imageOptimization);
 
   await drawCoverPage(builder, input, warnings);
-  await embedCoverLogoIfAny(builder, input);
   builder.addPage(true);
   drawCharacteristicsAndLayoutSection(builder, input);
   drawInspectionOverviewSection(builder, input);
@@ -429,8 +452,18 @@ async function drawCoverPage(builder: ReportBuilder, input: BuildProfessionalIns
   page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 174, width: PAGE_WIDTH, height: 4, color: PURPLE });
   page.drawRectangle({ x: PAGE_WIDTH - 180, y: PAGE_HEIGHT - 170, width: 180, height: 170, color: rgb(0.08, 0.06, 0.15) });
 
-  page.drawText("IMOBIFLOW", { x: MARGIN_X, y: PAGE_HEIGHT - 72, size: 28, font: fonts.bold, color: WHITE });
-  page.drawText(`VISTORIA DE ${typeLabel.toUpperCase()}`, { x: MARGIN_X, y: PAGE_HEIGHT - 110, size: 17, font: fonts.bold, color: rgb(0.78, 0.64, 1) });
+  if (builder.brandLogo) {
+    const scaledLogo = builder.brandLogo.scaleToFit(190, 68);
+    page.drawImage(builder.brandLogo, {
+      x: MARGIN_X,
+      y: PAGE_HEIGHT - 88,
+      width: scaledLogo.width,
+      height: scaledLogo.height,
+    });
+  } else {
+    page.drawText("IMOBIFLOW", { x: MARGIN_X, y: PAGE_HEIGHT - 72, size: 28, font: fonts.bold, color: WHITE });
+  }
+  page.drawText(`VISTORIA DE ${typeLabel.toUpperCase()}`, { x: MARGIN_X, y: PAGE_HEIGHT - 116, size: 17, font: fonts.bold, color: rgb(0.78, 0.64, 1) });
   page.drawText("www.imobiflow.com.br", { x: MARGIN_X, y: PAGE_HEIGHT - 137, size: 9, font: fonts.regular, color: WHITE });
   const dateText = `Realizada em: ${formatDate(input.inspection.completedAt ?? input.inspection.createdAt) ?? "-"}`;
   const dateWidth = fonts.regular.widthOfTextAtSize(dateText, 9);
@@ -490,37 +523,6 @@ function propertyTypeLabel(value: string | null | undefined) {
   if (!value) return null;
   const labels: Record<string, string> = { apartment: "Apartamento", house: "Casa", commercial: "Comercial", land: "Terreno" };
   return labels[value] ?? value;
-}
-
-async function embedCoverLogoIfAny(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  const logo = input.company.logo;
-  const page = builder.pages[0];
-  if (!page) return;
-  if (!logo) {
-    const { bold, regular } = builder.fonts;
-    const title = "IMOBIFLOW";
-    const subtitle = "GESTÃO IMOBILIÁRIA";
-    const tw = bold.widthOfTextAtSize(title, 15);
-    const sw = regular.widthOfTextAtSize(subtitle, 5.8);
-    page.drawText(title, { x: PAGE_WIDTH - MARGIN_X - tw, y: PAGE_HEIGHT - 68, size: 15, font: bold, color: PURPLE });
-    page.drawText(subtitle, { x: PAGE_WIDTH - MARGIN_X - sw, y: PAGE_HEIGHT - 78, size: 5.8, font: regular, color: GRAY });
-    return;
-  }
-  
-  try {
-    const bytes = new Uint8Array(logo.buffer);
-    const image = logo.mimeType === "image/png" ? await builder.doc.embedPng(bytes) : await builder.doc.embedJpg(bytes);
-    const box = 64;
-    const scaled = image.scaleToFit(box, box);
-    page.drawImage(image, {
-      x: PAGE_WIDTH - MARGIN_X - scaled.width,
-      y: PAGE_HEIGHT - 40 - scaled.height,
-      width: scaled.width,
-      height: scaled.height,
-    });
-  } catch {
-    // Logo nao pode ser lido/incorporado - capa segue sem logo, sem quebrar o laudo.
-  }
 }
 
 function buildAddressLine(property: ReportProperty | null): string | null {
@@ -997,9 +999,12 @@ async function drawItemBlock(builder: ReportBuilder, roomName: string, item: Rep
 }
 
 function drawGeneralObservationsSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  if (!input.inspection.notes || !cleanText(input.inspection.notes)) return;
+  if (!input.inspection.notes) return;
+  const interfaceOnlyNotice = "Esta vistoria foi atualizada em outra sessão. Atualizamos os dados para você.";
+  const notes = input.inspection.notes.replace(interfaceOnlyNotice, "").trim();
+  if (!cleanText(notes)) return;
   drawSectionTitle(builder, "Observacoes gerais");
-  drawParagraph(builder, input.inspection.notes);
+  drawParagraph(builder, notes);
   builder.y -= 6;
 }
 
@@ -1034,8 +1039,8 @@ function drawSignatureCard(
 }
 
 async function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  // Página dedicada e previsível: o PDF assinado sobrepõe as assinaturas
-  // online nestes mesmos slots e depois anexa o certificado de auditoria.
+  // Pagina dedicada e previsivel: o PDF assinado sobrepoe as assinaturas
+  // online nestes mesmos slots. Auditoria tecnica permanece somente no banco.
   builder.addPage(true);
   const { page, fonts } = builder;
   page.drawText("ASSINATURAS", { x: MARGIN_X, y: 748, size: 16, font: fonts.bold, color: DARK });
