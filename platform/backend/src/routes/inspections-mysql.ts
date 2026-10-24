@@ -895,6 +895,8 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
   const resolvePrepared = (rows: any[]) =>
     rows.map((row) => reportEvidenceById.get(row.id)).filter((entry): entry is Awaited<ReturnType<typeof toReportEvidence>> => Boolean(entry));
 
+  const generalEvidence = resolvePrepared(evidence.filter((row: any) => !row.roomId && !row.itemId));
+
   const rooms = [];
   for (const room of inspection.rooms ?? []) {
     const generalEvidence = resolvePrepared(evidenceByRoom.get(room.id) ?? []);
@@ -922,6 +924,19 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     } catch {
       warnings.push("Mapa do imóvel indisponível; o endereço textual será mantido no laudo.");
     }
+  }
+
+  let qrImage: { buffer: Buffer; mimeType: string } | null = null;
+  const publicBaseUrl = process.env.PUBLIC_APP_URL || "https://imobiflow-staging.vercel.app";
+  const validationUrl = `${publicBaseUrl.replace(/\/$/, "")}/app/vistorias/${inspection.id}`;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+    const response = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(validationUrl)}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (response.ok) qrImage = { buffer: Buffer.from(await response.arrayBuffer()), mimeType: "image/png" };
+  } catch {
+    warnings.push("QR Code de consulta indisponível nesta geração.");
   }
 
   const input = {
@@ -952,6 +967,9 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     tenantOrBuyer,
     broker,
     generalInfo,
+    generalEvidence,
+    validationUrl,
+    qrImage,
     rooms,
     generatedAt: new Date().toISOString(),
     snapshotHash: snapshotHashValue,
