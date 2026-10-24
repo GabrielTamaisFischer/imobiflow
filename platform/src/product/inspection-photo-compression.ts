@@ -13,10 +13,10 @@
  * - decodificação/codificação usam APIs assíncronas (createImageBitmap,
  *   OffscreenCanvas.convertToBlob / canvas.toBlob) com Blob, sem base64.
  */
-export const INSPECTION_UPLOAD_TARGET_BYTES = 3_000_000;
-export const INSPECTION_PHOTO_MAX_SIDE = 2560;
-export const INSPECTION_PHOTO_MIN_SIDE = 1280;
-const QUALITY_STEPS = [0.88, 0.8, 0.72, 0.64];
+export const INSPECTION_UPLOAD_TARGET_BYTES = 1_200_000;
+export const INSPECTION_PHOTO_MAX_SIDE = 1920;
+export const INSPECTION_PHOTO_MIN_SIDE = 1080;
+const QUALITY_STEPS = [0.82, 0.76, 0.7, 0.64];
 const SIDE_STEP = 0.8;
 
 export type DecodedPhoto = { width: number; height: number; source: unknown; release?: () => void };
