@@ -128,6 +128,13 @@ const GRAY = rgb(0.42, 0.42, 0.46);
 const LIGHT_GRAY = rgb(0.88, 0.88, 0.9);
 const WHITE = rgb(1, 1, 1);
 
+export const SIGNATURE_PAGE_LAYOUT = {
+  owner: { x: 50, topY: 638, width: 232, height: 150 },
+  tenant_buyer: { x: 313, topY: 638, width: 232, height: 150 },
+  responsible: { x: 50, topY: 432, width: 232, height: 150 },
+  witness: { x: 313, topY: 432, width: 232, height: 150 },
+} as const;
+
 const TYPE_LABELS: Record<ReportInspection["type"], string> = { entry: "Entrada", exit: "Saida" };
 const STATUS_LABELS: Record<ReportInspection["status"], string> = {
   draft: "Rascunho",
@@ -359,10 +366,11 @@ export async function buildProfessionalInspectionReport(
   // cima do conteudo da capa na mesma pagina.
   builder.addPage(true);
   drawCompanyAndPropertySection(builder, input);
+  drawInspectionOverviewSection(builder, input);
   drawSummarySection(builder, input);
   drawLegendSection(builder);
-  for (const room of input.rooms) {
-    await drawRoomSection(builder, room, warnings);
+  for (const [roomIndex, room] of input.rooms.entries()) {
+    await drawRoomSection(builder, room, roomIndex, warnings);
   }
   drawGeneralObservationsSection(builder, input);
   drawDeclarationSection(builder, input);
@@ -540,6 +548,44 @@ function drawCompanyAndPropertySection(builder: ReportBuilder, input: BuildProfe
     drawFieldLine(builder, "CRECI", input.broker.creci);
   }
   builder.y -= 6;
+}
+
+function drawInspectionOverviewSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
+  drawSectionTitle(builder, "Apontamentos da vistoria");
+  drawParagraph(
+    builder,
+    "Este laudo registra o estado aparente de conservacao e funcionamento dos ambientes e itens observados na data da vistoria, com base nos registros, observacoes e evidencias fotograficas inseridos no ImobiFlow. A vistoria e predominantemente visual e nao substitui avaliacao tecnica especializada de estrutura, instalacoes ocultas ou vicios nao aparentes.",
+    { size: 9, color: GRAY },
+  );
+  builder.y -= 10;
+
+  drawSectionTitle(builder, "Layout do imovel");
+  if (input.rooms.length === 0) {
+    drawParagraph(builder, "Nenhum ambiente registrado nesta vistoria.", { size: 9, color: GRAY });
+    builder.y -= 6;
+    return;
+  }
+
+  const counts = new Map<string, number>();
+  for (const room of input.rooms) counts.set(room.name, (counts.get(room.name) ?? 0) + 1);
+  const entries = [...counts.entries()];
+  const cols = 3;
+  const cellWidth = (CONTENT_WIDTH - GAP * (cols - 1)) / cols;
+  const cellHeight = 30;
+  for (let i = 0; i < entries.length; i += cols) {
+    builder.ensureSpace(cellHeight + 8);
+    entries.slice(i, i + cols).forEach(([name, count], index) => {
+      const x = MARGIN_X + index * (cellWidth + GAP);
+      const y = builder.y - cellHeight;
+      builder.page.drawRectangle({ x, y, width: cellWidth, height: cellHeight, borderColor: LIGHT_GRAY, borderWidth: 0.8, color: WHITE });
+      builder.page.drawText(cleanText(name), { x: x + 8, y: y + 11, size: 8.5, font: builder.fonts.bold, color: DARK });
+      const countText = String(count);
+      const countWidth = builder.fonts.bold.widthOfTextAtSize(countText, 9);
+      builder.page.drawText(countText, { x: x + cellWidth - 8 - countWidth, y: y + 11, size: 9, font: builder.fonts.bold, color: PURPLE });
+    });
+    builder.y -= cellHeight + 8;
+  }
+  builder.y -= 4;
 }
 
 function drawSummarySection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
@@ -816,11 +862,11 @@ async function drawPhotoChunk(builder: ReportBuilder, chunk: PhotoCell[]) {
   }
 }
 
-async function drawRoomSection(builder: ReportBuilder, room: ReportRoom, warnings: string[]) {
+async function drawRoomSection(builder: ReportBuilder, room: ReportRoom, roomIndex: number, warnings: string[]) {
   builder.ensureSpace(40);
   const { fonts } = builder;
   const reviewed = room.items.filter((item) => item.condition !== "not_inspected").length;
-  builder.page.drawText(room.name.toUpperCase(), { x: MARGIN_X, y: builder.y, size: 12, font: fonts.bold, color: PURPLE });
+  builder.page.drawText(`${roomIndex + 1}. ${room.name.toUpperCase()}`, { x: MARGIN_X, y: builder.y, size: 12, font: fonts.bold, color: PURPLE });
   builder.y -= 14;
   builder.page.drawText(`${reviewed} de ${room.items.length} itens revisados`, { x: MARGIN_X, y: builder.y, size: 9, font: fonts.regular, color: GRAY });
   builder.y -= 16;
@@ -839,18 +885,18 @@ async function drawRoomSection(builder: ReportBuilder, room: ReportRoom, warning
     await drawPhotoGrid(builder, room.generalEvidence, warnings, `${room.name} (geral)`);
   }
 
-  for (const item of room.items) {
-    await drawItemBlock(builder, room.name, item, warnings);
+  for (const [itemIndex, item] of room.items.entries()) {
+    await drawItemBlock(builder, room.name, item, roomIndex, itemIndex, warnings);
   }
 
   builder.y -= 8;
 }
 
-async function drawItemBlock(builder: ReportBuilder, roomName: string, item: ReportItem, warnings: string[]) {
+async function drawItemBlock(builder: ReportBuilder, roomName: string, item: ReportItem, roomIndex: number, itemIndex: number, warnings: string[]) {
   const display = conditionDisplay(item.condition);
   builder.ensureSpace(32 + estimateFirstPhotoRowHeight(item.evidence.length));
   const { fonts } = builder;
-  builder.page.drawText(item.name, { x: MARGIN_X, y: builder.y, size: 10, font: fonts.bold, color: DARK });
+  builder.page.drawText(`${roomIndex + 1}.${itemIndex + 1}. ${item.name}`, { x: MARGIN_X, y: builder.y, size: 10, font: fonts.bold, color: DARK });
 
   const badgeColor = (display.bucket && CONDITION_COLOR[display.bucket]) ?? GRAY;
   const badgeLabel = display.label;
@@ -889,38 +935,49 @@ function drawDeclarationSection(builder: ReportBuilder, input: BuildProfessional
   builder.y -= 10;
 }
 
-function drawSignatureBlock(builder: ReportBuilder, title: string, fields: Array<[string, string | null]>) {
-  // Sub-bloco 5C - inspecao visual mostrou as 4 assinaturas cabendo
-  // confortavelmente em uma unica pagina, mas com pouco espaco em branco
-  // acima da linha para a caneta de fato assinar (30pt). Como sobra espaco
-  // de sobra na pagina, aumentamos a reserva acima da linha para um espaco
-  // de assinatura mais realista, sem comprimir os 4 blocos.
-  builder.ensureSpace(104);
-  const { fonts } = builder;
-  builder.page.drawText(title.toUpperCase(), { x: MARGIN_X, y: builder.y, size: 9.5, font: fonts.bold, color: DARK });
-  builder.y -= 44;
-  builder.page.drawLine({ start: { x: MARGIN_X, y: builder.y }, end: { x: MARGIN_X + 280, y: builder.y }, thickness: 1, color: DARK });
-  builder.y -= 16;
-  for (const [label, value] of fields) {
-    builder.ensureSpace(14);
-    builder.page.drawText(`${label}:${value ? ` ${cleanText(value)}` : ""}`, { x: MARGIN_X, y: builder.y, size: 9, font: fonts.regular, color: DARK });
-    builder.y -= 14;
-  }
-  builder.y -= 10;
+function drawSignatureCard(
+  builder: ReportBuilder,
+  slot: { x: number; topY: number; width: number; height: number },
+  title: string,
+  name: string | null,
+  secondaryLabel: string,
+  secondaryValue: string | null,
+) {
+  const { page, fonts } = builder;
+  const bottomY = slot.topY - slot.height;
+  page.drawRectangle({ x: slot.x, y: bottomY, width: slot.width, height: slot.height, borderColor: LIGHT_GRAY, borderWidth: 1, color: WHITE });
+  page.drawRectangle({ x: slot.x, y: slot.topY - 30, width: slot.width, height: 30, color: rgb(0.965, 0.965, 0.975) });
+  page.drawText(title.toUpperCase(), { x: slot.x + 12, y: slot.topY - 19, size: 9, font: fonts.bold, color: DARK });
+
+  const lineY = slot.topY - 98;
+  page.drawLine({ start: { x: slot.x + 12, y: lineY }, end: { x: slot.x + slot.width - 12, y: lineY }, thickness: 0.8, color: DARK });
+  page.drawText(`Nome: ${name ? cleanText(name) : ""}`, { x: slot.x + 12, y: lineY - 18, size: 8.5, font: fonts.regular, color: DARK });
+  page.drawText(`${secondaryLabel}: ${secondaryValue ? cleanText(secondaryValue) : ""}`, { x: slot.x + 12, y: lineY - 33, size: 8.5, font: fonts.regular, color: DARK });
 }
 
 function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  drawSectionTitle(builder, "Assinaturas");
+  // Página dedicada e previsível: o PDF assinado sobrepõe as assinaturas
+  // online nestes mesmos slots e depois anexa o certificado de auditoria.
+  builder.addPage(true);
+  const { page, fonts } = builder;
+  page.drawText("ASSINATURAS", { x: MARGIN_X, y: 748, size: 16, font: fonts.bold, color: DARK });
+  page.drawText("Assinaturas das partes e responsáveis vinculados a este laudo.", { x: MARGIN_X, y: 728, size: 9, font: fonts.regular, color: GRAY });
 
-  const cityGuess = input.property?.city ?? null;
-  builder.ensureSpace(20);
-  builder.page.drawText(`Local: ${cityGuess ? cleanText(cityGuess) : "________________________"}`, { x: MARGIN_X, y: builder.y, size: 9.5, font: builder.fonts.regular, color: DARK });
-  builder.y -= 16;
-  builder.page.drawText("Data: ____ / ____ / ______", { x: MARGIN_X, y: builder.y, size: 9.5, font: builder.fonts.regular, color: DARK });
-  builder.y -= 24;
+  const location = input.property?.city
+    ? [cleanText(input.property.city), input.property.state ? cleanText(input.property.state) : null].filter(Boolean).join(" / ")
+    : "________________________________";
+  const date = formatDate(input.inspection.completedAt ?? input.generatedAt) ?? "____ / ____ / ______";
 
-  drawSignatureBlock(builder, "Proprietario", [["Nome", input.owner?.name ?? null], ["CPF", null]]);
-  drawSignatureBlock(builder, "Inquilino / Comprador", [["Nome", input.tenantOrBuyer?.name ?? null], ["CPF", null]]);
-  drawSignatureBlock(builder, "Responsavel pela vistoria", [["Nome", input.broker?.name ?? null], ["CRECI", input.broker?.creci ?? null]]);
-  drawSignatureBlock(builder, "Testemunha / Representante", [["Nome", null], ["CPF", null]]);
+  page.drawText(`Local: ${location}`, { x: MARGIN_X, y: 696, size: 9.5, font: fonts.bold, color: DARK });
+  page.drawText(`Data do laudo: ${date}`, { x: 330, y: 696, size: 9.5, font: fonts.bold, color: DARK });
+
+  drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.owner, "Proprietário", input.owner?.name ?? null, "CPF", maskDocument(input.owner?.document ?? null));
+  drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.tenant_buyer, "Inquilino / Comprador", input.tenantOrBuyer?.name ?? null, "CPF", maskDocument(input.tenantOrBuyer?.document ?? null));
+  drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.responsible, "Responsável pela vistoria", input.broker?.name ?? null, "CRECI", input.broker?.creci ?? null);
+  drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.witness, "Testemunha / Representante", null, "CPF", null);
+
+  page.drawText("Quando a assinatura for realizada pela Assinatura Online do ImobiFlow, a imagem e a data/hora serão incorporadas automaticamente neste quadro no PDF final.", {
+    x: MARGIN_X, y: 226, size: 8, font: fonts.regular, color: GRAY,
+  });
 }
+
