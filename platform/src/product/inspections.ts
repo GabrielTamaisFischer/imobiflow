@@ -334,7 +334,7 @@ export async function deleteMysqlInspectionEvidence(inspectionId: string, eviden
 
 export async function generateMysqlInspectionReport(inspectionId: string, regenerate = false) {
   if (isOfflineRuntime()) throw Object.assign(new Error("Gerar laudo exige conexão."), { code: "OFFLINE_REPORT_UNSUPPORTED" });
-  return apiRequest<{ report: MysqlInspectionArtifact; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/report`, { method: "POST", headers: idempotencyKey(`${inspectionId}:report:${regenerate ? crypto.randomUUID() : "latest"}`), body: JSON.stringify({ regenerate }), token: mysqlToken() });
+  return apiRequest<{ report: MysqlInspectionArtifact; replayed?: boolean }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/report`, { method: "POST", headers: idempotencyKey(`${inspectionId}:report:${crypto.randomUUID()}`), body: JSON.stringify({ regenerate }), token: mysqlToken() });
 }
 export async function listMysqlInspectionReports(inspectionId: string) {
   return apiRequest<{ reports: MysqlInspectionArtifact[] }>(`/real-estate/inspections/${encodeURIComponent(inspectionId)}/reports`, { token: mysqlToken() });
