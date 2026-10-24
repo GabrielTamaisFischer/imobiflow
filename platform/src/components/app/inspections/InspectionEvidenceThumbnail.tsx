@@ -40,7 +40,7 @@ export function InspectionEvidenceThumbnail({ entry, index, total, editable, bus
         aria-label={entry.caption || entry.file_name || `Ver foto ${index + 1} de ${total}`}
       >
         {entry.signed_url ? (
-          <img src={entry.signed_url} alt={entry.caption || entry.file_name || "Evidência"} className="h-full w-full object-cover" />
+          <img src={entry.signed_url} alt={entry.caption || entry.file_name || "Evidência"} loading="lazy" decoding="async" fetchPriority={index < 4 ? "high" : "low"} className="h-full w-full object-cover" />
         ) : (
           <div className="flex h-full items-center justify-center p-2 text-center text-xs text-muted-foreground">Prévia indisponível</div>
         )}
