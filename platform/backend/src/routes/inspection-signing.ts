@@ -160,9 +160,17 @@ mysqlInspectionSigningRouter.post("/inspections/:inspectionId/processes", requir
     }
     const input = createProcessSchema.parse(req.body);
 
-    const reportFile = input.report_stored_file_id
+    let reportFile = input.report_stored_file_id
       ? await getPrisma().storedFile.findFirst({ where: { id: input.report_stored_file_id, companyId: access.company.id, purpose: "inspection_report" } })
-      : await getPrisma().storedFile.findFirst({ where: { companyId: access.company.id, entityType: "inspection_report", purpose: "inspection_report" }, orderBy: { createdAt: "desc" } });
+      : null;
+    if (!reportFile) {
+      const recentReports = await getPrisma().storedFile.findMany({
+        where: { companyId: access.company.id, entityType: "inspection_report", purpose: "inspection_report" },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      });
+      reportFile = recentReports.find((file: any) => (file.metadataJson as any)?.inspection_id === inspection.id) ?? null;
+    }
     if (!reportFile || (reportFile.metadataJson as any)?.inspection_id !== inspection.id) {
       throw invalid("Gere o laudo da vistoria antes de enviar para assinatura.", "SIGNING_REPORT_REQUIRED");
     }
@@ -433,8 +441,12 @@ mysqlInspectionSigningRouter.get("/inspections/:inspectionId/signed-report/downl
     const inspection = await findInspectionForSigning(req, String(req.params.inspectionId), "inspections.view");
     const completedProcess = await (getPrisma() as any).inspectionSigningProcess.findFirst({ where: { companyId: access.company.id, inspectionId: inspection.id, status: "completed" }, orderBy: { completedAt: "desc" } });
     if (!completedProcess) throw invalid("Nenhum processo de assinatura concluído para esta vistoria.", "SIGNING_REPORT_NOT_READY");
-    const file = await getPrisma().storedFile.findFirst({ where: { companyId: access.company.id, entityType: "inspection_signing_report", purpose: "inspection_signing_report" }, orderBy: { createdAt: "desc" } });
-    const matching = file && (file.metadataJson as any)?.process_id === completedProcess.id ? file : null;
+    const signedFiles = await getPrisma().storedFile.findMany({
+      where: { companyId: access.company.id, entityType: "inspection_signing_report", purpose: "inspection_signing_report" },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    const matching = signedFiles.find((file: any) => (file.metadataJson as any)?.process_id === completedProcess.id) ?? null;
     if (!matching) throw invalid("O laudo assinado ainda está sendo gerado. Tente novamente em instantes.", "SIGNING_REPORT_NOT_READY");
     const body = await readStoredFileBuffer(matching as any);
     res.setHeader("Content-Type", "application/pdf");
