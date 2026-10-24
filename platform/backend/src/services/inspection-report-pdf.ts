@@ -151,10 +151,10 @@ const LIGHT_GRAY = rgb(0.88, 0.88, 0.9);
 const WHITE = rgb(1, 1, 1);
 
 export const SIGNATURE_PAGE_LAYOUT = {
-  owner: { x: 50, topY: 638, width: 232, height: 150 },
-  tenant_buyer: { x: 313, topY: 638, width: 232, height: 150 },
-  responsible: { x: 50, topY: 432, width: 232, height: 150 },
-  witness: { x: 313, topY: 432, width: 232, height: 150 },
+  owner: { x: 50, topY: 638, width: 232, height: 160 },
+  tenant_buyer: { x: 313, topY: 638, width: 232, height: 160 },
+  responsible: { x: 50, topY: 432, width: 232, height: 160 },
+  witness: { x: 313, topY: 432, width: 232, height: 160 },
 } as const;
 
 const TYPE_LABELS: Record<ReportInspection["type"], string> = { entry: "Entrada", exit: "Saida" };
@@ -1065,10 +1065,8 @@ async function drawSignatureSection(builder: ReportBuilder, input: BuildProfessi
   drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.responsible, "Responsável pela vistoria", input.broker?.name ?? null, "CRECI", input.broker?.creci ?? null);
   drawSignatureCard(builder, SIGNATURE_PAGE_LAYOUT.witness, "Testemunha / Representante", null, "CPF", null);
 
-  page.drawText("Quando a assinatura for realizada pela Assinatura Online do ImobiFlow, a imagem e a data/hora serão incorporadas automaticamente neste quadro no PDF final.", {
-    x: MARGIN_X, y: 226, size: 8, font: fonts.regular, color: GRAY,
-  });
-  page.drawText("Consulte a versão digital vinculada à vistoria:", { x: MARGIN_X, y: 202, size: 7.8, font: fonts.bold, color: DARK });
+  page.drawText("VALIDAÇÃO DIGITAL", { x: MARGIN_X, y: 216, size: 8, font: fonts.bold, color: DARK });
+  page.drawText("Consulte a versão digital vinculada à vistoria pelo QR Code ou endereço abaixo.", { x: MARGIN_X, y: 202, size: 7.8, font: fonts.regular, color: GRAY });
   page.drawText(input.validationUrl, { x: MARGIN_X, y: 188, size: 7, font: fonts.regular, color: PURPLE });
   if (input.qrImage) {
     try {
