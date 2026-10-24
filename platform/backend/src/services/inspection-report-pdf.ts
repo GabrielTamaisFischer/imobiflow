@@ -311,15 +311,17 @@ class ReportBuilder {
   y = 0;
   headerLabel: string;
   inspectionCode: string;
+  headerDate: string;
   internalPageCount = 0;
   imageOptions: OptimizeOptions;
   brandLogo: PDFImage | null;
 
-  constructor(doc: PDFDocument, fonts: Fonts, headerLabel: string, inspectionCode: string, brandLogo: PDFImage | null, imageOptions: OptimizeOptions = {}) {
+  constructor(doc: PDFDocument, fonts: Fonts, headerLabel: string, inspectionCode: string, headerDate: string, brandLogo: PDFImage | null, imageOptions: OptimizeOptions = {}) {
     this.doc = doc;
     this.fonts = fonts;
     this.headerLabel = headerLabel;
     this.inspectionCode = inspectionCode;
+    this.headerDate = headerDate;
     this.brandLogo = brandLogo;
     this.imageOptions = imageOptions;
   }
@@ -350,9 +352,12 @@ class ReportBuilder {
     } else {
       this.page.drawText("ImobiFlow", { x: MARGIN_X, y: PAGE_HEIGHT - 33, size: 12, font: bold, color: WHITE });
     }
-    const label = this.headerLabel;
-    const width = regular.widthOfTextAtSize(label, 9);
-    this.page.drawText(label, { x: PAGE_WIDTH - MARGIN_X - width, y: PAGE_HEIGHT - 32, size: 9, font: regular, color: WHITE });
+    const title = "LAUDO DE VISTORIA";
+    const titleWidth = bold.widthOfTextAtSize(title, 9);
+    this.page.drawText(title, { x: PAGE_WIDTH - MARGIN_X - titleWidth, y: PAGE_HEIGHT - 25, size: 9, font: bold, color: WHITE });
+    const detail = `#VIS-${this.inspectionCode.toUpperCase()}  |  ${this.headerDate}`;
+    const detailWidth = regular.widthOfTextAtSize(detail, 7);
+    this.page.drawText(detail, { x: PAGE_WIDTH - MARGIN_X - detailWidth, y: PAGE_HEIGHT - 39, size: 7, font: regular, color: rgb(0.82, 0.82, 0.88) });
     this.y = PAGE_HEIGHT - 74;
   }
 
@@ -407,7 +412,8 @@ export async function buildProfessionalInspectionReport(
 
   const propertyLabel = input.property?.code ? `Imovel #${input.property.code}` : "Imovel";
   const inspectionShortId = input.inspection.id.slice(0, 8);
-  const builder = new ReportBuilder(doc, fonts, propertyLabel, inspectionShortId, brandLogo, input.imageOptimization);
+  const headerDate = formatDate(input.inspection.completedAt ?? input.inspection.createdAt) ?? "-";
+  const builder = new ReportBuilder(doc, fonts, propertyLabel, inspectionShortId, headerDate, brandLogo, input.imageOptimization);
 
   await drawCoverPage(builder, input, warnings);
   builder.addPage(true);
