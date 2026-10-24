@@ -128,11 +128,21 @@ function serializeParty(party: any) {
   };
 }
 
-function serializeProcess(process: any) {
+async function latestInspectionReportStoredFileId(companyId: string, inspectionId: string) {
+  const recentReports = await getPrisma().storedFile.findMany({
+    where: { companyId, entityType: "inspection_report", purpose: "inspection_report" },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
+  return recentReports.find((file: any) => (file.metadataJson as any)?.inspection_id === inspectionId)?.id ?? null;
+}
+
+function serializeProcess(process: any, currentReportStoredFileId: string | null = null) {
   return {
     id: process.id,
     inspection_id: process.inspectionId,
     report_stored_file_id: process.reportStoredFileId,
+    is_current_report: Boolean(currentReportStoredFileId) && process.reportStoredFileId === currentReportStoredFileId,
     document_hash: process.documentHash,
     status: process.status,
     progress_label: signingProgressLabel(process.parties),
@@ -257,7 +267,7 @@ mysqlInspectionSigningRouter.post("/inspections/:inspectionId/processes", requir
     await logSigningEvent(access.company.id, processId, "process_created", { metadata: { report_stored_file_id: reportFile.id, document_hash: documentHash, signer_count: createdProcess.parties.length } });
 
     const refreshed = await findProcessForCompany(access.company.id, processId);
-    const dto = serializeProcess(refreshed);
+    const dto = serializeProcess(refreshed, reportFile.id);
     dto.parties = dto.parties.map((party: any) => ({ ...party, link_token: rawTokensByPartyId.get(party.id) ?? null }));
     res.status(201).json({ process: dto });
   } catch (error) {
@@ -269,12 +279,15 @@ mysqlInspectionSigningRouter.get("/inspections/:inspectionId/processes", require
   try {
     const access = req.access!;
     const inspection = await findInspectionForSigning(req, String(req.params.inspectionId), "inspections.view");
-    const processes = await (getPrisma() as any).inspectionSigningProcess.findMany({
-      where: { companyId: access.company.id, inspectionId: inspection.id },
-      include: { parties: true },
-      orderBy: { createdAt: "desc" },
-    });
-    res.json({ processes: processes.map(serializeProcess) });
+    const [processes, currentReportStoredFileId] = await Promise.all([
+      (getPrisma() as any).inspectionSigningProcess.findMany({
+        where: { companyId: access.company.id, inspectionId: inspection.id },
+        include: { parties: true },
+        orderBy: { createdAt: "desc" },
+      }),
+      latestInspectionReportStoredFileId(access.company.id, inspection.id),
+    ]);
+    res.json({ processes: processes.map((process: any) => serializeProcess(process, currentReportStoredFileId)) });
   } catch (error) {
     next(error);
   }
@@ -283,7 +296,8 @@ mysqlInspectionSigningRouter.get("/inspections/:inspectionId/processes", require
 mysqlInspectionSigningRouter.get("/processes/:processId", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const process = await findProcessForCompany(req.access!.company.id, String(req.params.processId));
-    res.json({ process: serializeProcess(process) });
+    const currentReportStoredFileId = await latestInspectionReportStoredFileId(req.access!.company.id, process.inspectionId);
+    res.json({ process: serializeProcess(process, currentReportStoredFileId) });
   } catch (error) {
     next(error);
   }
@@ -439,8 +453,32 @@ mysqlInspectionSigningRouter.get("/inspections/:inspectionId/signed-report/downl
   try {
     const access = req.access!;
     const inspection = await findInspectionForSigning(req, String(req.params.inspectionId), "inspections.view");
-    const completedProcess = await (getPrisma() as any).inspectionSigningProcess.findFirst({ where: { companyId: access.company.id, inspectionId: inspection.id, status: "completed" }, orderBy: { completedAt: "desc" } });
-    if (!completedProcess) throw invalid("Nenhum processo de assinatura concluído para esta vistoria.", "SIGNING_REPORT_NOT_READY");
+    const currentReportStoredFileId = await latestInspectionReportStoredFileId(access.company.id, inspection.id);
+    if (!currentReportStoredFileId) throw invalid("Gere o laudo atual antes de baixar a versão assinada.", "SIGNING_REPORT_NOT_READY");
+
+    const completedProcess = await (getPrisma() as any).inspectionSigningProcess.findFirst({
+      where: {
+        companyId: access.company.id,
+        inspectionId: inspection.id,
+        reportStoredFileId: currentReportStoredFileId,
+        status: "completed",
+      },
+      orderBy: { completedAt: "desc" },
+    });
+    if (!completedProcess) {
+      const olderCompleted = await (getPrisma() as any).inspectionSigningProcess.findFirst({
+        where: { companyId: access.company.id, inspectionId: inspection.id, status: "completed" },
+        orderBy: { completedAt: "desc" },
+      });
+      if (olderCompleted) {
+        throw conflictError(
+          "O laudo atual foi gerado depois das assinaturas existentes. Inicie um novo processo de assinatura para esta versão do PDF.",
+          "SIGNING_REPORT_OUTDATED",
+        );
+      }
+      throw invalid("Nenhum processo de assinatura concluído para o laudo atual.", "SIGNING_REPORT_NOT_READY");
+    }
+
     const signedFiles = await getPrisma().storedFile.findMany({
       where: { companyId: access.company.id, entityType: "inspection_signing_report", purpose: "inspection_signing_report" },
       orderBy: { createdAt: "desc" },
