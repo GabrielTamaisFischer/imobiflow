@@ -765,13 +765,20 @@ function estimateFirstPhotoRowHeight(evidenceCount: number): number {
 async function drawPhotoGrid(builder: ReportBuilder, evidenceList: ReportEvidence[], warnings: string[], contextLabel: string) {
   if (evidenceList.length === 0) return;
   const cells: PhotoCell[] = [];
-  // Sub-bloco 5D-B: processamento sequencial (nao Promise.all) de proposito
-  // - evita decodificar/redimensionar dezenas de fotos pesadas ao mesmo
-  // tempo e manter varias delas na memoria simultaneamente.
-  for (let i = 0; i < evidenceList.length; i += 1) {
-    const evidence = evidenceList[i]!;
-    const cols = resolveCellCols(i, evidenceList.length);
-    cells.push(await prepareEvidenceCell(builder.doc, evidence, warnings, contextLabel, cols, builder.imageOptions));
+  // Processa em pequenos lotes paralelos. Mantém o consumo de memória
+  // controlado, mas evita o custo de Sharp totalmente sequencial quando há
+  // muitas fotos na vistoria.
+  const concurrency = 3;
+  for (let start = 0; start < evidenceList.length; start += concurrency) {
+    const batch = evidenceList.slice(start, start + concurrency);
+    const prepared = await Promise.all(
+      batch.map((evidence, offset) => {
+        const index = start + offset;
+        const cols = resolveCellCols(index, evidenceList.length);
+        return prepareEvidenceCell(builder.doc, evidence, warnings, contextLabel, cols, builder.imageOptions);
+      }),
+    );
+    cells.push(...prepared);
   }
 
   for (let i = 0; i < cells.length; i += 4) {
