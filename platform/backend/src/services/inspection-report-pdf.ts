@@ -18,8 +18,6 @@ import { optimizeEvidenceImage, clearImageOptimizerCache, type OptimizeOptions }
 // Tipos de entrada
 // ---------------------------------------------------------------------------
 
-import { IMOBIFLOW_REPORT_LOGO_JPEG_BASE64 } from "./imobiflow-report-logo.js";
-
 export type ReportCompany = {
   name: string;
   document: string | null;
@@ -373,21 +371,6 @@ class ReportBuilder {
 export async function buildProfessionalInspectionReport(
   input: BuildProfessionalInspectionReportInput,
 ): Promise<BuildProfessionalInspectionReportResult> {
-  // Identidade oficial do ImobiFlow: mesmo quando a empresa ainda não
-  // configurou uma logo própria, o laudo sempre recebe a marca oficial.
-  if (!input.company.logo) {
-    input = {
-      ...input,
-      company: {
-        ...input.company,
-        logo: {
-          buffer: Buffer.from(IMOBIFLOW_REPORT_LOGO_JPEG_BASE64, "base64"),
-          mimeType: "image/jpeg",
-        },
-      },
-    };
-  }
-
   const warnings: string[] = [];
   const doc = await PDFDocument.create();
   doc.setTitle(`Laudo de Vistoria - ${input.inspection.id}`);
@@ -511,9 +494,19 @@ function propertyTypeLabel(value: string | null | undefined) {
 
 async function embedCoverLogoIfAny(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
   const logo = input.company.logo;
-  if (!logo) return;
   const page = builder.pages[0];
   if (!page) return;
+  if (!logo) {
+    const { bold, regular } = builder.fonts;
+    const title = "IMOBIFLOW";
+    const subtitle = "GESTÃO IMOBILIÁRIA";
+    const tw = bold.widthOfTextAtSize(title, 15);
+    const sw = regular.widthOfTextAtSize(subtitle, 5.8);
+    page.drawText(title, { x: PAGE_WIDTH - MARGIN_X - tw, y: PAGE_HEIGHT - 68, size: 15, font: bold, color: PURPLE });
+    page.drawText(subtitle, { x: PAGE_WIDTH - MARGIN_X - sw, y: PAGE_HEIGHT - 78, size: 5.8, font: regular, color: GRAY });
+    return;
+  }
+  
   try {
     const bytes = new Uint8Array(logo.buffer);
     const image = logo.mimeType === "image/png" ? await builder.doc.embedPng(bytes) : await builder.doc.embedJpg(bytes);
