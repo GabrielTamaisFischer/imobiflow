@@ -546,7 +546,25 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
   // no mesmo tick (duplo toque) disparavam varios POSTs de laudo.
   const inFlight = useRef(false);
   async function exclusive(run: () => Promise<void>) { if (inFlight.current) return; inFlight.current = true; setBusy(true); try { await run(); } finally { inFlight.current = false; setBusy(false); } }
-  async function generate() { await exclusive(async () => { try { const result = await generateMysqlInspectionReport(inspection.id); setReport(result.report); } catch (error) { onError(error); } }); }
+  async function generate() {
+    await exclusive(async () => {
+      try {
+        const result = await generateMysqlInspectionReport(inspection.id);
+        setReport(result.report);
+        const { blob, fileName } = await downloadMysqlInspectionReport(inspection.id);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        onError(error);
+      }
+    });
+  }
   // Sub-bloco 5B - download real do laudo (bytes autenticados), nao mais um
   // link para signed_url (que e null hoje para os providers Local/R2). A
   // trava `downloading` evita duplo clique disparando dois downloads.
