@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { Loader2, Save } from "lucide-react";
+import { InspectionEvidenceGallery } from "./InspectionEvidenceGallery";
 import {
   getMysqlInspectionGeneralInfo,
   updateMysqlInspectionGeneralInfo,
   type MysqlInspection,
   type MysqlInspectionGeneralInfo,
+  type InspectionEvidenceRow,
+  uploadMysqlInspectionEvidence,
+  deleteMysqlInspectionEvidence,
+  patchMysqlInspectionEvidence,
+  getMysqlInspection,
 } from "@/product/inspections";
 import { getSafeApiErrorMessage } from "@/product/app-access";
 
@@ -22,6 +28,9 @@ type Props = {
   editable: boolean;
   onInspectionChanged: (inspection: MysqlInspection) => void;
   onError: (message: string) => void;
+  evidence: InspectionEvidenceRow[];
+  evidenceLoading: boolean;
+  onEvidenceRefresh: () => Promise<void>;
 };
 
 function BooleanSelect({ value, onChange, disabled }: { value: boolean | null | undefined; onChange: (value: boolean | null) => void; disabled: boolean }) {
@@ -42,7 +51,7 @@ function TextField({ label, value, onChange, disabled, type = "text" }: { label:
   );
 }
 
-export function InspectionGeneralInfoSection({ inspection, editable, onInspectionChanged, onError }: Props) {
+export function InspectionGeneralInfoSection({ inspection, editable, onInspectionChanged, onError, evidence, evidenceLoading, onEvidenceRefresh }: Props) {
   const [info, setInfo] = useState<MysqlInspectionGeneralInfo>(emptyInfo);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -56,6 +65,60 @@ export function InspectionGeneralInfoSection({ inspection, editable, onInspectio
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [inspection.id]);
+
+  const generalEvidence = evidence.filter((row) => !row.room_id && !row.item_id);
+
+  async function uploadGeneralEvidence(files: File[]) {
+    if (!editable || files.length === 0) return;
+    setSaving(true);
+    try {
+      for (const [index, file] of files.entries()) {
+        await uploadMysqlInspectionEvidence(inspection.id, {
+          file,
+          room_id: null,
+          item_id: null,
+          caption: "Informações gerais",
+          position: generalEvidence.length + index,
+        });
+      }
+      const refreshed = await getMysqlInspection(inspection.id);
+      onInspectionChanged(refreshed.inspection);
+      await onEvidenceRefresh();
+    } catch (error) {
+      onError(getSafeApiErrorMessage(error, "Não foi possível adicionar as fotos gerais."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeGeneralEvidence(entry: InspectionEvidenceRow) {
+    if (!editable) return;
+    setSaving(true);
+    try {
+      const fresh = await getMysqlInspection(inspection.id);
+      await deleteMysqlInspectionEvidence(inspection.id, entry.id, fresh.inspection.version);
+      const refreshed = await getMysqlInspection(inspection.id);
+      onInspectionChanged(refreshed.inspection);
+      await onEvidenceRefresh();
+    } catch (error) {
+      onError(getSafeApiErrorMessage(error, "Não foi possível remover a foto."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveCaption(entry: InspectionEvidenceRow, caption: string) {
+    if (!editable) return;
+    try {
+      const fresh = await getMysqlInspection(inspection.id);
+      await patchMysqlInspectionEvidence(inspection.id, entry.id, { expected_version: fresh.inspection.version, caption });
+      const refreshed = await getMysqlInspection(inspection.id);
+      onInspectionChanged(refreshed.inspection);
+      await onEvidenceRefresh();
+    } catch (error) {
+      onError(getSafeApiErrorMessage(error, "Não foi possível salvar a legenda."));
+    }
+  }
 
   async function save() {
     if (!editable || saving) return;
@@ -107,6 +170,25 @@ export function InspectionGeneralInfoSection({ inspection, editable, onInspectio
       </div></div>
 
       <div className="space-y-2"><h3 className="font-semibold">Dependências e observações gerais</h3><textarea rows={4} value={info.dependencies.notes ?? ""} onChange={(event) => setInfo((current) => ({ ...current, dependencies: { notes: event.target.value || null } }))} disabled={!editable} placeholder="Ex.: vistoria acompanhada pelo corretor; chaves retiradas e devolvidas no local..." className="w-full rounded-md border border-input bg-background p-3 text-sm" /></div>
+
+      <div className="space-y-2">
+        <h3 className="font-semibold">Fotos gerais, chaves e medidores</h3>
+        <p className="text-xs text-muted-foreground">Use a câmera contínua para registrar chaves, medidores, quadro de energia, acessos e demais evidências gerais.</p>
+        <InspectionEvidenceGallery
+          rows={generalEvidence}
+          loading={evidenceLoading}
+          editable={editable}
+          isCaptionEditable={() => editable}
+          busy={saving}
+          contextLabel="Informações gerais"
+          emptyLabel="Nenhuma foto geral registrada."
+          onUpload={(files) => void uploadGeneralEvidence(files)}
+          onMove={() => {}}
+          onRemove={(entry) => void removeGeneralEvidence(entry)}
+          onRetry={() => void onEvidenceRefresh()}
+          onCaptionSave={(entry, caption) => void saveCaption(entry, caption)}
+        />
+      </div>
 
       {editable ? <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Salvar informações gerais</button> : null}
     </section>
