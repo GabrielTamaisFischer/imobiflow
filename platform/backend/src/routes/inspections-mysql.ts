@@ -58,6 +58,22 @@ const roomSchema = z.object({
 });
 const roomPatchSchema = roomSchema.omit({ id: true }).partial({ name: true, position: true, notes: true }).extend({ expected_version: z.number().int().positive() })
   .refine((input) => input.name !== undefined || input.position !== undefined || input.notes !== undefined, { message: "Informe ao menos um campo para atualizar." });
+const roomBatchSchema = z.object({
+  expected_version: z.number().int().positive(),
+  rooms: z.array(z.object({
+    id: z.string().uuid(),
+    name: z.string().trim().min(1).max(140),
+    position: z.number().int().min(0).max(9999),
+    notes: z.string().trim().max(12000).optional().nullable(),
+    items: z.array(z.object({
+      id: z.string().uuid(),
+      name: z.string().trim().min(1).max(160),
+      condition: z.enum(itemConditions).default("not_inspected"),
+      position: z.number().int().min(0).max(9999),
+      notes: z.string().trim().max(12000).optional().nullable(),
+    })).max(100),
+  })).min(1).max(50),
+});
 const itemSchema = z.object({
   id: z.string().uuid(),
   expected_version: z.number().int().positive(),
@@ -539,6 +555,60 @@ mysqlInspectionsRouter.delete("/:id", requirePermission("inspections.manage"), a
     }
 
     res.json({ ok: true, deleted_id: inspection.id, storage_cleanup_pending: storageCleanupPending });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.post("/:id/rooms/batch", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = roomBatchSchema.parse(req.body);
+    const access = req.access!;
+    const companyId = access.company.id;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    ensureMutable(inspection, access);
+
+    const updated = await getPrisma().$transaction(async (tx) => {
+      // Uma única checagem/bump de versão para todo o lote. Antes, o frontend
+      // fazia dezenas de requests sequenciais e ficava visualmente preso até
+      // um F5 quando alguma chamada demorava/conflitava.
+      await bumpVersion(tx, inspection.id, companyId, input.expected_version);
+
+      for (const roomInput of input.rooms) {
+        const room = await tx.inspectionRoom.create({
+          data: {
+            id: roomInput.id,
+            companyId,
+            inspectionId: inspection.id,
+            name: roomInput.name,
+            position: roomInput.position,
+            notes: roomInput.notes ?? null,
+          },
+        });
+
+        for (const itemInput of roomInput.items) {
+          await tx.inspectionItem.create({
+            data: {
+              id: itemInput.id,
+              companyId,
+              roomId: room.id,
+              name: itemInput.name,
+              condition: itemInput.condition,
+              position: itemInput.position,
+              notes: itemInput.notes ?? null,
+            },
+          });
+        }
+      }
+
+      await event(tx, companyId, inspection.id, access.appUser.id, "inspection.rooms_batch_added", {
+        room_count: input.rooms.length,
+        item_count: input.rooms.reduce((total, room) => total + room.items.length, 0),
+      });
+
+      const row = await tx.inspection.findUniqueOrThrow({ where: { id: inspection.id }, include: inspectionInclude });
+      return serializeInspection(row);
+    });
+
+    res.status(201).json({ inspection: updated });
   } catch (error) { next(error); }
 });
 
