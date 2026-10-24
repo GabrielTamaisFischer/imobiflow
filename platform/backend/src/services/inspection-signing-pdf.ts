@@ -35,7 +35,7 @@ export type BuildSignedInspectionCertificateInput = {
   baseReportBytes: Buffer;
   documentHash: string;
   generatedAt: string; // ISO
-  signatureLocation: string | null;
+  signatureLocation?: string | null;
   signers: SignedReportSigner[];
 };
 
