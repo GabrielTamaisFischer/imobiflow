@@ -49,6 +49,45 @@ const patchInspectionSchema = z.object({
 }).refine((input) => input.assigned_user_id !== undefined || input.notes !== undefined || input.status !== undefined, {
   message: "Informe ao menos um campo para atualizar.",
 });
+
+const nullableShortText = z.string().trim().max(500).nullable().optional();
+const nullableLongText = z.string().trim().max(12000).nullable().optional();
+const nullableBoolean = z.boolean().nullable().optional();
+const inspectionGeneralInfoSchema = z.object({
+  keys: z.object({
+    type: nullableShortText,
+    quantity: z.number().int().min(0).max(999).nullable().optional(),
+    entry_location: nullableShortText,
+  }).default({}),
+  cleaning: z.object({
+    description: nullableLongText,
+  }).default({}),
+  energy: z.object({
+    supply_description: nullableShortText,
+    sharing: nullableShortText,
+    breakers_on: nullableBoolean,
+    reading: nullableShortText,
+  }).default({}),
+  gas: z.object({
+    registers_closed: nullableBoolean,
+    supply_description: nullableShortText,
+    sharing: nullableShortText,
+    reading: nullableShortText,
+  }).default({}),
+  water: z.object({
+    registers_closed: nullableBoolean,
+    supply_description: nullableShortText,
+    sharing: nullableShortText,
+    reading: nullableShortText,
+  }).default({}),
+  dependencies: z.object({
+    notes: nullableLongText,
+  }).default({}),
+});
+const inspectionGeneralInfoUpdateSchema = z.object({
+  expected_version: z.number().int().positive(),
+  general_info: inspectionGeneralInfoSchema,
+});
 const roomSchema = z.object({
   id: z.string().uuid(),
   expected_version: z.number().int().positive(),
@@ -121,6 +160,18 @@ function conflict() {
 function notFound() {
   return Object.assign(new Error("Vistoria não encontrada."), { statusCode: 404, code: "INSPECTION_NOT_FOUND" });
 }
+async function latestInspectionGeneralInfo(companyId: string, inspectionId: string) {
+  const row = await getPrisma().inspectionEvent.findFirst({
+    where: { companyId, inspectionId, eventType: "inspection.general_info_updated" },
+    orderBy: { createdAt: "desc" },
+    select: { metadataJson: true },
+  });
+  const metadata = row?.metadataJson as any;
+  return metadata?.general_info ?? {
+    keys: {}, cleaning: {}, energy: {}, gas: {}, water: {}, dependencies: {},
+  };
+}
+
 function serializeInspection(inspection: any) {
   return {
     id: inspection.id,
@@ -356,6 +407,30 @@ mysqlInspectionsRouter.post("/", requirePermission("inspections.manage"), async 
 
 mysqlInspectionsRouter.get("/:id", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
   try { res.json({ inspection: serializeInspection(await findInspection(req, String(req.params.id), "inspections.view")) }); } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.get("/:id/general-info", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    res.json({ general_info: await latestInspectionGeneralInfo(req.access!.company.id, inspection.id) });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.put("/:id/general-info", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const input = inspectionGeneralInfoUpdateSchema.parse(req.body);
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    ensureMutable(inspection, access);
+    const updated = await getPrisma().$transaction(async (tx) => {
+      await bumpVersion(tx, inspection.id, access.company.id, input.expected_version);
+      await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.general_info_updated", {
+        general_info: input.general_info,
+      });
+      return tx.inspection.findUniqueOrThrow({ where: { id: inspection.id }, include: inspectionInclude });
+    });
+    res.json({ inspection: serializeInspection(updated), general_info: input.general_info });
+  } catch (error) { next(error); }
 });
 
 // F5E: evidências são armazenadas no pipeline canônico StoredFile/Cloudinary.
@@ -730,8 +805,9 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     safe("imovel", () => prisma.property.findFirst({
       where: { id: inspection.propertyId, companyId },
       select: {
-        code: true, title: true, propertyType: true,
+        code: true, title: true, propertyType: true, operation: true,
         street: true, number: true, complement: true, neighborhood: true, city: true, state: true, zipCode: true,
+        latitude: true, longitude: true, primaryDetailsJson: true, featuresJson: true,
         condominiumName: true, privateArea: true, totalArea: true, bedrooms: true, suites: true, bathrooms: true, parkingSpaces: true,
         iptuCents: true, condominiumFeeCents: true, ownerId: true,
       },
@@ -830,6 +906,24 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     rooms.push({ id: room.id, name: room.name, notes: room.notes ?? null, generalEvidence, items });
   }
 
+  const generalInfo = await latestInspectionGeneralInfo(companyId, inspection.id);
+
+  let mapImage: { buffer: Buffer; mimeType: string } | null = null;
+  if (property?.latitude != null && property?.longitude != null) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      const lat = Number(property.latitude).toFixed(6);
+      const lng = Number(property.longitude).toFixed(6);
+      const url = `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=16&size=900x300&markers=${lat},${lng},red-pushpin`;
+      const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "ImobiFlow/1.0 inspection-report" } });
+      clearTimeout(timeout);
+      if (response.ok) mapImage = { buffer: Buffer.from(await response.arrayBuffer()), mimeType: response.headers.get("content-type")?.includes("png") ? "image/png" : "image/jpeg" };
+    } catch {
+      warnings.push("Mapa do imóvel indisponível; o endereço textual será mantido no laudo.");
+    }
+  }
+
   const input = {
     inspection: {
       id: inspection.id, type: inspection.type, status: inspection.status, notes: inspection.notes ?? null,
@@ -841,17 +935,23 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
       : { name: "ImobiFlow", document: null, phone: null, email: null, logo: logoBuffer },
     property: property
       ? {
-          code: property.code ?? null, title: property.title, propertyType: property.propertyType ?? null,
+          code: property.code ?? null, title: property.title, propertyType: property.propertyType ?? null, operation: property.operation ?? null,
           street: property.street ?? null, number: property.number ?? null, complement: property.complement ?? null,
           neighborhood: property.neighborhood ?? null, city: property.city ?? null, state: property.state ?? null, zipCode: property.zipCode ?? null,
+          latitude: property.latitude ?? null, longitude: property.longitude ?? null,
           condominiumName: property.condominiumName ?? null, privateArea: property.privateArea ?? null, totalArea: property.totalArea ?? null,
           bedrooms: property.bedrooms ?? null, suites: property.suites ?? null, bathrooms: property.bathrooms ?? null, parkingSpaces: property.parkingSpaces ?? null,
-          iptuCents: property.iptuCents ?? null, condominiumFeeCents: property.condominiumFeeCents ?? null, coverPhoto: null,
+          iptuCents: property.iptuCents ?? null, condominiumFeeCents: property.condominiumFeeCents ?? null,
+          primaryDetails: (property.primaryDetailsJson as Record<string, unknown> | null) ?? null,
+          features: (property.featuresJson as Record<string, unknown> | null) ?? null,
+          mapImage,
+          coverPhoto: null,
         }
       : null,
     owner: owner ? { name: owner.name, document: owner.document ?? null } : null,
     tenantOrBuyer,
     broker,
+    generalInfo,
     rooms,
     generatedAt: new Date().toISOString(),
     snapshotHash: snapshotHashValue,
