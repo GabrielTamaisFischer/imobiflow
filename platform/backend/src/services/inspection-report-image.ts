@@ -16,8 +16,8 @@ import sharp from "sharp";
  * mesmos PDFs de referencia do Sub-bloco 5C/5D-A.
  */
 
-export const DEFAULT_IMAGE_DPI = 150;
-export const DEFAULT_JPEG_QUALITY = 85;
+export const DEFAULT_IMAGE_DPI = 120;
+export const DEFAULT_JPEG_QUALITY = 80;
 
 export type OptimizeTarget = {
   /** Largura do slot onde a foto sera desenhada no PDF, em pontos (1pt = 1/72in). */
@@ -142,7 +142,7 @@ async function runOptimize(
       };
     }
 
-    const bytes = await resized.jpeg({ quality, mozjpeg: true }).toBuffer();
+    const bytes = await resized.jpeg({ quality, mozjpeg: false }).toBuffer();
     const outMeta = await sharp(bytes).metadata();
     return {
       bytes: new Uint8Array(bytes),
