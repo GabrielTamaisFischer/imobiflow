@@ -285,7 +285,6 @@ async function resolveCounterpartyParty(companyId: string, partyId: string) {
       id: partyId,
       companyId,
       status: "active",
-      roles: { some: { role: { in: ["tenant", "buyer"] }, status: "active" } },
     },
     select: {
       id: true,
@@ -426,7 +425,6 @@ mysqlInspectionsRouter.get("/participants/search", requirePermission("inspection
       where: {
         companyId: access.company.id,
         status: "active",
-        roles: { some: { role: { in: ["tenant", "buyer"] }, status: "active" } },
         OR: [
           { name: { contains: search } },
           { taxId: { contains: search } },
@@ -459,7 +457,9 @@ mysqlInspectionsRouter.get("/participants/search", requirePermission("inspection
         email: party.email ?? null,
         phone: party.phone ?? party.whatsapp ?? null,
         address: party.addressJson ?? null,
-        available_roles: party.roles.map((entry) => entry.role).filter((role) => role === "tenant" || role === "buyer"),
+        available_roles: party.roles
+          .map((entry) => entry.role)
+          .filter((role): role is "tenant" | "buyer" => role === "tenant" || role === "buyer"),
       })),
     });
   } catch (error) { next(error); }
