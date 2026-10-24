@@ -35,10 +35,19 @@ describe("F5B Inspection domain lifecycle", () => {
     // foi introduzido. nonAdminAccess simula um cargo sem bypass (corretor),
     // para exercitar a maquina de estados original sem o atalho administrativo.
     const nonAdminAccess = { appUser: { role: "broker" } } as any;
+    const adminAccess = { appUser: { role: "owner" } } as any;
     expect(() => ensureMutable({ status: "completed" }, nonAdminAccess, "archived")).not.toThrow();
     expect(() => ensureMutable({ status: "completed" }, nonAdminAccess)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
     expect(() => ensureMutable({ status: "completed" }, nonAdminAccess, "archived", true)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
     expect(() => ensureMutable({ status: "archived" }, nonAdminAccess, "archived")).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    // F5G — "archived" e terminal para QUALQUER cargo, inclusive owner/admin/
+    // manager: o bypass administrativo cobre apenas correcoes de conteudo,
+    // nunca a tentativa de re-arquivar um registro ja arquivado.
+    expect(() => ensureMutable({ status: "archived" }, adminAccess, "archived")).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    // mas o bypass administrativo continua liberando correcao de conteudo
+    // (sem mudanca de status) em uma vistoria concluida/arquivada.
+    expect(() => ensureMutable({ status: "archived" }, adminAccess)).not.toThrow();
+    expect(() => ensureMutable({ status: "completed" }, adminAccess)).not.toThrow();
   });
 
   it("keeps the structured condition vocabulary bounded", () => {

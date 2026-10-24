@@ -387,9 +387,18 @@ function isAdministrativeInspectionRole(access: AccessContext) {
 }
 
 function ensureMutable(inspection: { status: string }, access: AccessContext, requestedStatus?: string, hasOtherChanges = false) {
+  // F5G (estabilização) — "archived" é terminal para QUALQUER cargo,
+  // inclusive owner/admin/manager: nenhuma role pode re-disparar a
+  // transição para "archived" sobre um registro já arquivado (nextStatus
+  // trata current===requested como no-op e não lança aqui por si só, então
+  // esta checagem precisa vir antes do bypass administrativo, nunca depois).
+  if (inspection.status === "archived" && requestedStatus === "archived") {
+    throw Object.assign(new Error("Vistoria concluída ou arquivada não pode ser alterada."), { statusCode: 409, code: "INSPECTION_NOT_MUTABLE" });
+  }
   // Owner/admin/manager podem corrigir integralmente o conteúdo de uma
   // vistoria já concluída/arquivada. O status continua protegido por
-  // nextStatus(); esta exceção só libera edição de dados/estrutura/evidências.
+  // nextStatus() e pela checagem acima; esta exceção só libera edição de
+  // dados/estrutura/evidências, nunca uma transição de status.
   if (isAdministrativeInspectionRole(access)) return;
   const isArchivingCompleted = inspection.status === "completed" && requestedStatus === "archived" && !hasOtherChanges;
   if (inspection.status === "archived" || (inspection.status === "completed" && !isArchivingCompleted)) {
