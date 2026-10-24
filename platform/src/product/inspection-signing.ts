@@ -21,9 +21,9 @@ export type SigningPartyRole = (typeof SIGNING_PARTY_ROLES)[number];
 
 export const SIGNING_PARTY_ROLE_LABELS: Record<SigningPartyRole, string> = {
   owner: "Proprietário",
-  tenant_buyer: "Locatário/Comprador",
-  responsible: "Responsável",
-  witness: "Testemunha",
+  tenant_buyer: "Inquilino / Comprador",
+  responsible: "Responsável pela vistoria",
+  witness: "Testemunha / Representante",
 };
 
 export type SigningPartyStatus = "pending" | "signed" | "expired" | "revoked";
