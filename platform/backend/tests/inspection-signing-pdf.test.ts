@@ -24,7 +24,9 @@ async function makeBaseReportBytes(): Promise<Buffer> {
 function signer(overrides: Partial<SignedReportSigner> = {}): SignedReportSigner {
   return {
     name: "Maria Silva",
+    role: "owner",
     roleLabel: "Proprietário",
+    document: "12345678901",
     signedAt: "2026-10-23T12:00:00.000Z",
     method: "drawn",
     consentText: "Declaro que li o laudo apresentado e concordo em registrar minha assinatura eletrônica neste documento.",
