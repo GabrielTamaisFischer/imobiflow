@@ -23,6 +23,14 @@ import { prepareInspectionPhotoForUpload } from "./inspection-photo-compression"
 /** Canonical MySQL inspection API (F5C). This deliberately has no preview/local fallback. */
 export type MysqlInspectionCondition = "not_inspected" | "excellent" | "good" | "fair" | "poor" | "damaged" | "not_applicable";
 export type MysqlInspectionStatus = "draft" | "in_progress" | "completed" | "archived";
+export type MysqlInspectionGeneralInfo = {
+  keys: { type?: string | null; quantity?: number | null; entry_location?: string | null };
+  cleaning: { description?: string | null };
+  energy: { supply_description?: string | null; sharing?: string | null; breakers_on?: boolean | null; reading?: string | null };
+  gas: { registers_closed?: boolean | null; supply_description?: string | null; sharing?: string | null; reading?: string | null };
+  water: { registers_closed?: boolean | null; supply_description?: string | null; sharing?: string | null; reading?: string | null };
+  dependencies: { notes?: string | null };
+};
 export type MysqlInspectionItem = { id: string; name: string; condition: MysqlInspectionCondition; position: number; notes: string | null };
 export type MysqlInspectionEvidence = { id: string; inspection_id: string; room_id: string | null; item_id: string | null; file_name: string | null; mime_type: string | null; file_size: number | null; width: number | null; height: number | null; caption: string | null; position: number; created_at: string; signed_url: string | null };
 export type MysqlInspectionRoom = { id: string; name: string; position: number; notes: string | null; items: MysqlInspectionItem[] };
@@ -171,6 +179,18 @@ export async function listMysqlInspections(
   if (options?.property_id) query.set("property_id", options.property_id);
   return apiRequest<MysqlInspectionPage>(`/real-estate/inspections?${query}`, { token: mysqlToken() });
 }
+export async function getMysqlInspectionGeneralInfo(id: string) {
+  return apiRequest<{ general_info: MysqlInspectionGeneralInfo }>(`/real-estate/inspections/${encodeURIComponent(id)}/general-info`, { token: mysqlToken() });
+}
+export async function updateMysqlInspectionGeneralInfo(id: string, expectedVersion: number, generalInfo: MysqlInspectionGeneralInfo) {
+  if (isOfflineRuntime()) throw Object.assign(new Error("Salvar informações gerais exige conexão."), { code: "OFFLINE_GENERAL_INFO_UNSUPPORTED" });
+  return apiRequest<{ inspection: MysqlInspection; general_info: MysqlInspectionGeneralInfo }>(`/real-estate/inspections/${encodeURIComponent(id)}/general-info`, {
+    method: "PUT",
+    body: JSON.stringify({ expected_version: expectedVersion, general_info: generalInfo }),
+    token: mysqlToken(),
+  });
+}
+
 export async function getMysqlInspection(id: string) {
   try {
     const response = await apiRequest<{ inspection: MysqlInspection }>(`/real-estate/inspections/${encodeURIComponent(id)}`, { token: mysqlToken() });
