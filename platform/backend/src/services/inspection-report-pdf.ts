@@ -18,6 +18,8 @@ import { optimizeEvidenceImage, clearImageOptimizerCache, type OptimizeOptions }
 // Tipos de entrada
 // ---------------------------------------------------------------------------
 
+import { IMOBIFLOW_REPORT_LOGO_JPEG_BASE64 } from "./imobiflow-report-logo.js";
+
 export type ReportCompany = {
   name: string;
   document: string | null;
@@ -371,6 +373,21 @@ class ReportBuilder {
 export async function buildProfessionalInspectionReport(
   input: BuildProfessionalInspectionReportInput,
 ): Promise<BuildProfessionalInspectionReportResult> {
+  // Identidade oficial do ImobiFlow: mesmo quando a empresa ainda não
+  // configurou uma logo própria, o laudo sempre recebe a marca oficial.
+  if (!input.company.logo) {
+    input = {
+      ...input,
+      company: {
+        ...input.company,
+        logo: {
+          buffer: Buffer.from(IMOBIFLOW_REPORT_LOGO_JPEG_BASE64, "base64"),
+          mimeType: "image/jpeg",
+        },
+      },
+    };
+  }
+
   const warnings: string[] = [];
   const doc = await PDFDocument.create();
   doc.setTitle(`Laudo de Vistoria - ${input.inspection.id}`);
