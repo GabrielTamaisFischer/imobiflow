@@ -399,7 +399,7 @@ export async function buildProfessionalInspectionReport(
   }
   drawGeneralObservationsSection(builder, input);
   drawDeclarationSection(builder, input);
-  drawSignatureSection(builder, input);
+  await drawSignatureSection(builder, input);
 
   const generatedAtLabel = formatDateTime(input.generatedAt);
   builder.drawFootersAndPageNumbers(inspectionShortId, generatedAtLabel, TYPE_LABELS[input.inspection.type] ?? input.inspection.type, input.property?.code ?? null);
@@ -1023,7 +1023,7 @@ function drawSignatureCard(
   page.drawText(`${secondaryLabel}: ${secondaryValue ? cleanText(secondaryValue) : ""}`, { x: slot.x + 12, y: lineY - 33, size: 8.5, font: fonts.regular, color: DARK });
 }
 
-function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
+async function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
   // Página dedicada e previsível: o PDF assinado sobrepõe as assinaturas
   // online nestes mesmos slots e depois anexa o certificado de auditoria.
   builder.addPage(true);
@@ -1047,13 +1047,17 @@ function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalIn
   page.drawText("Quando a assinatura for realizada pela Assinatura Online do ImobiFlow, a imagem e a data/hora serão incorporadas automaticamente neste quadro no PDF final.", {
     x: MARGIN_X, y: 226, size: 8, font: fonts.regular, color: GRAY,
   });
-  if (input.qrImage) {
-    try {
-      const qr = input.qrImage.mimeType === "image/png" ? builder.doc.embedPng(new Uint8Array(input.qrImage.buffer)) : builder.doc.embedJpg(new Uint8Array(input.qrImage.buffer));
-      // embedPng/embedJpg are async; QR is desenhado na etapa final abaixo via promise resolution não disponível neste helper síncrono.
-    } catch { /* QR opcional */ }
-  }
   page.drawText("Consulte a versão digital vinculada à vistoria:", { x: MARGIN_X, y: 202, size: 7.8, font: fonts.bold, color: DARK });
   page.drawText(input.validationUrl, { x: MARGIN_X, y: 188, size: 7, font: fonts.regular, color: PURPLE });
+  if (input.qrImage) {
+    try {
+      const bytes = new Uint8Array(input.qrImage.buffer);
+      const qr = input.qrImage.mimeType === "image/png" ? await builder.doc.embedPng(bytes) : await builder.doc.embedJpg(bytes);
+      const size = 74;
+      page.drawImage(qr, { x: PAGE_WIDTH - MARGIN_X - size, y: 166, width: size, height: size });
+    } catch {
+      // QR opcional: o link textual permanece disponível.
+    }
+  }
 }
 
