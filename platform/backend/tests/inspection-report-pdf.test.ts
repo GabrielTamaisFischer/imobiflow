@@ -6,6 +6,7 @@ import {
   maskDocument,
   type BuildProfessionalInspectionReportInput,
   type ReportEvidence,
+  type ReportGeneralInfo,
   type ReportItem,
   type ReportRoom,
 } from "../src/services/inspection-report-pdf.js";
@@ -41,6 +42,22 @@ function baseInspection(): BuildProfessionalInspectionReportInput["inspection"] 
   return { id: randomUUID(), type: "entry", status: "completed", notes: null, completedAt: new Date().toISOString(), createdAt: new Date().toISOString() };
 }
 
+// F5-estabilizacao: generalInfo/generalEvidence/validationUrl/qrImage sao
+// campos obrigatorios de BuildProfessionalInspectionReportInput - a rota
+// real (buildReportInput em inspections-mysql.ts) sempre preenche todos
+// eles, nunca undefined (generalInfo default via latestInspectionGeneralInfo
+// e' sempre { keys: {}, cleaning: {}, energy: {}, gas: {}, water: {},
+// dependencies: {} }). O fixture precisa espelhar esse mesmo default para
+// nao reproduzir um cenario que nunca ocorre em produção.
+const EMPTY_GENERAL_INFO: ReportGeneralInfo = {
+  keys: {},
+  cleaning: {},
+  energy: {},
+  gas: {},
+  water: {},
+  dependencies: {},
+};
+
 function minimalInput(overrides: Partial<BuildProfessionalInspectionReportInput> = {}): BuildProfessionalInspectionReportInput {
   return {
     inspection: baseInspection(),
@@ -49,6 +66,10 @@ function minimalInput(overrides: Partial<BuildProfessionalInspectionReportInput>
     owner: null,
     tenantOrBuyer: null,
     broker: null,
+    generalInfo: EMPTY_GENERAL_INFO,
+    generalEvidence: [],
+    validationUrl: "https://imobiflow-staging.vercel.app/app/vistorias/teste",
+    qrImage: null,
     rooms: [],
     generatedAt: new Date().toISOString(),
     snapshotHash: "hash-teste",

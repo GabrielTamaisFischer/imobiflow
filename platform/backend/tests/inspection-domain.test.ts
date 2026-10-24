@@ -30,10 +30,15 @@ describe("F5B Inspection domain lifecycle", () => {
   });
 
   it("allows only an explicit completed to archived transition", () => {
-    expect(() => ensureMutable({ status: "completed" }, "archived")).not.toThrow();
-    expect(() => ensureMutable({ status: "completed" })).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
-    expect(() => ensureMutable({ status: "completed" }, "archived", true)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
-    expect(() => ensureMutable({ status: "archived" }, "archived")).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    // F5-estabilizacao: ensureMutable passou a exigir access (AccessContext)
+    // na 2a posicao desde que o bypass administrativo (owner/admin/manager)
+    // foi introduzido. nonAdminAccess simula um cargo sem bypass (corretor),
+    // para exercitar a maquina de estados original sem o atalho administrativo.
+    const nonAdminAccess = { appUser: { role: "broker" } } as any;
+    expect(() => ensureMutable({ status: "completed" }, nonAdminAccess, "archived")).not.toThrow();
+    expect(() => ensureMutable({ status: "completed" }, nonAdminAccess)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    expect(() => ensureMutable({ status: "completed" }, nonAdminAccess, "archived", true)).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
+    expect(() => ensureMutable({ status: "archived" }, nonAdminAccess, "archived")).toThrow("Vistoria concluída ou arquivada não pode ser alterada");
   });
 
   it("keeps the structured condition vocabulary bounded", () => {
@@ -64,8 +69,8 @@ describe("F5B Inspection domain lifecycle", () => {
 
   it("keeps completed room and item mutations guarded by inspection lifecycle", async () => {
     const source = await readFile(new URL("../src/routes/inspections-mysql.ts", import.meta.url), "utf8");
-    expect(source).toContain('await ensureMutable(inspection);');
-    expect(source).toContain('ensureMutable(existing, status, hasOtherChanges);');
+    expect(source).toContain('ensureMutable(inspection, access);');
+    expect(source).toContain('ensureMutable(existing, access, status, hasOtherChanges);');
   });
 
   it("uses the private StoredFile evidence pipeline with tenant-safe lifecycle guards", async () => {
@@ -74,7 +79,7 @@ describe("F5B Inspection domain lifecycle", () => {
     expect(source).toContain('deliveryAccessForPurpose("inspection_evidence")');
     expect(source).toContain('requirePermission("inspections.view")');
     expect(source).toContain('requirePermission("inspections.manage")');
-    expect(source).toContain('await ensureMutable(inspection);');
+    expect(source).toContain('ensureMutable(inspection, req.access!);');
     expect(source).toContain('where: { id: String(req.params.evidenceId), inspectionId: inspection.id, companyId: access.company.id }');
   });
 
@@ -99,7 +104,13 @@ describe("F5B Inspection domain lifecycle", () => {
     const createSchema = source.slice(source.indexOf("const createInspectionSchema"), source.indexOf("const patchInspectionSchema"));
     expect(createSchema).not.toContain("company_id");
     expect(createSchema).not.toContain("companyId");
-    expect(createSchema).not.toContain("role");
+    // F5-D: counterparty_role e' um campo legitimo do contrato (papel do
+    // inquilino/comprador vinculado via cadastro central); a checagem
+    // original usava uma substring generica de "role" que dava falso-
+    // positivo contra esse campo. O que o teste realmente precisa garantir
+    // e' que nao existe um campo de role de USUARIO/sessao (ex.: role de
+    // permissao do app) sendo aceito no contrato de criacao.
+    expect(createSchema).not.toMatch(/\brole:\s*z\./);
   });
 
   it("records only minimal audit metadata for the canonical inspection events", async () => {

@@ -49,7 +49,12 @@ describe("buildSignedInspectionCertificate", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("acrescenta página(s) de certificado ao final, preservando as páginas originais do laudo", async () => {
+  it("desenha a assinatura na propria pagina de assinaturas do laudo, sem criar pagina de certificado adicional", async () => {
+    // F5-estabilizacao: a arquitetura atual (ver comentario em
+    // inspection-signing-pdf.ts) nunca anexa uma segunda pagina - desenha
+    // diretamente sobre a ultima pagina do laudo (a pagina de assinaturas
+    // profissional). O teste antigo assumia a arquitetura anterior, que
+    // anexava uma pagina de certificado separada.
     const baseReportBytes = await makeBaseReportBytes();
     const basePageCount = (await PDFDocument.load(baseReportBytes)).getPageCount();
 
@@ -61,25 +66,27 @@ describe("buildSignedInspectionCertificate", () => {
     });
 
     const finalDoc = await PDFDocument.load(result.buffer);
-    expect(finalDoc.getPageCount()).toBeGreaterThan(basePageCount);
+    expect(finalDoc.getPageCount()).toBe(basePageCount);
   });
 
-  it("inclui o hash do documento no certificado", async () => {
+  it("aceita o hash do documento como entrada mas nunca o exibe no laudo entregue ao cliente", async () => {
+    // F5-estabilizacao: hash, auditId, metodo e texto de consentimento ficam
+    // armazenados no dominio de assinatura (banco), nunca no PDF entregue -
+    // ver comentario no topo de inspection-signing-pdf.ts.
     const baseReportBytes = await makeBaseReportBytes();
+    const basePageCount = (await PDFDocument.load(baseReportBytes)).getPageCount();
     const hash = "c".repeat(64);
     const result = await buildSignedInspectionCertificate({
       baseReportBytes,
       documentHash: hash,
       generatedAt: "2026-10-23T12:00:00.000Z",
-      signers: [signer()],
+      signers: [signer({ auditId: "audit-hash-check" })],
     });
-    // O conteúdo de texto do PDF não é extraível sem uma lib de parsing de
-    // texto; validamos indiretamente verificando que o PDF final é maior que
-    // o PDF base (nova página com o texto foi de fato desenhada) e que ele
-    // carrega sem erro (pdf-lib valida a estrutura ao fazer load).
     const finalDoc = await PDFDocument.load(result.buffer);
-    expect(finalDoc.getPageCount()).toBeGreaterThanOrEqual(2);
-    expect(result.buffer.length).toBeGreaterThan(baseReportBytes.length);
+    expect(finalDoc.getPageCount()).toBe(basePageCount);
+    const rawText = result.buffer.toString("latin1");
+    expect(rawText).not.toContain(hash);
+    expect(rawText).not.toContain("audit-hash-check");
   });
 
   it("incorpora a imagem de assinatura para PNG", async () => {
@@ -92,7 +99,7 @@ describe("buildSignedInspectionCertificate", () => {
     });
     expect(result.warnings).toEqual([]);
     const finalDoc = await PDFDocument.load(result.buffer);
-    expect(finalDoc.getPageCount()).toBeGreaterThanOrEqual(2);
+    expect(finalDoc.getPageCount()).toBe((await PDFDocument.load(baseReportBytes)).getPageCount());
   });
 
   it("incorpora a imagem de assinatura para JPEG", async () => {
@@ -121,7 +128,7 @@ describe("buildSignedInspectionCertificate", () => {
     });
     expect(result.warnings).toEqual([]);
     const finalDoc = await PDFDocument.load(result.buffer);
-    expect(finalDoc.getPageCount()).toBeGreaterThanOrEqual(2);
+    expect(finalDoc.getPageCount()).toBe((await PDFDocument.load(baseReportBytes)).getPageCount());
   });
 
   it("quando a imagem de assinatura está corrompida, coleta um warning em vez de lançar erro", async () => {
@@ -141,10 +148,17 @@ describe("buildSignedInspectionCertificate", () => {
     expect(result.warnings[0]).toContain("Assinatura Corrompida");
   });
 
-  it("suporta múltiplos signatários, acionando a paginação (ensureSpace) quando o conteúdo excede uma página", async () => {
+  it("suporta os quatro papeis do quadro de assinaturas (proprietario, inquilino/comprador, responsavel, testemunha) sem criar paginas novas", async () => {
+    // F5-estabilizacao: a pagina de assinaturas do laudo tem 4 quadros fixos
+    // (SIGNATURE_PAGE_LAYOUT) - nao ha mais um fluxo dinamico de N
+    // signatarios com paginacao; cada papel ocupa seu proprio quadro na
+    // mesma pagina, sempre.
     const baseReportBytes = await makeBaseReportBytes();
-    const manySigners: SignedReportSigner[] = Array.from({ length: 8 }, (_, index) =>
+    const basePageCount = (await PDFDocument.load(baseReportBytes)).getPageCount();
+    const roles: SignedReportSigner["role"][] = ["owner", "tenant_buyer", "responsible", "witness"];
+    const fourSigners: SignedReportSigner[] = roles.map((role, index) =>
       signer({
+        role,
         name: `Signatário ${index + 1}`,
         auditId: `audit-${index + 1}`,
         signatureImage: index % 2 === 0 ? { buffer: PNG_BYTES, mimeType: "image/png" } : { buffer: JPG_BYTES, mimeType: "image/jpeg" },
@@ -155,18 +169,17 @@ describe("buildSignedInspectionCertificate", () => {
       baseReportBytes,
       documentHash: "1".repeat(64),
       generatedAt: "2026-10-23T12:00:00.000Z",
-      signers: manySigners,
+      signers: fourSigners,
     });
 
     expect(result.warnings).toEqual([]);
     const finalDoc = await PDFDocument.load(result.buffer);
-    // 8 signatários com imagem cada ocupam mais espaço do que uma única
-    // página A4 comporta — a função deve ter criado páginas adicionais.
-    expect(finalDoc.getPageCount()).toBeGreaterThan(2);
+    expect(finalDoc.getPageCount()).toBe(basePageCount);
   });
 
-  it("lida com zero signatários (apenas o cabeçalho do certificado é escrito)", async () => {
+  it("lida com zero signatários (nenhum quadro é alterado, documento permanece igual em páginas)", async () => {
     const baseReportBytes = await makeBaseReportBytes();
+    const basePageCount = (await PDFDocument.load(baseReportBytes)).getPageCount();
     const result = await buildSignedInspectionCertificate({
       baseReportBytes,
       documentHash: "2".repeat(64),
@@ -175,6 +188,6 @@ describe("buildSignedInspectionCertificate", () => {
     });
     expect(result.warnings).toEqual([]);
     const finalDoc = await PDFDocument.load(result.buffer);
-    expect(finalDoc.getPageCount()).toBe(2);
+    expect(finalDoc.getPageCount()).toBe(basePageCount);
   });
 });
