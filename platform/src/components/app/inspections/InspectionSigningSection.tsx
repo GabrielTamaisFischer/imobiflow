@@ -168,6 +168,7 @@ export function InspectionSigningSection({ inspection, canEdit, onError }: Props
   }
 
   const hasCompletedProcess = processes.some((process) => canDownloadSignedReport(process));
+  const hasOutdatedCompletedProcess = processes.some((process) => process.status === "completed" && !process.is_current_report);
 
   return (
     <section className="space-y-3 rounded-lg border border-border bg-card p-4">
@@ -186,6 +187,12 @@ export function InspectionSigningSection({ inspection, canEdit, onError }: Props
         ) : null}
       </div>
 
+      {!loading && !hasCompletedProcess && hasOutdatedCompletedProcess ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          O PDF atual foi gerado depois das assinaturas existentes. As assinaturas antigas continuam preservadas no histórico, mas não valem para esta nova versão do laudo. Inicie um novo processo de assinatura para gerar o laudo assinado com o design atual.
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-muted-foreground">Carregando processos de assinatura...</p>
       ) : processes.length === 0 ? (
@@ -199,7 +206,10 @@ export function InspectionSigningSection({ inspection, canEdit, onError }: Props
                   <p className="text-sm font-semibold">
                     {SIGNING_PROCESS_STATUS_LABELS[process.status]} · {process.progress_label}
                   </p>
-                  <p className="text-xs text-muted-foreground">Iniciado em {formatDate(process.created_at)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Iniciado em {formatDate(process.created_at)}
+                    {!process.is_current_report ? " · Versão anterior do laudo" : " · Laudo atual"}
+                  </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
