@@ -549,9 +549,9 @@ function InspectionF5FActions({ inspection, canEdit, onError }: { inspection: My
   async function generate() {
     await exclusive(async () => {
       try {
-        const result = await generateMysqlInspectionReport(inspection.id);
+        const result = await generateMysqlInspectionReport(inspection.id, true);
         setReport(result.report);
-        const { blob, fileName } = await downloadMysqlInspectionReport(inspection.id);
+        const { blob, fileName } = await downloadMysqlInspectionReport(inspection.id, result.report.id);
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
