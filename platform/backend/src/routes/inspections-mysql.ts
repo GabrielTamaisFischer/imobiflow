@@ -21,8 +21,7 @@ import {
   summarizeComparison,
 } from "../services/inspection-f5f.js";
 import { readStoredFileBuffer } from "../services/storage/read-file.js";
-import { findStoredFileForEntity } from "../services/storage/stored-files.js";
-import { WATERMARK_LOGO_ENTITY_TYPE } from "../services/mysql-real-estate.js";
+import { IMOBIFLOW_REPORT_LOGO } from "../services/imobiflow-report-brand.js";
 import { buildProfessionalInspectionReport, buildReportFileName } from "../services/inspection-report-pdf.js";
 import type { StorageResourceType } from "../services/storage/types.js";
 import type { AccessContext, RequestWithAccess } from "../types/access.js";
@@ -1005,15 +1004,13 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
     ? await safe("proprietario", () => prisma.propertyOwner.findFirst({ where: { id: property.ownerId!, companyId }, select: { name: true, document: true } }))
     : null;
 
-  let logoBuffer: { buffer: Buffer; mimeType: string } | null = null;
-  try {
-    const logo = await findStoredFileForEntity(companyId, WATERMARK_LOGO_ENTITY_TYPE, companyId);
-    if (logo && (logo.mimeType === "image/png" || logo.mimeType === "image/jpeg")) {
-      logoBuffer = { buffer: await readStoredFileBuffer(logo), mimeType: logo.mimeType };
-    }
-  } catch {
-    logoBuffer = null; // logo nunca pode impedir a geracao do laudo
-  }
+  // A marca do laudo e sempre a identidade oficial do ImobiFlow. Ela fica
+  // embarcada no backend para nao depender de logo da imobiliaria, storage
+  // externo ou rede durante a geracao.
+  const logoBuffer = {
+    buffer: Buffer.from(IMOBIFLOW_REPORT_LOGO.buffer),
+    mimeType: IMOBIFLOW_REPORT_LOGO.mimeType,
+  };
 
   let tenantOrBuyer: { name: string; document: string | null; role: "tenant" | "buyer" } | null = null;
   const directCounterparty = await safe("inquilino/comprador vinculado a vistoria", () => latestInspectionCounterparty(companyId, inspection.id));
