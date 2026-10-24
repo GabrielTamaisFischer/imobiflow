@@ -316,7 +316,15 @@ function InspectionDetailPageIntegrated() {
         <InspectionF5FActions inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <InspectionSigningSection inspection={inspection} canEdit={canEdit} onError={handleMutationError} />
         <NotesEditor inspection={inspection} editable={canEditRecord && editMode} onSave={saveNotes} saving={false} />
-        <InspectionGeneralInfoSection inspection={currentInspection} editable={contentEditable} onInspectionChanged={setInspection} onError={setError} />
+        <InspectionGeneralInfoSection
+          inspection={currentInspection}
+          editable={contentEditable}
+          onInspectionChanged={setInspection}
+          onError={setError}
+          evidence={evidenceState.evidence}
+          evidenceLoading={evidenceState.loading}
+          onEvidenceRefresh={evidenceState.refresh}
+        />
 
         {/* SUB-BLOCO 3 — mobile/tablet (<lg): seletor de ambientes em pills,
             workspace central e resumo como accordion. */}
