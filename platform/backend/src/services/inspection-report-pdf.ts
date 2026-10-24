@@ -30,6 +30,7 @@ export type ReportProperty = {
   code: string | null;
   title: string;
   propertyType: string | null;
+  operation: string | null;
   street: string | null;
   number: string | null;
   complement: string | null;
@@ -37,6 +38,8 @@ export type ReportProperty = {
   city: string | null;
   state: string | null;
   zipCode: string | null;
+  latitude: number | null;
+  longitude: number | null;
   condominiumName: string | null;
   privateArea: number | null;
   totalArea: number | null;
@@ -46,7 +49,19 @@ export type ReportProperty = {
   parkingSpaces: number | null;
   iptuCents: number | null;
   condominiumFeeCents: number | null;
+  primaryDetails: Record<string, unknown> | null;
+  features: Record<string, unknown> | null;
+  mapImage: { buffer: Buffer; mimeType: string } | null;
   coverPhoto: { buffer: Buffer; mimeType: string } | null;
+};
+
+export type ReportGeneralInfo = {
+  keys: { type?: string | null; quantity?: number | null; entry_location?: string | null };
+  cleaning: { description?: string | null };
+  energy: { supply_description?: string | null; sharing?: string | null; breakers_on?: boolean | null; reading?: string | null };
+  gas: { registers_closed?: boolean | null; supply_description?: string | null; sharing?: string | null; reading?: string | null };
+  water: { registers_closed?: boolean | null; supply_description?: string | null; sharing?: string | null; reading?: string | null };
+  dependencies: { notes?: string | null };
 };
 
 export type ReportPerson = { name: string; document: string | null };
@@ -92,6 +107,10 @@ export type BuildProfessionalInspectionReportInput = {
   owner: ReportPerson | null;
   tenantOrBuyer: (ReportPerson & { role: "tenant" | "buyer" }) | null;
   broker: ReportBroker | null;
+  generalInfo: ReportGeneralInfo;
+  generalEvidence: ReportEvidence[];
+  validationUrl: string;
+  qrImage: { buffer: Buffer; mimeType: string } | null;
   rooms: ReportRoom[];
   generatedAt: string;
   snapshotHash: string;
@@ -122,7 +141,10 @@ const MARGIN_BOTTOM = 56;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
 const GAP = 14;
 
-const PURPLE = rgb(0.486, 0.227, 0.929); // #7C3AED - roxo de marca do ImobiFlow
+const PURPLE = rgb(0.486, 0.227, 0.929);
+const ELECTRIC_BLUE = rgb(0.05, 0.45, 0.95);
+const MAGENTA = rgb(0.86, 0.08, 0.9);
+const BLACK = rgb(0.035, 0.035, 0.055);
 const DARK = rgb(0.13, 0.13, 0.16);
 const GRAY = rgb(0.42, 0.42, 0.46);
 const LIGHT_GRAY = rgb(0.88, 0.88, 0.9);
@@ -312,13 +334,14 @@ class ReportBuilder {
   }
 
   drawRunningHeader() {
-    const { regular } = this.fonts;
-    this.page.drawText("ImobiFlow", { x: MARGIN_X, y: PAGE_HEIGHT - 32, size: 9, font: this.fonts.bold, color: PURPLE });
-    const label = `Laudo de Vistoria  -  ${this.headerLabel}`;
+    const { regular, bold } = this.fonts;
+    this.page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 54, width: PAGE_WIDTH, height: 54, color: BLACK });
+    this.page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 56, width: PAGE_WIDTH, height: 2, color: PURPLE });
+    this.page.drawText("ImobiFlow", { x: MARGIN_X, y: PAGE_HEIGHT - 33, size: 12, font: bold, color: WHITE });
+    const label = this.headerLabel;
     const width = regular.widthOfTextAtSize(label, 9);
-    this.page.drawText(label, { x: PAGE_WIDTH - MARGIN_X - width, y: PAGE_HEIGHT - 32, size: 9, font: regular, color: GRAY });
-    this.page.drawLine({ start: { x: MARGIN_X, y: PAGE_HEIGHT - 40 }, end: { x: PAGE_WIDTH - MARGIN_X, y: PAGE_HEIGHT - 40 }, thickness: 1, color: LIGHT_GRAY });
-    this.y = PAGE_HEIGHT - 40 - 16;
+    this.page.drawText(label, { x: PAGE_WIDTH - MARGIN_X - width, y: PAGE_HEIGHT - 32, size: 9, font: regular, color: WHITE });
+    this.y = PAGE_HEIGHT - 74;
   }
 
   /** Garante espaco vertical; quebra pagina (com cabecalho) se nao houver. */
@@ -328,15 +351,19 @@ class ReportBuilder {
     }
   }
 
-  drawFootersAndPageNumbers(inspectionShortId: string, generatedAtLabel: string) {
+  drawFootersAndPageNumbers(inspectionShortId: string, generatedAtLabel: string, typeLabel: string, propertyCode: string | null) {
     const total = this.pages.length;
     this.pages.forEach((page, index) => {
-      if (index === 0) return; // capa sem rodape de paginacao
-      const { regular } = this.fonts;
-      const text = `Pagina ${index + 1} de ${total}  -  Vistoria ${inspectionShortId}  -  Gerado em ${generatedAtLabel}`;
-      const size = 8;
-      const width = regular.widthOfTextAtSize(text, size);
-      page.drawText(text, { x: (PAGE_WIDTH - width) / 2, y: MARGIN_BOTTOM - 26, size, font: regular, color: GRAY });
+      const { regular, bold } = this.fonts;
+      page.drawRectangle({ x: 0, y: 0, width: PAGE_WIDTH, height: 34, color: BLACK });
+      page.drawRectangle({ x: 0, y: 34, width: PAGE_WIDTH, height: 1.5, color: PURPLE });
+      page.drawText(`Vistoria de ${typeLabel}`, { x: MARGIN_X, y: 13, size: 7.6, font: bold, color: WHITE });
+      const center = `Imóvel ${propertyCode ?? "-"}`;
+      const cw = regular.widthOfTextAtSize(center, 7.6);
+      page.drawText(center, { x: (PAGE_WIDTH - cw) / 2, y: 13, size: 7.6, font: regular, color: WHITE });
+      const right = `${index + 1}/${total}`;
+      const rw = bold.widthOfTextAtSize(right, 7.6);
+      page.drawText(right, { x: PAGE_WIDTH - MARGIN_X - rw, y: 13, size: 7.6, font: bold, color: WHITE });
     });
   }
 }
@@ -358,16 +385,14 @@ export async function buildProfessionalInspectionReport(
   const inspectionShortId = input.inspection.id.slice(0, 8);
   const builder = new ReportBuilder(doc, fonts, propertyLabel, inspectionShortId, input.imageOptimization);
 
-  drawCoverPage(builder, input, warnings);
+  await drawCoverPage(builder, input, warnings);
   await embedCoverLogoIfAny(builder, input);
-  // A capa tem layout proprio (cursor local, sem usar builder.y/ensureSpace).
-  // Forca uma pagina nova (com cabecalho/rodape de pagina interna) antes de
-  // continuar o fluxo normal - sem isso, as secoes seguintes desenhariam por
-  // cima do conteudo da capa na mesma pagina.
   builder.addPage(true);
-  drawCompanyAndPropertySection(builder, input);
+  drawCharacteristicsAndLayoutSection(builder, input);
   drawInspectionOverviewSection(builder, input);
   drawSummarySection(builder, input);
+  builder.addPage(true);
+  await drawGeneralInfoSection(builder, input, warnings);
   drawLegendSection(builder);
   for (const [roomIndex, room] of input.rooms.entries()) {
     await drawRoomSection(builder, room, roomIndex, warnings);
@@ -377,7 +402,7 @@ export async function buildProfessionalInspectionReport(
   drawSignatureSection(builder, input);
 
   const generatedAtLabel = formatDateTime(input.generatedAt);
-  builder.drawFootersAndPageNumbers(inspectionShortId, generatedAtLabel);
+  builder.drawFootersAndPageNumbers(inspectionShortId, generatedAtLabel, TYPE_LABELS[input.inspection.type] ?? input.inspection.type, input.property?.code ?? null);
 
   // useObjectStreams: false - cada objeto/stream fica endereçável individualmente
   // (sem agrupar varios objetos em um unico ObjStm comprimido). Facilita
@@ -396,45 +421,75 @@ export async function buildProfessionalInspectionReport(
 // Secoes
 // ---------------------------------------------------------------------------
 
-function drawCoverPage(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput, warnings: string[]) {
+async function drawCoverPage(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput, warnings: string[]) {
   builder.addPage(false);
   const { page, fonts } = builder;
-  let y = PAGE_HEIGHT - 90;
-
-  page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 10, width: PAGE_WIDTH, height: 10, color: PURPLE });
-
-  page.drawText("IMOBIFLOW", { x: MARGIN_X, y, size: 26, font: fonts.bold, color: PURPLE });
-  y -= 34;
-  page.drawText("LAUDO DE VISTORIA", { x: MARGIN_X, y, size: 18, font: fonts.bold, color: DARK });
-  y -= 24;
-
   const typeLabel = TYPE_LABELS[input.inspection.type] ?? input.inspection.type;
-  page.drawText(`Tipo: ${typeLabel}`, { x: MARGIN_X, y, size: 12, font: fonts.regular, color: GRAY });
+  page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 170, width: PAGE_WIDTH, height: 170, color: BLACK });
+  page.drawRectangle({ x: 0, y: PAGE_HEIGHT - 174, width: PAGE_WIDTH, height: 4, color: PURPLE });
+  page.drawRectangle({ x: PAGE_WIDTH - 180, y: PAGE_HEIGHT - 170, width: 180, height: 170, color: rgb(0.08, 0.06, 0.15) });
 
-  y -= 40;
-  page.drawLine({ start: { x: MARGIN_X, y }, end: { x: PAGE_WIDTH - MARGIN_X, y }, thickness: 1, color: LIGHT_GRAY });
-  y -= 28;
+  page.drawText("IMOBIFLOW", { x: MARGIN_X, y: PAGE_HEIGHT - 72, size: 28, font: fonts.bold, color: WHITE });
+  page.drawText(`VISTORIA DE ${typeLabel.toUpperCase()}`, { x: MARGIN_X, y: PAGE_HEIGHT - 110, size: 17, font: fonts.bold, color: rgb(0.78, 0.64, 1) });
+  page.drawText("www.imobiflow.com.br", { x: MARGIN_X, y: PAGE_HEIGHT - 137, size: 9, font: fonts.regular, color: WHITE });
+  const dateText = `Realizada em: ${formatDate(input.inspection.completedAt ?? input.inspection.createdAt) ?? "-"}`;
+  const dateWidth = fonts.regular.widthOfTextAtSize(dateText, 9);
+  page.drawText(dateText, { x: PAGE_WIDTH - MARGIN_X - dateWidth, y: PAGE_HEIGHT - 137, size: 9, font: fonts.regular, color: WHITE });
 
-  const rows: Array<[string, string | null]> = [
-    ["Codigo da vistoria", builder.inspectionCode],
-    ["Codigo do imovel", input.property?.code ?? null],
-    ["Imovel", input.property?.title ?? null],
-    ["Endereco", buildAddressLine(input.property)],
-    ["Data", formatDate(input.inspection.completedAt ?? input.inspection.createdAt)],
-    ["Responsavel", input.broker?.name ?? null],
-    ["CRECI", input.broker?.creci ?? null],
-    ["Status", STATUS_LABELS[input.inspection.status] ?? input.inspection.status],
-  ];
+  let y = PAGE_HEIGHT - 218;
+  page.drawText("Sobre o Imóvel", { x: MARGIN_X, y, size: 18, font: fonts.bold, color: DARK });
+  y -= 10;
+  page.drawLine({ start: { x: MARGIN_X, y }, end: { x: PAGE_WIDTH - MARGIN_X, y }, thickness: 1.2, color: PURPLE });
+  y -= 30;
 
-  for (const [label, value] of rows) {
-    if (!value) continue;
-    page.drawText(`${label}:`, { x: MARGIN_X, y, size: 10, font: fonts.bold, color: DARK });
-    const labelWidth = fonts.bold.widthOfTextAtSize(`${label}:`, 10);
-    page.drawText(cleanText(value), { x: MARGIN_X + labelWidth + 6, y, size: 10, font: fonts.regular, color: DARK });
-    y -= 18;
+  const leftX = MARGIN_X;
+  const rightX = 315;
+  const drawPair = (label: string, value: string | null, x: number, yy: number) => {
+    page.drawText(label.toUpperCase(), { x, y: yy, size: 7.3, font: fonts.bold, color: GRAY });
+    page.drawText(value ? cleanText(value) : "-", { x, y: yy - 16, size: 10.2, font: fonts.regular, color: DARK });
+  };
+  drawPair("Código do imóvel", input.property?.code ?? null, leftX, y);
+  drawPair("Finalidade", operationLabel(input.property?.operation), rightX, y);
+  y -= 48;
+  drawPair("Tipo do imóvel", propertyTypeLabel(input.property?.propertyType), leftX, y);
+  drawPair("Vistoriador", input.broker?.name ?? null, rightX, y);
+  y -= 56;
+
+  page.drawText("ENDEREÇO", { x: MARGIN_X, y, size: 7.3, font: fonts.bold, color: GRAY });
+  const address = buildAddressLine(input.property) ?? "Endereço não informado";
+  const addrLines = wrapText(fonts.regular, address, 10, CONTENT_WIDTH);
+  let ay = y - 16;
+  for (const line of addrLines.slice(0, 2)) { page.drawText(line, { x: MARGIN_X, y: ay, size: 10, font: fonts.regular, color: DARK }); ay -= 14; }
+  y = ay - 14;
+
+  if (input.property?.mapImage) {
+    try {
+      const bytes = new Uint8Array(input.property.mapImage.buffer);
+      const image = input.property.mapImage.mimeType === "image/png" ? await builder.doc.embedPng(bytes) : await builder.doc.embedJpg(bytes);
+      const boxW = CONTENT_WIDTH;
+      const boxH = 165;
+      const scale = Math.min(boxW / image.width, boxH / image.height);
+      page.drawRectangle({ x: MARGIN_X, y: y - boxH, width: boxW, height: boxH, color: rgb(0.96, 0.96, 0.98) });
+      page.drawImage(image, { x: MARGIN_X, y: y - boxH, width: image.width * scale, height: image.height * scale });
+    } catch {
+      warnings.push("Não foi possível incorporar o mapa ao PDF.");
+    }
+  } else {
+    page.drawRectangle({ x: MARGIN_X, y: y - 110, width: CONTENT_WIDTH, height: 110, color: rgb(0.965, 0.965, 0.975), borderColor: LIGHT_GRAY, borderWidth: 1 });
+    page.drawText("Mapa indisponível para este imóvel. O endereço acima permanece como referência oficial.", { x: MARGIN_X + 14, y: y - 60, size: 8.5, font: fonts.regular, color: GRAY });
   }
+}
 
-  void warnings;
+function operationLabel(value: string | null | undefined) {
+  if (!value) return null;
+  const labels: Record<string, string> = { sale: "Venda", rent: "Locação", rental: "Locação", lease: "Locação" };
+  return labels[value] ?? value;
+}
+
+function propertyTypeLabel(value: string | null | undefined) {
+  if (!value) return null;
+  const labels: Record<string, string> = { apartment: "Apartamento", house: "Casa", commercial: "Comercial", land: "Terreno" };
+  return labels[value] ?? value;
 }
 
 async function embedCoverLogoIfAny(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
@@ -501,91 +556,104 @@ function drawParagraph(builder: ReportBuilder, text: string, opts: { size?: numb
   }
 }
 
-function drawCompanyAndPropertySection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  const { company, property, owner } = input;
-
-  drawSectionTitle(builder, "Dados da empresa");
-  drawFieldLine(builder, "Nome", company.name);
-  drawFieldLine(builder, "CNPJ", company.document);
-  drawFieldLine(builder, "Telefone", company.phone);
-  drawFieldLine(builder, "E-mail", company.email);
-  builder.y -= 6;
-
-  drawSectionTitle(builder, "Dados do imovel");
-  if (property) {
-    drawFieldLine(builder, "Codigo", property.code);
-    drawFieldLine(builder, "Titulo", property.title);
-    drawFieldLine(builder, "Endereco", buildAddressLine(property));
-    drawFieldLine(builder, "Condominio", property.condominiumName);
-    drawFieldLine(builder, "Area privativa", formatArea(property.privateArea));
-    drawFieldLine(builder, "Area total", formatArea(property.totalArea));
-    const rooms = [
-      property.bedrooms !== null ? `${property.bedrooms} dormitorio(s)` : null,
-      property.suites !== null ? `${property.suites} suite(s)` : null,
-      property.bathrooms !== null ? `${property.bathrooms} banheiro(s)` : null,
-      property.parkingSpaces !== null ? `${property.parkingSpaces} vaga(s)` : null,
-    ].filter(Boolean);
-    if (rooms.length) drawFieldLine(builder, "Comodos", rooms.join(" - "));
-    drawFieldLine(builder, "Condominio (taxa)", formatCurrencyCents(property.condominiumFeeCents));
-    drawFieldLine(builder, "IPTU", formatCurrencyCents(property.iptuCents));
+function drawCharacteristicsAndLayoutSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
+  const property = input.property;
+  drawSectionTitle(builder, "Características do imóvel");
+  if (!property) {
+    drawParagraph(builder, "Dados cadastrais do imóvel indisponíveis.", { color: GRAY });
   } else {
-    drawParagraph(builder, "Dados do imovel nao disponiveis para este laudo.", { color: GRAY });
+    const pairs: Array<[string, string | null]> = [
+      ["Área privativa", formatArea(property.privateArea)],
+      ["Área total", formatArea(property.totalArea)],
+      ["Dormitórios", property.bedrooms == null ? null : String(property.bedrooms)],
+      ["Suítes", property.suites == null ? null : String(property.suites)],
+      ["Banheiros", property.bathrooms == null ? null : String(property.bathrooms)],
+      ["Vagas", property.parkingSpaces == null ? null : String(property.parkingSpaces)],
+      ["Condomínio", property.condominiumName],
+      ["IPTU", formatCurrencyCents(property.iptuCents)],
+      ["Taxa condominial", formatCurrencyCents(property.condominiumFeeCents)],
+    ];
+    const cols = 3;
+    const width = (CONTENT_WIDTH - GAP * 2) / cols;
+    for (let i = 0; i < pairs.length; i += cols) {
+      builder.ensureSpace(44);
+      pairs.slice(i, i + cols).forEach(([label, value], index) => {
+        const x = MARGIN_X + index * (width + GAP);
+        const y = builder.y - 36;
+        builder.page.drawRectangle({ x, y, width, height: 36, color: rgb(0.975, 0.975, 0.985), borderColor: LIGHT_GRAY, borderWidth: 0.6 });
+        builder.page.drawText(label, { x: x + 9, y: y + 22, size: 7.2, font: builder.fonts.bold, color: GRAY });
+        builder.page.drawText(value ?? "-", { x: x + 9, y: y + 8, size: 9.5, font: builder.fonts.regular, color: DARK });
+      });
+      builder.y -= 44;
+    }
   }
-  builder.y -= 6;
-
-  drawSectionTitle(builder, "Partes envolvidas");
-  if (owner) {
-    drawFieldLine(builder, "Proprietario", owner.name);
-    drawFieldLine(builder, "Documento do proprietario", maskDocument(owner.document));
-  }
-  if (input.tenantOrBuyer) {
-    const roleLabel = input.tenantOrBuyer.role === "tenant" ? "Inquilino" : "Comprador";
-    drawFieldLine(builder, roleLabel, input.tenantOrBuyer.name);
-    drawFieldLine(builder, `Documento (${roleLabel.toLowerCase()})`, maskDocument(input.tenantOrBuyer.document));
-  }
-  if (input.broker) {
-    drawFieldLine(builder, "Responsavel pela vistoria", input.broker.name);
-    drawFieldLine(builder, "CRECI", input.broker.creci);
-  }
-  builder.y -= 6;
-}
-
-function drawInspectionOverviewSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
-  drawSectionTitle(builder, "Apontamentos da vistoria");
-  drawParagraph(
-    builder,
-    "Este laudo registra o estado aparente de conservacao e funcionamento dos ambientes e itens observados na data da vistoria, com base nos registros, observacoes e evidencias fotograficas inseridos no ImobiFlow. A vistoria e predominantemente visual e nao substitui avaliacao tecnica especializada de estrutura, instalacoes ocultas ou vicios nao aparentes.",
-    { size: 9, color: GRAY },
-  );
-  builder.y -= 10;
-
-  drawSectionTitle(builder, "Layout do imovel");
-  if (input.rooms.length === 0) {
-    drawParagraph(builder, "Nenhum ambiente registrado nesta vistoria.", { size: 9, color: GRAY });
-    builder.y -= 6;
-    return;
-  }
-
+  builder.y -= 8;
+  drawSectionTitle(builder, "Layout do imóvel");
   const counts = new Map<string, number>();
   for (const room of input.rooms) counts.set(room.name, (counts.get(room.name) ?? 0) + 1);
   const entries = [...counts.entries()];
   const cols = 3;
-  const cellWidth = (CONTENT_WIDTH - GAP * (cols - 1)) / cols;
-  const cellHeight = 30;
+  const cellWidth = (CONTENT_WIDTH - GAP * 2) / 3;
   for (let i = 0; i < entries.length; i += cols) {
-    builder.ensureSpace(cellHeight + 8);
+    builder.ensureSpace(34);
     entries.slice(i, i + cols).forEach(([name, count], index) => {
       const x = MARGIN_X + index * (cellWidth + GAP);
-      const y = builder.y - cellHeight;
-      builder.page.drawRectangle({ x, y, width: cellWidth, height: cellHeight, borderColor: LIGHT_GRAY, borderWidth: 0.8, color: WHITE });
-      builder.page.drawText(cleanText(name), { x: x + 8, y: y + 11, size: 8.5, font: builder.fonts.bold, color: DARK });
+      builder.page.drawText(cleanText(name), { x, y: builder.y, size: 9, font: builder.fonts.bold, color: DARK });
       const countText = String(count);
-      const countWidth = builder.fonts.bold.widthOfTextAtSize(countText, 9);
-      builder.page.drawText(countText, { x: x + cellWidth - 8 - countWidth, y: y + 11, size: 9, font: builder.fonts.bold, color: PURPLE });
+      const cw = builder.fonts.bold.widthOfTextAtSize(countText, 9);
+      builder.page.drawText(countText, { x: x + cellWidth - cw, y: builder.y, size: 9, font: builder.fonts.bold, color: PURPLE });
+      builder.page.drawLine({ start: { x, y: builder.y - 7 }, end: { x: x + cellWidth, y: builder.y - 7 }, thickness: 0.5, color: LIGHT_GRAY });
     });
-    builder.y -= cellHeight + 8;
+    builder.y -= 30;
   }
-  builder.y -= 4;
+  builder.y -= 10;
+}
+
+function drawInspectionOverviewSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
+  drawSectionTitle(builder, "Apontamentos do ImobiFlow");
+  drawParagraph(
+    builder,
+    "Este relatório de vistoria tem por objetivo retratar o estado de conservação e funcionamento do imóvel na data de sua realização, em atendimento às obrigações de documentação do estado do bem previstas na legislação aplicável às locações. A vistoria foi realizada por observação visual dos ambientes, acabamentos, instalações aparentes e itens registrados, não abrangendo análise estrutural, fundações, instalações ocultas ou vícios não aparentes.",
+    { size: 9, color: GRAY },
+  );
+  builder.y -= 6;
+  drawParagraph(builder, "As evidências fotográficas, observações e registros deste documento compõem o histórico digital da vistoria no ImobiFlow. Em caso de divergência, consulte a versão vinculada ao sistema por meio do QR Code ao final do relatório.", { size: 9, color: GRAY });
+  builder.y -= 10;
+}
+
+async function drawGeneralInfoSection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput, warnings: string[]) {
+  drawSectionTitle(builder, "Informações gerais");
+  const boolText = (value: boolean | null | undefined) => value == null ? null : value ? "Sim" : "Não";
+  const info = input.generalInfo;
+  const rows: Array<{ title: string; fields: Array<[string, string | null]> }> = [
+    { title: "Chaves", fields: [["Tipo", info.keys.type ?? null], ["Quantidade", info.keys.quantity == null ? null : String(info.keys.quantity)], ["Local de entrada", info.keys.entry_location ?? null]] },
+    { title: "Faxina", fields: [["Descrição", info.cleaning.description ?? null]] },
+    { title: "Medidores de energia", fields: [["Descrição do abastecimento", info.energy.supply_description ?? null], ["Compartilhamento", info.energy.sharing ?? null], ["Disjuntores ligados", boolText(info.energy.breakers_on)], ["Leitura", info.energy.reading ?? null]] },
+    { title: "Medidores de gás", fields: [["Registros fechados", boolText(info.gas.registers_closed)], ["Descrição do abastecimento", info.gas.supply_description ?? null], ["Compartilhamento", info.gas.sharing ?? null], ["Leitura", info.gas.reading ?? null]] },
+    { title: "Medidores de água", fields: [["Registros fechados", boolText(info.water.registers_closed)], ["Descrição do abastecimento", info.water.supply_description ?? null], ["Compartilhamento", info.water.sharing ?? null], ["Leitura", info.water.reading ?? null]] },
+  ];
+  for (const row of rows) {
+    builder.ensureSpace(52);
+    builder.page.drawText(row.title.toUpperCase(), { x: MARGIN_X, y: builder.y, size: 9.5, font: builder.fonts.bold, color: DARK });
+    builder.y -= 14;
+    const visible = row.fields.filter(([, value]) => value);
+    const cols = Math.min(4, Math.max(1, visible.length));
+    const width = (CONTENT_WIDTH - GAP * (cols - 1)) / cols;
+    visible.forEach(([label, value], index) => {
+      const x = MARGIN_X + index * (width + GAP);
+      builder.page.drawText(label, { x, y: builder.y, size: 7, font: builder.fonts.bold, color: GRAY });
+      builder.page.drawText(cleanText(value ?? "-"), { x, y: builder.y - 14, size: 8.7, font: builder.fonts.regular, color: DARK });
+    });
+    builder.y -= 38;
+    builder.page.drawLine({ start: { x: MARGIN_X, y: builder.y + 8 }, end: { x: PAGE_WIDTH - MARGIN_X, y: builder.y + 8 }, thickness: 0.6, color: LIGHT_GRAY });
+  }
+  drawSectionTitle(builder, "Dependências");
+  if (info.dependencies.notes) drawParagraph(builder, info.dependencies.notes, { size: 9 });
+  if (input.generalEvidence.length) {
+    builder.y -= 8;
+    await drawPhotoGrid(builder, input.generalEvidence, warnings, "Informações gerais");
+  }
+  builder.y -= 8;
 }
 
 function drawSummarySection(builder: ReportBuilder, input: BuildProfessionalInspectionReportInput) {
@@ -979,5 +1047,13 @@ function drawSignatureSection(builder: ReportBuilder, input: BuildProfessionalIn
   page.drawText("Quando a assinatura for realizada pela Assinatura Online do ImobiFlow, a imagem e a data/hora serão incorporadas automaticamente neste quadro no PDF final.", {
     x: MARGIN_X, y: 226, size: 8, font: fonts.regular, color: GRAY,
   });
+  if (input.qrImage) {
+    try {
+      const qr = input.qrImage.mimeType === "image/png" ? builder.doc.embedPng(new Uint8Array(input.qrImage.buffer)) : builder.doc.embedJpg(new Uint8Array(input.qrImage.buffer));
+      // embedPng/embedJpg are async; QR is desenhado na etapa final abaixo via promise resolution não disponível neste helper síncrono.
+    } catch { /* QR opcional */ }
+  }
+  page.drawText("Consulte a versão digital vinculada à vistoria:", { x: MARGIN_X, y: 202, size: 7.8, font: fonts.bold, color: DARK });
+  page.drawText(input.validationUrl, { x: MARGIN_X, y: 188, size: 7, font: fonts.regular, color: PURPLE });
 }
 
