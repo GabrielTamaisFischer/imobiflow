@@ -872,7 +872,7 @@ mysqlInspectionsRouter.post("/:id/report", requirePermission("inspections.manage
     }
     const fileName = buildReportFileName({ propertyCode, type: inspection.type as "entry" | "exit", generatedAt: reportInput.generatedAt });
     const policy = validateUploadFile({ purpose: "inspection_report", fileName, mimeType: "application/pdf", declaredSizeBytes: body.byteLength, body });
-    const key = resolveIdempotencyKey(req, `inspection.report:${inspection.id}:${regenerate ? reportId : "latest"}`);
+    const key = resolveIdempotencyKey(req, `inspection.report:${inspection.id}:${reportId}`);
     const { result, replayed } = await withIdempotency(access.company.id, "inspection.report", key, async () => {
       const storage = getStorageProvider();
       uploaded = await storage.uploadFile({ companyId: access.company.id, entityType: "inspection_report", entityId: reportId, purpose: "inspection_report", fileName, mimeType: policy.normalizedMimeType, sizeBytes: body.byteLength, body, folder: buildStorageFolder({ companyId: access.company.id, purpose: "inspection_report", inspectionId: inspection.id }), deliveryAccess: deliveryAccessForPurpose("inspection_report") });
