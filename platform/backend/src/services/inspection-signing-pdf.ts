@@ -94,12 +94,24 @@ export async function buildSignedInspectionCertificate(
       }
 
       const name = signer.name.trim();
-      const nameWidth = bold.widthOfTextAtSize(name, 8.2);
-      if (name && nameWidth < slot.width - 22) {
-        signaturePage.drawText(name, {
+      if (name) {
+        // Atualiza apenas a linha de nome do cartao. O documento/CRECI que
+        // veio do cadastro vinculado ao laudo permanece visivel logo abaixo.
+        signaturePage.drawRectangle({
+          x: slot.x + 10,
+          y: slot.topY - 121,
+          width: slot.width - 20,
+          height: 14,
+          color: rgb(1, 1, 1),
+        });
+        const displayName = `Nome: ${name}`;
+        const safeName = bold.widthOfTextAtSize(displayName, 8.1) <= slot.width - 24
+          ? displayName
+          : `Nome: ${name.slice(0, 34)}`;
+        signaturePage.drawText(safeName, {
           x: slot.x + 12,
-          y: slot.topY - 128,
-          size: 8.2,
+          y: slot.topY - 117,
+          size: 8.1,
           font: bold,
           color: rgb(0.12, 0.12, 0.15),
         });
@@ -107,8 +119,8 @@ export async function buildSignedInspectionCertificate(
 
       signaturePage.drawText(`Assinado eletronicamente em ${formatDateTime(signer.signedAt)}`, {
         x: slot.x + 12,
-        y: slot.topY - 144,
-        size: 7.2,
+        y: slot.topY - 149,
+        size: 6.9,
         font: regular,
         color: rgb(0.35, 0.35, 0.38),
       });
