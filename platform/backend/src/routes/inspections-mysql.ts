@@ -437,6 +437,14 @@ mysqlInspectionsRouter.get("/participants/search", requirePermission("inspection
       res.json({ participants: [] });
       return;
     }
+    // F5-D (validação) — taxIdNormalized só entra na busca quando a consulta
+    // tem pelo menos um dígito: "contains: ''" (sem dígito nenhum, ex. busca
+    // só por nome) sempre bate com qualquer valor (equivalente a LIKE '%%'
+    // no MySQL), o que fazia a busca por nome devolver TODA Party ativa da
+    // empresa, não só as que batem o termo. Bug pré-existente, descoberto
+    // pelos testes de F5-D; corrigido aqui sem alterar nenhum outro
+    // critério de busca.
+    const searchDigits = search.replace(/\D/g, "");
     const participants = await getPrisma().party.findMany({
       where: {
         companyId: access.company.id,
@@ -444,7 +452,7 @@ mysqlInspectionsRouter.get("/participants/search", requirePermission("inspection
         OR: [
           { name: { contains: search } },
           { taxId: { contains: search } },
-          { taxIdNormalized: { contains: search.replace(/\D/g, "") } },
+          ...(searchDigits ? [{ taxIdNormalized: { contains: searchDigits } }] : []),
           { phone: { contains: search } },
           { whatsapp: { contains: search } },
           { email: { contains: search } },

@@ -81,7 +81,44 @@ function withInclude(table: string, row: Row, include?: Row): Row {
     result.storedFile =
       state.tables.storedFile.find((file) => file.id === row.storedFileId) ?? null;
   }
+  // F5-D (contraparte) — GET /participants/search inclui party.roles (só
+  // tenant/buyer ativos) para sinalizar available_roles no resultado.
+  if (table === "party" && include.roles) {
+    const roleWhere = (include.roles as Row).where;
+    result.roles = state.tables.partyRole
+      .filter((roleRow) => roleRow.partyId === row.id)
+      .filter((roleRow) => matches("partyRole", roleRow, roleWhere));
+  }
   return result;
+}
+
+function toOrderByList(orderBy: Row | Row[] | undefined): Row[] {
+  if (!orderBy) return [];
+  return Array.isArray(orderBy) ? orderBy : [orderBy];
+}
+
+// Suporte mínimo a orderBy (createdAt/id asc|desc) — usado pelo padrão
+// "evento mais recente vence" (ex.: latestInspectionCounterparty,
+// latestInspectionGeneralInfo), que depende de ordenação real, não da ordem
+// de inserção no array.
+function sortByOrderBy<T extends Row>(items: T[], orderBy: Row | Row[] | undefined): T[] {
+  const clauses = toOrderByList(orderBy);
+  if (clauses.length === 0) return items;
+  return [...items].sort((a, b) => {
+    for (const clause of clauses) {
+      for (const [field, direction] of Object.entries(clause)) {
+        const av = a[field];
+        const bv = b[field];
+        let cmp = 0;
+        if (av instanceof Date || bv instanceof Date) {
+          cmp = (av instanceof Date ? av.getTime() : 0) - (bv instanceof Date ? bv.getTime() : 0);
+        } else if (av < bv) cmp = -1;
+        else if (av > bv) cmp = 1;
+        if (cmp !== 0) return direction === "desc" ? -cmp : cmp;
+      }
+    }
+    return 0;
+  });
 }
 
 function applyData(row: Row, data: Row) {
@@ -97,8 +134,12 @@ function model(table: string) {
   const rows = () => state.tables[table];
   const api = {
     async findFirst(args: Row = {}) {
-      const row = rows().find((item) => matches(table, item, args.where));
-      return row ? withInclude(table, row, args.include) : null;
+      const found = sortByOrderBy(rows().filter((item) => matches(table, item, args.where)), args.orderBy);
+      const row = found[0];
+      // Prisma usa `select` (não só `include`) para expandir relações
+      // aninhadas (ex.: GET /participants/search seleciona party.roles via
+      // `select: { roles: {...} }`) — o fake precisa honrar os dois.
+      return row ? withInclude(table, row, args.include ?? args.select) : null;
     },
     async findFirstOrThrow(args: Row = {}) {
       const row = await api.findFirst(args);
@@ -109,9 +150,8 @@ function model(table: string) {
       return api.findFirstOrThrow(args);
     },
     async findMany(args: Row = {}) {
-      const found = rows()
-        .filter((item) => matches(table, item, args.where))
-        .map((item) => withInclude(table, item, args.include));
+      const found = sortByOrderBy(rows().filter((item) => matches(table, item, args.where)), args.orderBy)
+        .map((item) => withInclude(table, item, args.include ?? args.select));
       const skip = args.skip ?? 0;
       return args.take ? found.slice(skip, skip + args.take) : found.slice(skip);
     },
@@ -163,6 +203,8 @@ const tableNames = [
   "inspectionEvidence",
   "inspectionEvent",
   "storedFile",
+  "party",
+  "partyRole",
 ] as const;
 const fakeDb: Row = Object.fromEntries(tableNames.map((name) => [name, model(name)]));
 fakeDb.$transaction = async (input: unknown) =>
@@ -265,6 +307,14 @@ const ids = {
   draftA: "a3000000-0000-4000-8000-000000000004",
   exitOtherPropA: "a3000000-0000-4000-8000-000000000005",
   entryB: "b3000000-0000-4000-8000-000000000001",
+  // F5-D (contraparte) — cadastros centrais (Party) usados como inquilino/
+  // comprador: um ativo com role tenant pré-cadastrado, um ativo SEM role
+  // (remoto decidiu aceitar qualquer Party ativa, não exige PartyRole), um
+  // inativo e um de outra empresa (isolamento de tenant).
+  tenantPartyA: "a4000000-0000-4000-8000-000000000001",
+  partyNoRoleA: "a4000000-0000-4000-8000-000000000002",
+  inactivePartyA: "a4000000-0000-4000-8000-000000000003",
+  partyB: "b4000000-0000-4000-8000-000000000001",
 };
 
 function access(companyId: string, userId: string, permissions: string[], role = "admin") {
@@ -420,6 +470,80 @@ beforeEach(() => {
   seedRoomWithItem(ids.entryA2, COMPANY_A, "excellent");
   seedRoomWithItem(ids.exitA, COMPANY_A, "damaged");
   seedRoomWithItem(ids.entryB, COMPANY_B, "good");
+
+  // F5-D (contraparte) — cadastro central reaproveitado (Party), nunca
+  // duplicado pela vistoria.
+  state.tables.party.push(
+    {
+      id: ids.tenantPartyA,
+      companyId: COMPANY_A,
+      name: "Elisa Tamais",
+      taxId: "111.111.111-11",
+      taxIdNormalized: "11111111111",
+      rg: null,
+      email: "elisa@example.test",
+      phone: "(11) 94722-2825",
+      whatsapp: null,
+      addressJson: {},
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: ids.partyNoRoleA,
+      companyId: COMPANY_A,
+      name: "João Comprador",
+      taxId: "222.222.222-22",
+      taxIdNormalized: "22222222222",
+      rg: null,
+      email: "joao@example.test",
+      phone: "(21) 98888-1111",
+      whatsapp: null,
+      addressJson: {},
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: ids.inactivePartyA,
+      companyId: COMPANY_A,
+      name: "Pedro Inativo",
+      taxId: "333.333.333-33",
+      taxIdNormalized: "33333333333",
+      rg: null,
+      email: null,
+      phone: null,
+      whatsapp: null,
+      addressJson: {},
+      status: "inactive",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
+      id: ids.partyB,
+      companyId: COMPANY_B,
+      name: "Bruna Outra Empresa",
+      taxId: "444.444.444-44",
+      taxIdNormalized: "44444444444",
+      rg: null,
+      email: null,
+      phone: null,
+      whatsapp: null,
+      addressJson: {},
+      status: "active",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+  );
+  state.tables.partyRole.push({
+    id: randomUUID(),
+    companyId: COMPANY_A,
+    partyId: ids.tenantPartyA,
+    role: "tenant",
+    status: "active",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
 });
 
 const servers: Server[] = [];
@@ -1233,5 +1357,213 @@ describe("Bloco 5 — criar vistoria de saída a partir da Entrada (cópia de es
     const { status, body } = await call("adminA", "GET", `/?property_id=${ids.propA2}&type=entry&status=completed`);
     expect(status).toBe(200);
     expect((body.inspections as Row[]).map((row) => row.id)).toEqual([]);
+  });
+});
+// F5-D — contraparte (inquilino/comprador) vinculada ao cadastro central
+// (Party). Arquitetura real: vínculo armazenado como evento de auditoria
+// (inspectionEvent "inspection.counterparty_linked"/"_removed", "o mais
+// recente vence"), não como coluna nova — por isso nenhuma migration nem
+// prisma generate são necessários para este fluxo. Qualquer Party ativa da
+// empresa pode ser vinculada (não exige PartyRole tenant/buyer
+// pré-cadastrado); o papel (tenant/buyer) é escolhido no momento do vínculo.
+describe("F5-D — contraparte (inquilino/comprador) vinculada ao cadastro central (Party)", () => {
+  it("cria a vistoria já com contraparte vinculada (pessoa + papel) e GET /:id/counterparty devolve os dados do cadastro central", async () => {
+    const id = randomUUID();
+    const created = await call("adminA", "POST", "/", {
+      id,
+      property_id: ids.propA,
+      type: "entry",
+      counterparty_party_id: ids.tenantPartyA,
+      counterparty_role: "tenant",
+    });
+    expect(created.status).toBe(201);
+
+    const read = await call("adminA", "GET", `/${id}/counterparty`);
+    expect(read.status).toBe(200);
+    expect(read.body.counterparty).toMatchObject({
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+      name: "Elisa Tamais",
+      document: "111.111.111-11",
+    });
+  });
+
+  it("recusa criar com pessoa sem o papel (ou papel sem pessoa) — refine do schema", async () => {
+    const withoutRole = await call("adminA", "POST", "/", {
+      id: randomUUID(),
+      property_id: ids.propA,
+      type: "entry",
+      counterparty_party_id: ids.tenantPartyA,
+    });
+    expect(withoutRole.status).toBe(400);
+
+    const withoutParty = await call("adminA", "POST", "/", {
+      id: randomUUID(),
+      property_id: ids.propA,
+      type: "entry",
+      counterparty_role: "tenant",
+    });
+    expect(withoutParty.status).toBe(400);
+  });
+
+  it("compatibilidade — criar sem contraparte continua funcionando normalmente (vistorias antigas nunca tiveram esse campo)", async () => {
+    const id = randomUUID();
+    const created = await call("adminA", "POST", "/", { id, property_id: ids.propA, type: "entry" });
+    expect(created.status).toBe(201);
+    const read = await call("adminA", "GET", `/${id}/counterparty`);
+    expect(read.status).toBe(200);
+    expect(read.body.counterparty).toBeNull();
+  });
+
+  it("isolamento de tenant — não permite vincular uma Party de outra empresa na criação (400)", async () => {
+    const created = await call("adminA", "POST", "/", {
+      id: randomUUID(),
+      property_id: ids.propA,
+      type: "entry",
+      counterparty_party_id: ids.partyB,
+      counterparty_role: "tenant",
+    });
+    expect(created.status).toBe(400);
+    expect(created.body.error).toBe("INVALID_INSPECTION_COUNTERPARTY");
+  });
+
+  it("recusa vincular uma Party inativa (400)", async () => {
+    const created = await call("adminA", "POST", "/", {
+      id: randomUUID(),
+      property_id: ids.propA,
+      type: "entry",
+      counterparty_party_id: ids.inactivePartyA,
+      counterparty_role: "buyer",
+    });
+    expect(created.status).toBe(400);
+    expect(created.body.error).toBe("INVALID_INSPECTION_COUNTERPARTY");
+  });
+
+  it("edição — PUT /:id/counterparty vincula, troca (o evento mais recente vence) e remove o vínculo", async () => {
+    // draftA: in_progress, version 3 (fixture padrão).
+    const linked = await call("adminA", "PUT", `/${ids.draftA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+    });
+    expect(linked.status).toBe(200);
+    expect(linked.body.counterparty).toMatchObject({ party_id: ids.tenantPartyA, role: "tenant" });
+
+    // Troca para outra pessoa, com outro papel — precisa ser o vínculo ATUAL
+    // (mais recente), não o primeiro encontrado.
+    const swapped = await call("adminA", "PUT", `/${ids.draftA}/counterparty`, {
+      expected_version: 4,
+      party_id: ids.partyNoRoleA,
+      role: "buyer",
+    });
+    expect(swapped.status).toBe(200);
+    expect(swapped.body.counterparty).toMatchObject({ party_id: ids.partyNoRoleA, role: "buyer", name: "João Comprador" });
+
+    const removed = await call("adminA", "PUT", `/${ids.draftA}/counterparty`, {
+      expected_version: 5,
+      party_id: null,
+    });
+    expect(removed.status).toBe(200);
+    expect(removed.body.counterparty).toBeNull();
+  });
+
+  it("vinculação independente de contrato — aceita vincular mesmo sem nenhum Contract associado à vistoria", async () => {
+    // draftA não tem nenhum Contract seedado neste arquivo de teste.
+    const linked = await call("adminA", "PUT", `/${ids.draftA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.partyNoRoleA,
+      role: "buyer",
+    });
+    expect(linked.status).toBe(200);
+  });
+
+  it("permissão — sessão só com inspections.view não pode alterar a contraparte (403)", async () => {
+    const { status } = await call("viewerA", "PUT", `/${ids.draftA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+    });
+    expect(status).toBe(403);
+  });
+
+  it("isolamento de tenant — empresa B não altera nem lê a contraparte de uma vistoria da empresa A (404)", async () => {
+    const put = await call("adminB", "PUT", `/${ids.entryA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+    });
+    expect(put.status).toBe(404);
+
+    const get = await call("adminB", "GET", `/${ids.entryA}/counterparty`);
+    expect(get.status).toBe(404);
+  });
+
+  it("vistoria concluída — bloqueia alteração da contraparte para cargo não administrativo (409), mas permite para owner/admin/manager", async () => {
+    const blocked = await call("brokerA", "PUT", `/${ids.entryA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+    });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toBe("INSPECTION_NOT_MUTABLE");
+
+    const allowed = await call("ownerA", "PUT", `/${ids.entryA}/counterparty`, {
+      expected_version: 3,
+      party_id: ids.tenantPartyA,
+      role: "tenant",
+    });
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.counterparty).toMatchObject({ party_id: ids.tenantPartyA, role: "tenant" });
+  });
+
+  it("busca de contraparte (/participants/search) — filtra por nome/CPF, respeita isolamento de tenant e tamanho mínimo da consulta", async () => {
+    const tooShort = await call("adminA", "GET", "/participants/search?q=a");
+    expect(tooShort.status).toBe(200);
+    expect(tooShort.body.participants).toEqual([]);
+
+    const byName = await call("adminA", "GET", "/participants/search?q=Elisa");
+    expect(byName.status).toBe(200);
+    expect(byName.body.participants).toHaveLength(1);
+    expect(byName.body.participants[0]).toMatchObject({ party_id: ids.tenantPartyA, name: "Elisa Tamais", available_roles: ["tenant"] });
+
+    // Qualquer Party ativa pode ser encontrada, mesmo sem PartyRole
+    // tenant/buyer pré-cadastrado — available_roles fica vazio.
+    const byDocument = await call("adminA", "GET", "/participants/search?q=22222222222");
+    expect(byDocument.status).toBe(200);
+    expect(byDocument.body.participants[0]).toMatchObject({ party_id: ids.partyNoRoleA, available_roles: [] });
+
+    // Isolamento: a empresa B nunca vê cadastros da empresa A.
+    const crossTenant = await call("adminB", "GET", "/participants/search?q=Elisa");
+    expect(crossTenant.status).toBe(200);
+    expect(crossTenant.body.participants).toEqual([]);
+  });
+
+  it("geração do laudo — vincula a contraparte e gera o laudo normalmente (o vínculo direto é consultado sem erro)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const linked = await call("adminA", "PUT", `/${ids.draftA}/counterparty`, {
+        expected_version: 3,
+        party_id: ids.tenantPartyA,
+        role: "tenant",
+      });
+      expect(linked.status).toBe(200);
+
+      const completed = await call("adminA", "PATCH", `/${ids.draftA}`, { expected_version: 4, status: "completed" });
+      expect(completed.status).toBe(200);
+
+      const generated = await call("adminA", "POST", `/${ids.draftA}/report`, {});
+      expect(generated.status).toBe(201);
+
+      // O lookup do vínculo direto (latestInspectionCounterparty, via
+      // safe("inquilino/comprador vinculado a vistoria", ...)) nunca
+      // aparece como falha nos avisos — prova que o laudo conseguiu ler o
+      // cadastro central sem erro. Os avisos de "empresa"/"contrato" que
+      // ainda aparecem são de outras dependências não relacionadas a este
+      // vínculo e já existiam antes desta feature neste harness de teste.
+      const warned = warnSpy.mock.calls.map((args) => String(args[0])).join("\n");
+      expect(warned).not.toContain("inquilino/comprador vinculado a vistoria");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
