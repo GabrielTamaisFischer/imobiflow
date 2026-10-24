@@ -50,7 +50,7 @@ export function canCancelProcess(process: SigningProcess): boolean {
 }
 
 export function canDownloadSignedReport(process: SigningProcess): boolean {
-  return process.status === "completed";
+  return process.status === "completed" && process.is_current_report;
 }
 
 /** 5 estilos de fonte cursiva para a pré-visualização da assinatura
@@ -71,8 +71,9 @@ export function findTypedSignatureFont(id: string | null | undefined): TypedSign
 }
 
 /** Rótulo curto para a linha "Documentos" da imobiliária. */
-export function signedReportAvailability(processes: SigningProcess[]): "none" | "in_progress" | "ready" {
-  if (processes.some((process) => process.status === "completed")) return "ready";
-  if (processes.some((process) => isSigningProcessActive(process.status))) return "in_progress";
+export function signedReportAvailability(processes: SigningProcess[]): "none" | "in_progress" | "ready" | "outdated" {
+  if (processes.some((process) => process.status === "completed" && process.is_current_report)) return "ready";
+  if (processes.some((process) => isSigningProcessActive(process.status) && process.is_current_report)) return "in_progress";
+  if (processes.some((process) => process.status === "completed" && !process.is_current_report)) return "outdated";
   return "none";
 }
