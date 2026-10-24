@@ -34,13 +34,19 @@ const inspectionTypes = ["entry", "exit"] as const;
 const inspectionStatuses = ["draft", "in_progress", "completed", "archived"] as const;
 const itemConditions = ["not_inspected", "excellent", "good", "fair", "poor", "damaged", "not_applicable"] as const;
 
+const counterpartyRoles = ["tenant", "buyer"] as const;
 const createInspectionSchema = z.object({
   id: z.string().uuid(),
   property_id: z.string().uuid(),
   assigned_user_id: z.string().uuid().optional(),
+  counterparty_party_id: z.string().uuid().optional(),
+  counterparty_role: z.enum(counterpartyRoles).optional(),
   type: z.enum(inspectionTypes),
   notes: z.string().trim().max(12000).optional().nullable(),
-});
+}).refine(
+  (input) => Boolean(input.counterparty_party_id) === Boolean(input.counterparty_role),
+  { message: "Informe pessoa e papel do inquilino/comprador em conjunto." },
+);
 const patchInspectionSchema = z.object({
   expected_version: z.number().int().positive(),
   assigned_user_id: z.string().uuid().optional(),
@@ -49,6 +55,15 @@ const patchInspectionSchema = z.object({
 }).refine((input) => input.assigned_user_id !== undefined || input.notes !== undefined || input.status !== undefined, {
   message: "Informe ao menos um campo para atualizar.",
 });
+
+const counterpartyUpdateSchema = z.object({
+  expected_version: z.number().int().positive(),
+  party_id: z.string().uuid().nullable(),
+  role: z.enum(counterpartyRoles).nullable().optional(),
+}).refine(
+  (input) => input.party_id === null || input.role === "tenant" || input.role === "buyer",
+  { message: "Informe o papel do participante selecionado." },
+);
 
 const nullableShortText = z.string().trim().max(500).nullable().optional();
 const nullableLongText = z.string().trim().max(12000).nullable().optional();
@@ -264,6 +279,74 @@ async function artifactFiles(companyId: string, entityType: string, inspectionId
   return rows.filter((row: any) => (row.metadataJson as any)?.inspection_id === inspectionId);
 }
 
+async function resolveCounterpartyParty(companyId: string, partyId: string) {
+  const party = await getPrisma().party.findFirst({
+    where: {
+      id: partyId,
+      companyId,
+      status: "active",
+      roles: { some: { role: { in: ["tenant", "buyer"] }, status: "active" } },
+    },
+    select: {
+      id: true,
+      name: true,
+      taxId: true,
+      rg: true,
+      email: true,
+      phone: true,
+      whatsapp: true,
+      addressJson: true,
+    },
+  });
+  if (!party) throw invalid("Inquilino/comprador inválido para esta empresa.", "INVALID_INSPECTION_COUNTERPARTY");
+  return party;
+}
+
+async function latestInspectionCounterparty(companyId: string, inspectionId: string) {
+  const row = await getPrisma().inspectionEvent.findFirst({
+    where: {
+      companyId,
+      inspectionId,
+      eventType: { in: ["inspection.counterparty_linked", "inspection.counterparty_removed"] },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { eventType: true, metadataJson: true, createdAt: true },
+  });
+  if (!row || row.eventType === "inspection.counterparty_removed") return null;
+  const metadata = (row.metadataJson ?? {}) as Record<string, unknown>;
+  const partyId = typeof metadata.party_id === "string" ? metadata.party_id : null;
+  const role = metadata.role === "buyer" ? "buyer" : metadata.role === "tenant" ? "tenant" : null;
+  if (!partyId || !role) return null;
+  const party = await getPrisma().party.findFirst({
+    where: { id: partyId, companyId },
+    select: {
+      id: true,
+      name: true,
+      taxId: true,
+      rg: true,
+      email: true,
+      phone: true,
+      whatsapp: true,
+      addressJson: true,
+      status: true,
+    },
+  });
+  if (!party) return null;
+  return {
+    party_id: party.id,
+    role,
+    name: party.name,
+    document: party.taxId ?? null,
+    rg: party.rg ?? null,
+    email: party.email ?? null,
+    phone: party.phone ?? null,
+    whatsapp: party.whatsapp ?? null,
+    address: party.addressJson ?? null,
+    status: party.status,
+    linked_at: row.createdAt.toISOString(),
+  };
+}
+
 async function resolveAssignee(companyId: string, requestedUserId: string | undefined, fallbackUserId: string) {
   const userId = requestedUserId ?? fallbackUserId;
   const user = await getPrisma().appUser.findFirst({
@@ -331,6 +414,57 @@ function nextStatus(current: string, requested: string) {
   return requested;
 }
 
+mysqlInspectionsRouter.get("/participants/search", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const search = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (search.length < 2) {
+      res.json({ participants: [] });
+      return;
+    }
+    const participants = await getPrisma().party.findMany({
+      where: {
+        companyId: access.company.id,
+        status: "active",
+        roles: { some: { role: { in: ["tenant", "buyer"] }, status: "active" } },
+        OR: [
+          { name: { contains: search } },
+          { taxId: { contains: search } },
+          { taxIdNormalized: { contains: search.replace(/\D/g, "") } },
+          { phone: { contains: search } },
+          { whatsapp: { contains: search } },
+          { email: { contains: search } },
+        ],
+      },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      take: 20,
+      select: {
+        id: true,
+        name: true,
+        taxId: true,
+        rg: true,
+        email: true,
+        phone: true,
+        whatsapp: true,
+        addressJson: true,
+        roles: { where: { role: { in: ["tenant", "buyer"] }, status: "active" }, select: { role: true } },
+      },
+    });
+    res.json({
+      participants: participants.map((party) => ({
+        party_id: party.id,
+        name: party.name,
+        document: party.taxId ?? null,
+        rg: party.rg ?? null,
+        email: party.email ?? null,
+        phone: party.phone ?? party.whatsapp ?? null,
+        address: party.addressJson ?? null,
+        available_roles: party.roles.map((entry) => entry.role).filter((role) => role === "tenant" || role === "buyer"),
+      })),
+    });
+  } catch (error) { next(error); }
+});
+
 mysqlInspectionsRouter.get("/", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
   try {
     const page = Number(req.query.page ?? 1), pageSize = Number(req.query.page_size ?? 25);
@@ -392,11 +526,20 @@ mysqlInspectionsRouter.post("/", requirePermission("inspections.manage"), async 
     const input = createInspectionSchema.parse(req.body), access = req.access!, companyId = access.company.id;
     await assertPropertyAccess(access, input.property_id, "inspections.manage", "INSPECT");
     const assignedUserId = await resolveAssignee(companyId, input.assigned_user_id, access.appUser.id);
+    const counterparty = input.counterparty_party_id
+      ? await resolveCounterpartyParty(companyId, input.counterparty_party_id)
+      : null;
     const key = resolveIdempotencyKey(req, `inspection.create:${input.id}`);
     const { result, replayed } = await withIdempotency(companyId, "inspection.create", key, async () => {
       const created = await getPrisma().$transaction(async (tx) => {
         const inspection = await tx.inspection.create({ data: { id: input.id, companyId, propertyId: input.property_id, assignedUserId, createdBy: access.appUser.id, type: input.type, notes: input.notes ?? null }, include: inspectionInclude });
         await event(tx, companyId, inspection.id, access.appUser.id, "inspection.created", { property_id: inspection.propertyId, type: inspection.type, assigned_user_id: inspection.assignedUserId });
+        if (counterparty && input.counterparty_role) {
+          await event(tx, companyId, inspection.id, access.appUser.id, "inspection.counterparty_linked", {
+            party_id: counterparty.id,
+            role: input.counterparty_role,
+          });
+        }
         return serializeInspection(inspection);
       });
       return { inspection: created };
@@ -407,6 +550,39 @@ mysqlInspectionsRouter.post("/", requirePermission("inspections.manage"), async 
 
 mysqlInspectionsRouter.get("/:id", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
   try { res.json({ inspection: serializeInspection(await findInspection(req, String(req.params.id), "inspections.view")) }); } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.get("/:id/counterparty", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const inspection = await findInspection(req, String(req.params.id), "inspections.view");
+    res.json({ counterparty: await latestInspectionCounterparty(req.access!.company.id, inspection.id) });
+  } catch (error) { next(error); }
+});
+
+mysqlInspectionsRouter.put("/:id/counterparty", requirePermission("inspections.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const access = req.access!;
+    const inspection = await findInspection(req, String(req.params.id), "inspections.manage");
+    ensureMutable(inspection, access);
+    const input = counterpartyUpdateSchema.parse(req.body);
+    const party = input.party_id ? await resolveCounterpartyParty(access.company.id, input.party_id) : null;
+    await getPrisma().$transaction(async (tx) => {
+      await bumpVersion(tx, inspection.id, access.company.id, input.expected_version);
+      if (party && input.role) {
+        await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.counterparty_linked", {
+          party_id: party.id,
+          role: input.role,
+        });
+      } else {
+        await event(tx, access.company.id, inspection.id, access.appUser.id, "inspection.counterparty_removed", {});
+      }
+    });
+    const updated = await getPrisma().inspection.findUniqueOrThrow({ where: { id: inspection.id }, include: inspectionInclude });
+    res.json({
+      inspection: serializeInspection(updated),
+      counterparty: await latestInspectionCounterparty(access.company.id, inspection.id),
+    });
+  } catch (error) { next(error); }
 });
 
 mysqlInspectionsRouter.get("/:id/general-info", requirePermission("inspections.view"), async (req: RequestWithAccess, res, next) => {
@@ -840,12 +1016,21 @@ async function buildReportInput(access: AccessContext, inspection: any, evidence
   }
 
   let tenantOrBuyer: { name: string; document: string | null; role: "tenant" | "buyer" } | null = null;
-  const contractParties = linkedContract?.parties ?? [];
-  if (contractParties.length === 1) {
-    const party = contractParties[0];
-    tenantOrBuyer = { name: party.name, document: party.document ?? null, role: party.partyType === "buyer" ? "buyer" : "tenant" };
-  } else if (contractParties.length > 1) {
-    warnings.push("Mais de uma parte (inquilino/comprador) vinculada ao contrato desta vistoria: secao omitida para evitar ambiguidade.");
+  const directCounterparty = await safe("inquilino/comprador vinculado a vistoria", () => latestInspectionCounterparty(companyId, inspection.id));
+  if (directCounterparty) {
+    tenantOrBuyer = {
+      name: directCounterparty.name,
+      document: directCounterparty.document,
+      role: directCounterparty.role,
+    };
+  } else {
+    const contractParties = linkedContract?.parties ?? [];
+    if (contractParties.length === 1) {
+      const party = contractParties[0];
+      tenantOrBuyer = { name: party.name, document: party.document ?? null, role: party.partyType === "buyer" ? "buyer" : "tenant" };
+    } else if (contractParties.length > 1) {
+      warnings.push("Mais de uma parte (inquilino/comprador) vinculada ao contrato desta vistoria: secao omitida para evitar ambiguidade.");
+    }
   }
 
   const broker = assignedUser
