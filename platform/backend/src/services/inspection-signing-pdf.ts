@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { SIGNATURE_PAGE_LAYOUT, maskDocument } from "./inspection-report-pdf.js";
 
 /**
  * Assinatura Online (Bloco 5) — gerador do PDF final assinado: o laudo
@@ -17,7 +18,9 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 export type SignedReportSigner = {
   name: string;
+  role: "owner" | "tenant_buyer" | "responsible" | "witness";
   roleLabel: string;
+  document: string | null;
   signedAt: string; // ISO
   method: "drawn" | "typed";
   consentText: string;
@@ -32,6 +35,7 @@ export type BuildSignedInspectionCertificateInput = {
   baseReportBytes: Buffer;
   documentHash: string;
   generatedAt: string; // ISO
+  signatureLocation: string | null;
   signers: SignedReportSigner[];
 };
 
@@ -60,6 +64,49 @@ export async function buildSignedInspectionCertificate(
   const regular = await finalDoc.embedFont(StandardFonts.Helvetica);
   const bold = await finalDoc.embedFont(StandardFonts.HelveticaBold);
 
+  // O laudo base termina com uma página dedicada de assinaturas. Antes de
+  // anexar o certificado, incorporamos cada assinatura online no quadro
+  // correspondente do próprio laudo, evitando dois locais concorrentes.
+  const basePages = finalDoc.getPages();
+  const signaturePage = basePages.at(-1);
+  if (signaturePage) {
+    for (const signer of input.signers) {
+      const slot = SIGNATURE_PAGE_LAYOUT[signer.role];
+      if (!slot) continue;
+      try {
+        if (signer.signatureImage) {
+          const safeBytes = new Uint8Array(signer.signatureImage.buffer);
+          const image =
+            signer.signatureImage.mimeType === "image/jpeg"
+              ? await finalDoc.embedJpg(safeBytes)
+              : await finalDoc.embedPng(safeBytes);
+          const maxWidth = slot.width - 28;
+          const maxHeight = 56;
+          const scale = Math.min(maxWidth / image.width, maxHeight / image.height, 1);
+          const width = image.width * scale;
+          const height = image.height * scale;
+          const lineY = slot.topY - 98;
+          signaturePage.drawImage(image, {
+            x: slot.x + (slot.width - width) / 2,
+            y: lineY + 8,
+            width,
+            height,
+          });
+        }
+        const signedLabel = `Assinado eletronicamente em ${formatDateTime(signer.signedAt)}`;
+        signaturePage.drawText(signedLabel, {
+          x: slot.x + 12,
+          y: slot.topY - 145,
+          size: 7.2,
+          font: regular,
+          color: rgb(0.35, 0.35, 0.35),
+        });
+      } catch {
+        warnings.push(`assinatura de ${signer.name}: não foi possível incorporar a imagem no quadro principal`);
+      }
+    }
+  }
+
   let page = finalDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   let cursorY = PAGE_HEIGHT - MARGIN;
 
@@ -80,12 +127,18 @@ export async function buildSignedInspectionCertificate(
 
   writeLine("Certificado de Assinatura Eletrônica", { size: 18, font: bold, gap: 14 });
   writeLine(`Documento (hash SHA-256): ${input.documentHash}`, { size: 9, color: rgb(0.4, 0.4, 0.4) });
-  writeLine(`Certificado gerado em: ${formatDateTime(input.generatedAt)}`, { size: 9, color: rgb(0.4, 0.4, 0.4), gap: 20 });
+  writeLine(`Certificado gerado em: ${formatDateTime(input.generatedAt)}`, { size: 9, color: rgb(0.4, 0.4, 0.4) });
+  if (input.signatureLocation) {
+    writeLine(`Local declarado para assinatura: ${input.signatureLocation}`, { size: 9, color: rgb(0.4, 0.4, 0.4), gap: 20 });
+  } else {
+    cursorY -= 14;
+  }
 
   for (const signer of input.signers) {
     ensureSpace(140);
     writeLine(signer.name, { size: 13, font: bold, gap: 4 });
     writeLine(signer.roleLabel, { size: 10, color: rgb(0.35, 0.35, 0.35) });
+    if (signer.document) writeLine(`Documento: ${maskDocument(signer.document)}`, { size: 9, color: rgb(0.35, 0.35, 0.35) });
     writeLine(`Assinado eletronicamente em ${formatDateTime(signer.signedAt)}.`, { size: 10 });
     writeLine(`Método: ${signer.method === "drawn" ? "Assinatura desenhada" : "Assinatura digitada"}.`, { size: 10 });
     writeLine(`Identificador de auditoria: ${signer.auditId}`, { size: 8, color: rgb(0.5, 0.5, 0.5) });
