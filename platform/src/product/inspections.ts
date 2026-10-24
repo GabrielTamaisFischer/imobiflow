@@ -41,6 +41,30 @@ export type MysqlInspection = {
   property?: { id: string; code: string | null; title: string; street?: string | null; neighborhood?: string | null; city?: string | null };
   assigned_user?: { id: string; name: string }; rooms: MysqlInspectionRoom[];
 };
+export type MysqlInspectionCounterpartyRole = "tenant" | "buyer";
+export type MysqlInspectionCounterparty = {
+  party_id: string;
+  role: MysqlInspectionCounterpartyRole;
+  name: string;
+  document: string | null;
+  rg: string | null;
+  email: string | null;
+  phone: string | null;
+  whatsapp?: string | null;
+  address: Record<string, unknown> | null;
+  status?: string;
+  linked_at?: string;
+};
+export type MysqlInspectionParticipantSearchResult = {
+  party_id: string;
+  name: string;
+  document: string | null;
+  rg: string | null;
+  email: string | null;
+  phone: string | null;
+  address: Record<string, unknown> | null;
+  available_roles: MysqlInspectionCounterpartyRole[];
+};
 export type MysqlInspectionPage = { inspections: MysqlInspection[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } };
 export type MysqlInspectionArtifact = { id: string; entity_id: string; purpose: string; file_name: string; mime_type: string; size_bytes: number | null; created_at: string; metadata: Record<string, unknown>; signed_url: string | null };
 
@@ -203,7 +227,45 @@ export async function getMysqlInspection(id: string) {
     return { inspection: snapshot.inspection, offline: true };
   }
 }
-export async function createMysqlInspection(input: { id: string; property_id: string; assigned_user_id?: string; type: "entry" | "exit"; notes?: string | null }) {
+export async function searchMysqlInspectionParticipants(query: string) {
+  const q = query.trim();
+  if (q.length < 2) return { participants: [] as MysqlInspectionParticipantSearchResult[] };
+  return apiRequest<{ participants: MysqlInspectionParticipantSearchResult[] }>(
+    `/real-estate/inspections/participants/search?q=${encodeURIComponent(q)}`,
+    { token: mysqlToken() },
+  );
+}
+
+export async function getMysqlInspectionCounterparty(id: string) {
+  return apiRequest<{ counterparty: MysqlInspectionCounterparty | null }>(
+    `/real-estate/inspections/${encodeURIComponent(id)}/counterparty`,
+    { token: mysqlToken() },
+  );
+}
+
+export async function updateMysqlInspectionCounterparty(
+  id: string,
+  input: { expected_version: number; party_id: string | null; role?: MysqlInspectionCounterpartyRole | null },
+) {
+  return apiRequest<{ inspection: MysqlInspection; counterparty: MysqlInspectionCounterparty | null }>(
+    `/real-estate/inspections/${encodeURIComponent(id)}/counterparty`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+      token: mysqlToken(),
+    },
+  );
+}
+
+export async function createMysqlInspection(input: {
+  id: string;
+  property_id: string;
+  assigned_user_id?: string;
+  counterparty_party_id?: string;
+  counterparty_role?: MysqlInspectionCounterpartyRole;
+  type: "entry" | "exit";
+  notes?: string | null;
+}) {
   return apiRequest<{ inspection: MysqlInspection; replayed?: boolean }>("/real-estate/inspections", { method: "POST", headers: idempotencyKey(input.id), body: JSON.stringify(input), token: mysqlToken() });
 }
 export async function patchMysqlInspection(id: string, input: { expected_version: number; assigned_user_id?: string | null; notes?: string | null; status?: MysqlInspectionStatus }, options?: { offline?: boolean; idempotencyKey?: string }) {
