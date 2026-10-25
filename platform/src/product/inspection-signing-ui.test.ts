@@ -41,6 +41,12 @@ function process(overrides: Partial<SigningProcess> = {}): SigningProcess {
     id: "process-1",
     inspection_id: "inspection-1",
     report_stored_file_id: "file-1",
+    // SigningProcess.is_current_report e' obrigatorio (nunca undefined) -
+    // indica se este processo aponta para o laudo vigente. true por
+    // default aqui: o cenario comum nos testes e' um processo criado
+    // contra o laudo atual; os testes de "outdated" sobrescrevem via
+    // overrides (is_current_report: false).
+    is_current_report: true,
     document_hash: "hash",
     status: "pending",
     progress_label: "0 de 1",

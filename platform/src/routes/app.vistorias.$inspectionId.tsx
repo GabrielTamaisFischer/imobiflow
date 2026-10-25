@@ -324,7 +324,12 @@ function InspectionDetailPageIntegrated() {
       });
       setInspection(result.inspection);
       setSuggestedRoomsDismissed(true);
-      const createdIds = new Set(rooms.map((room) => room.id));
+      // crypto.randomUUID() tem tipo de retorno `${string}-${string}-${string}-${string}-${string}`
+      // (template literal de UUID) nas libs do TS; os ids retornados pelo
+      // servidor (result.inspection.rooms[].id) sao tipados como `string`
+      // simples. O Set precisa do tipo widened para comparar com o id do
+      // servidor sem perder a checagem de tipo (sem `as any`).
+      const createdIds = new Set<string>(rooms.map((room) => room.id));
       const created = result.inspection.rooms.find((room) => createdIds.has(room.id));
       setSelectedRoomId(created?.id ?? pickInitialRoomId(result.inspection.rooms));
     } catch (e) {

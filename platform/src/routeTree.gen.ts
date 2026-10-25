@@ -9,124 +9,64 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ResultadosRouteImport } from './routes/resultados'
-import { Route as RedefinirSenhaRouteImport } from './routes/redefinir-senha'
-import { Route as RecuperarSenhaRouteImport } from './routes/recuperar-senha'
-import { Route as QuemUsaRouteImport } from './routes/quem-usa'
-import { Route as ProdutoRouteImport } from './routes/produto'
-import { Route as PlanosRouteImport } from './routes/planos'
-import { Route as InteligenciaRouteImport } from './routes/inteligencia'
-import { Route as FaqRouteImport } from './routes/faq'
-import { Route as EntrarRouteImport } from './routes/entrar'
-import { Route as CadastroRouteImport } from './routes/cadastro'
-import { Route as AtivarContaRouteImport } from './routes/ativar-conta'
-import { Route as AssinaturaBloqueadaRouteImport } from './routes/assinatura-bloqueada'
-import { Route as AppRouteImport } from './routes/app'
-import { Route as AceitarConviteRouteImport } from './routes/aceitar-convite'
-import { Route as SlugRouteImport } from './routes/$slug'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SlugRouteImport } from './routes/$slug'
+import { Route as AceitarConviteRouteImport } from './routes/aceitar-convite'
+import { Route as AppRouteImport } from './routes/app'
+import { Route as AssinaturaBloqueadaRouteImport } from './routes/assinatura-bloqueada'
+import { Route as AtivarContaRouteImport } from './routes/ativar-conta'
+import { Route as CadastroRouteImport } from './routes/cadastro'
+import { Route as EntrarRouteImport } from './routes/entrar'
+import { Route as FaqRouteImport } from './routes/faq'
+import { Route as InteligenciaRouteImport } from './routes/inteligencia'
+import { Route as PlanosRouteImport } from './routes/planos'
+import { Route as ProdutoRouteImport } from './routes/produto'
+import { Route as QuemUsaRouteImport } from './routes/quem-usa'
+import { Route as RecuperarSenhaRouteImport } from './routes/recuperar-senha'
+import { Route as RedefinirSenhaRouteImport } from './routes/redefinir-senha'
+import { Route as ResultadosRouteImport } from './routes/resultados'
 import { Route as AppIndexRouteImport } from './routes/app.index'
-import { Route as SiteSlugRouteImport } from './routes/site.$slug'
-import { Route as AssinarVistoriaTokenRouteImport } from './routes/assinar-vistoria.$token'
-import { Route as AppVistoriasRouteImport } from './routes/app.vistorias'
-import { Route as AppTestesRouteImport } from './routes/app.testes'
-import { Route as AppSiteRouteImport } from './routes/app.site'
-import { Route as AppProprietariosRouteImport } from './routes/app.proprietarios'
-import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
-import { Route as AppNotificacoesRouteImport } from './routes/app.notificacoes'
-import { Route as AppInteligenciaRouteImport } from './routes/app.inteligencia'
-import { Route as AppIntegracoesRouteImport } from './routes/app.integracoes'
-import { Route as AppImportacoesRouteImport } from './routes/app.importacoes'
-import { Route as AppImoveisRouteImport } from './routes/app.imoveis'
-import { Route as AppFinanceiroRouteImport } from './routes/app.financeiro'
-import { Route as AppCustosRouteImport } from './routes/app.custos'
-import { Route as AppCrmRouteImport } from './routes/app.crm'
-import { Route as AppContratosRouteImport } from './routes/app.contratos'
-import { Route as AppConfiguracoesRouteImport } from './routes/app.configuracoes'
 import { Route as AppAgendaRouteImport } from './routes/app.agenda'
-import { Route as SiteSlugIndexRouteImport } from './routes/site.$slug.index'
-import { Route as PortalProprietarioTokenRouteImport } from './routes/portal.proprietario.$token'
-import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquilino.$token'
-import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
-import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
-import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
-import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
+import { Route as AppCompradoresRouteImport } from './routes/app.compradores'
+import { Route as AppConfiguracoesRouteImport } from './routes/app.configuracoes'
+import { Route as AppContratosRouteImport } from './routes/app.contratos'
+import { Route as AppCorretoresRouteImport } from './routes/app.corretores'
+import { Route as AppCrmRouteImport } from './routes/app.crm'
+import { Route as AppCustosRouteImport } from './routes/app.custos'
+import { Route as AppFinanceiroRouteImport } from './routes/app.financeiro'
+import { Route as AppImoveisRouteImport } from './routes/app.imoveis'
+import { Route as AppImportacoesRouteImport } from './routes/app.importacoes'
+import { Route as AppInquilinosRouteImport } from './routes/app.inquilinos'
+import { Route as AppIntegracoesRouteImport } from './routes/app.integracoes'
+import { Route as AppInteligenciaRouteImport } from './routes/app.inteligencia'
+import { Route as AppNotificacoesRouteImport } from './routes/app.notificacoes'
+import { Route as AppOperacoesRouteImport } from './routes/app.operacoes'
+import { Route as AppProprietariosRouteImport } from './routes/app.proprietarios'
+import { Route as AppSiteRouteImport } from './routes/app.site'
+import { Route as AppTestesRouteImport } from './routes/app.testes'
+import { Route as AppVistoriasRouteImport } from './routes/app.vistorias'
+import { Route as AssinarVistoriaTokenRouteImport } from './routes/assinar-vistoria.$token'
+import { Route as AssinaturaVistoriaTokenRouteImport } from './routes/assinatura-vistoria.$token'
+import { Route as SiteSlugRouteImport } from './routes/site.$slug'
 import { Route as AppImoveisNovoRouteImport } from './routes/app.imoveis_.novo'
-import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
+import { Route as AppProprietariosOwnerIdRouteImport } from './routes/app.proprietarios.$ownerId'
+import { Route as AppSiteBuilderRouteImport } from './routes/app.site.builder'
+import { Route as AppVistoriasInspectionIdRouteImport } from './routes/app.vistorias.$inspectionId'
+import { Route as AppVistoriasNovaRouteImport } from './routes/app.vistorias.nova'
+import { Route as PortalCompradorTokenRouteImport } from './routes/portal.comprador.$token'
+import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquilino.$token'
+import { Route as PortalProprietarioTokenRouteImport } from './routes/portal.proprietario.$token'
+import { Route as SiteSlugIndexRouteImport } from './routes/site.$slug.index'
 import { Route as AppImoveisPropertyIdEditarRouteImport } from './routes/app.imoveis_.$propertyId.editar'
-import { Route as AppSiteBuilderPreviewWebsiteIdRouteImport } from './routes/app.site.builder.preview.$websiteId'
+import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
 import { Route as AppSiteBuilderEditorWebsiteIdRouteImport } from './routes/app.site.builder.editor.$websiteId'
+import { Route as AppSiteBuilderPreviewWebsiteIdRouteImport } from './routes/app.site.builder.preview.$websiteId'
 import { Route as AppSiteBuilderEditorWebsiteIdCodeRouteImport } from './routes/app.site.builder.editor.$websiteId.code'
 import { Route as AppSiteBuilderPreviewWebsiteIdImovelPropertySlugRouteImport } from './routes/app.site.builder.preview.$websiteId.imovel.$propertySlug'
 
-const ResultadosRoute = ResultadosRouteImport.update({
-  id: '/resultados',
-  path: '/resultados',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RedefinirSenhaRoute = RedefinirSenhaRouteImport.update({
-  id: '/redefinir-senha',
-  path: '/redefinir-senha',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RecuperarSenhaRoute = RecuperarSenhaRouteImport.update({
-  id: '/recuperar-senha',
-  path: '/recuperar-senha',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const QuemUsaRoute = QuemUsaRouteImport.update({
-  id: '/quem-usa',
-  path: '/quem-usa',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProdutoRoute = ProdutoRouteImport.update({
-  id: '/produto',
-  path: '/produto',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PlanosRoute = PlanosRouteImport.update({
-  id: '/planos',
-  path: '/planos',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const InteligenciaRoute = InteligenciaRouteImport.update({
-  id: '/inteligencia',
-  path: '/inteligencia',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FaqRoute = FaqRouteImport.update({
-  id: '/faq',
-  path: '/faq',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EntrarRoute = EntrarRouteImport.update({
-  id: '/entrar',
-  path: '/entrar',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CadastroRoute = CadastroRouteImport.update({
-  id: '/cadastro',
-  path: '/cadastro',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AtivarContaRoute = AtivarContaRouteImport.update({
-  id: '/ativar-conta',
-  path: '/ativar-conta',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AssinaturaBloqueadaRoute = AssinaturaBloqueadaRouteImport.update({
-  id: '/assinatura-bloqueada',
-  path: '/assinatura-bloqueada',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppRoute = AppRouteImport.update({
-  id: '/app',
-  path: '/app',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AceitarConviteRoute = AceitarConviteRouteImport.update({
-  id: '/aceitar-convite',
-  path: '/aceitar-convite',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SlugRoute = SlugRouteImport.update({
@@ -134,9 +74,74 @@ const SlugRoute = SlugRouteImport.update({
   path: '/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AceitarConviteRoute = AceitarConviteRouteImport.update({
+  id: '/aceitar-convite',
+  path: '/aceitar-convite',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AssinaturaBloqueadaRoute = AssinaturaBloqueadaRouteImport.update({
+  id: '/assinatura-bloqueada',
+  path: '/assinatura-bloqueada',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AtivarContaRoute = AtivarContaRouteImport.update({
+  id: '/ativar-conta',
+  path: '/ativar-conta',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CadastroRoute = CadastroRouteImport.update({
+  id: '/cadastro',
+  path: '/cadastro',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EntrarRoute = EntrarRouteImport.update({
+  id: '/entrar',
+  path: '/entrar',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FaqRoute = FaqRouteImport.update({
+  id: '/faq',
+  path: '/faq',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InteligenciaRoute = InteligenciaRouteImport.update({
+  id: '/inteligencia',
+  path: '/inteligencia',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlanosRoute = PlanosRouteImport.update({
+  id: '/planos',
+  path: '/planos',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProdutoRoute = ProdutoRouteImport.update({
+  id: '/produto',
+  path: '/produto',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QuemUsaRoute = QuemUsaRouteImport.update({
+  id: '/quem-usa',
+  path: '/quem-usa',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecuperarSenhaRoute = RecuperarSenhaRouteImport.update({
+  id: '/recuperar-senha',
+  path: '/recuperar-senha',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RedefinirSenhaRoute = RedefinirSenhaRouteImport.update({
+  id: '/redefinir-senha',
+  path: '/redefinir-senha',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResultadosRoute = ResultadosRouteImport.update({
+  id: '/resultados',
+  path: '/resultados',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -144,84 +149,14 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const SiteSlugRoute = SiteSlugRouteImport.update({
-  id: '/site/$slug',
-  path: '/site/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AssinarVistoriaTokenRoute = AssinarVistoriaTokenRouteImport.update({
-  id: '/assinar-vistoria/$token',
-  path: '/assinar-vistoria/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppVistoriasRoute = AppVistoriasRouteImport.update({
-  id: '/vistorias',
-  path: '/vistorias',
+const AppAgendaRoute = AppAgendaRouteImport.update({
+  id: '/agenda',
+  path: '/agenda',
   getParentRoute: () => AppRoute,
 } as any)
-const AppTestesRoute = AppTestesRouteImport.update({
-  id: '/testes',
-  path: '/testes',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSiteRoute = AppSiteRouteImport.update({
-  id: '/site',
-  path: '/site',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppProprietariosRoute = AppProprietariosRouteImport.update({
-  id: '/proprietarios',
-  path: '/proprietarios',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppOperacoesRoute = AppOperacoesRouteImport.update({
-  id: '/operacoes',
-  path: '/operacoes',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppNotificacoesRoute = AppNotificacoesRouteImport.update({
-  id: '/notificacoes',
-  path: '/notificacoes',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppInteligenciaRoute = AppInteligenciaRouteImport.update({
-  id: '/inteligencia',
-  path: '/inteligencia',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppIntegracoesRoute = AppIntegracoesRouteImport.update({
-  id: '/integracoes',
-  path: '/integracoes',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppImportacoesRoute = AppImportacoesRouteImport.update({
-  id: '/importacoes',
-  path: '/importacoes',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppImoveisRoute = AppImoveisRouteImport.update({
-  id: '/imoveis',
-  path: '/imoveis',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppFinanceiroRoute = AppFinanceiroRouteImport.update({
-  id: '/financeiro',
-  path: '/financeiro',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppCustosRoute = AppCustosRouteImport.update({
-  id: '/custos',
-  path: '/custos',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppCrmRoute = AppCrmRouteImport.update({
-  id: '/crm',
-  path: '/crm',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppContratosRoute = AppContratosRouteImport.update({
-  id: '/contratos',
-  path: '/contratos',
+const AppCompradoresRoute = AppCompradoresRouteImport.update({
+  id: '/compradores',
+  path: '/compradores',
   getParentRoute: () => AppRoute,
 } as any)
 const AppConfiguracoesRoute = AppConfiguracoesRouteImport.update({
@@ -229,30 +164,115 @@ const AppConfiguracoesRoute = AppConfiguracoesRouteImport.update({
   path: '/configuracoes',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAgendaRoute = AppAgendaRouteImport.update({
-  id: '/agenda',
-  path: '/agenda',
+const AppContratosRoute = AppContratosRouteImport.update({
+  id: '/contratos',
+  path: '/contratos',
   getParentRoute: () => AppRoute,
 } as any)
-const SiteSlugIndexRoute = SiteSlugIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => SiteSlugRoute,
+const AppCorretoresRoute = AppCorretoresRouteImport.update({
+  id: '/corretores',
+  path: '/corretores',
+  getParentRoute: () => AppRoute,
 } as any)
-const PortalProprietarioTokenRoute = PortalProprietarioTokenRouteImport.update({
-  id: '/portal/proprietario/$token',
-  path: '/portal/proprietario/$token',
+const AppCrmRoute = AppCrmRouteImport.update({
+  id: '/crm',
+  path: '/crm',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCustosRoute = AppCustosRouteImport.update({
+  id: '/custos',
+  path: '/custos',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFinanceiroRoute = AppFinanceiroRouteImport.update({
+  id: '/financeiro',
+  path: '/financeiro',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppImoveisRoute = AppImoveisRouteImport.update({
+  id: '/imoveis',
+  path: '/imoveis',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppImportacoesRoute = AppImportacoesRouteImport.update({
+  id: '/importacoes',
+  path: '/importacoes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppInquilinosRoute = AppInquilinosRouteImport.update({
+  id: '/inquilinos',
+  path: '/inquilinos',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppIntegracoesRoute = AppIntegracoesRouteImport.update({
+  id: '/integracoes',
+  path: '/integracoes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppInteligenciaRoute = AppInteligenciaRouteImport.update({
+  id: '/inteligencia',
+  path: '/inteligencia',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppNotificacoesRoute = AppNotificacoesRouteImport.update({
+  id: '/notificacoes',
+  path: '/notificacoes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOperacoesRoute = AppOperacoesRouteImport.update({
+  id: '/operacoes',
+  path: '/operacoes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProprietariosRoute = AppProprietariosRouteImport.update({
+  id: '/proprietarios',
+  path: '/proprietarios',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSiteRoute = AppSiteRouteImport.update({
+  id: '/site',
+  path: '/site',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTestesRoute = AppTestesRouteImport.update({
+  id: '/testes',
+  path: '/testes',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppVistoriasRoute = AppVistoriasRouteImport.update({
+  id: '/vistorias',
+  path: '/vistorias',
+  getParentRoute: () => AppRoute,
+} as any)
+const AssinarVistoriaTokenRoute = AssinarVistoriaTokenRouteImport.update({
+  id: '/assinar-vistoria/$token',
+  path: '/assinar-vistoria/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PortalInquilinoTokenRoute = PortalInquilinoTokenRouteImport.update({
-  id: '/portal/inquilino/$token',
-  path: '/portal/inquilino/$token',
+const AssinaturaVistoriaTokenRoute = AssinaturaVistoriaTokenRouteImport.update({
+  id: '/assinatura-vistoria/$token',
+  path: '/assinatura-vistoria/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PortalCompradorTokenRoute = PortalCompradorTokenRouteImport.update({
-  id: '/portal/comprador/$token',
-  path: '/portal/comprador/$token',
+const SiteSlugRoute = SiteSlugRouteImport.update({
+  id: '/site/$slug',
+  path: '/site/$slug',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppImoveisNovoRoute = AppImoveisNovoRouteImport.update({
+  id: '/imoveis_/novo',
+  path: '/imoveis/novo',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
+  id: '/$ownerId',
+  path: '/$ownerId',
+  getParentRoute: () => AppProprietariosRoute,
+} as any)
+const AppSiteBuilderRoute = AppSiteBuilderRouteImport.update({
+  id: '/builder',
+  path: '/builder',
+  getParentRoute: () => AppSiteRoute,
 } as any)
 const AppVistoriasInspectionIdRoute =
   AppVistoriasInspectionIdRouteImport.update({
@@ -260,43 +280,53 @@ const AppVistoriasInspectionIdRoute =
     path: '/$inspectionId',
     getParentRoute: () => AppVistoriasRoute,
   } as any)
-const AppSiteBuilderRoute = AppSiteBuilderRouteImport.update({
-  id: '/builder',
-  path: '/builder',
-  getParentRoute: () => AppSiteRoute,
+const AppVistoriasNovaRoute = AppVistoriasNovaRouteImport.update({
+  id: '/nova',
+  path: '/nova',
+  getParentRoute: () => AppVistoriasRoute,
 } as any)
-const AppProprietariosOwnerIdRoute = AppProprietariosOwnerIdRouteImport.update({
-  id: '/$ownerId',
-  path: '/$ownerId',
-  getParentRoute: () => AppProprietariosRoute,
+const PortalCompradorTokenRoute = PortalCompradorTokenRouteImport.update({
+  id: '/portal/comprador/$token',
+  path: '/portal/comprador/$token',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const AppImoveisNovoRoute = AppImoveisNovoRouteImport.update({
-  id: '/imoveis_/novo',
-  path: '/imoveis/novo',
-  getParentRoute: () => AppRoute,
+const PortalInquilinoTokenRoute = PortalInquilinoTokenRouteImport.update({
+  id: '/portal/inquilino/$token',
+  path: '/portal/inquilino/$token',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const SiteSlugImoveisPropertySlugRoute =
-  SiteSlugImoveisPropertySlugRouteImport.update({
-    id: '/imoveis/$propertySlug',
-    path: '/imoveis/$propertySlug',
-    getParentRoute: () => SiteSlugRoute,
-  } as any)
+const PortalProprietarioTokenRoute = PortalProprietarioTokenRouteImport.update({
+  id: '/portal/proprietario/$token',
+  path: '/portal/proprietario/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SiteSlugIndexRoute = SiteSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SiteSlugRoute,
+} as any)
 const AppImoveisPropertyIdEditarRoute =
   AppImoveisPropertyIdEditarRouteImport.update({
     id: '/imoveis_/$propertyId/editar',
     path: '/imoveis/$propertyId/editar',
     getParentRoute: () => AppRoute,
   } as any)
-const AppSiteBuilderPreviewWebsiteIdRoute =
-  AppSiteBuilderPreviewWebsiteIdRouteImport.update({
-    id: '/preview/$websiteId',
-    path: '/preview/$websiteId',
-    getParentRoute: () => AppSiteBuilderRoute,
+const SiteSlugImoveisPropertySlugRoute =
+  SiteSlugImoveisPropertySlugRouteImport.update({
+    id: '/imoveis/$propertySlug',
+    path: '/imoveis/$propertySlug',
+    getParentRoute: () => SiteSlugRoute,
   } as any)
 const AppSiteBuilderEditorWebsiteIdRoute =
   AppSiteBuilderEditorWebsiteIdRouteImport.update({
     id: '/editor/$websiteId',
     path: '/editor/$websiteId',
+    getParentRoute: () => AppSiteBuilderRoute,
+  } as any)
+const AppSiteBuilderPreviewWebsiteIdRoute =
+  AppSiteBuilderPreviewWebsiteIdRouteImport.update({
+    id: '/preview/$websiteId',
+    path: '/preview/$websiteId',
     getParentRoute: () => AppSiteBuilderRoute,
   } as any)
 const AppSiteBuilderEditorWebsiteIdCodeRoute =
@@ -330,13 +360,16 @@ export interface FileRoutesByFullPath {
   '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
+  '/app/compradores': typeof AppCompradoresRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
   '/app/contratos': typeof AppContratosRoute
+  '/app/corretores': typeof AppCorretoresRoute
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
   '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
+  '/app/inquilinos': typeof AppInquilinosRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
@@ -346,12 +379,14 @@ export interface FileRoutesByFullPath {
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
+  '/assinatura-vistoria/$token': typeof AssinaturaVistoriaTokenRoute
   '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app/': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/app/vistorias/nova': typeof AppVistoriasNovaRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
@@ -380,13 +415,16 @@ export interface FileRoutesByTo {
   '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
+  '/app/compradores': typeof AppCompradoresRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
   '/app/contratos': typeof AppContratosRoute
+  '/app/corretores': typeof AppCorretoresRoute
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
   '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
+  '/app/inquilinos': typeof AppInquilinosRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
@@ -396,11 +434,13 @@ export interface FileRoutesByTo {
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
+  '/assinatura-vistoria/$token': typeof AssinaturaVistoriaTokenRoute
   '/app': typeof AppIndexRoute
   '/app/imoveis/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/app/vistorias/nova': typeof AppVistoriasNovaRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
@@ -431,13 +471,16 @@ export interface FileRoutesById {
   '/redefinir-senha': typeof RedefinirSenhaRoute
   '/resultados': typeof ResultadosRoute
   '/app/agenda': typeof AppAgendaRoute
+  '/app/compradores': typeof AppCompradoresRoute
   '/app/configuracoes': typeof AppConfiguracoesRoute
   '/app/contratos': typeof AppContratosRoute
+  '/app/corretores': typeof AppCorretoresRoute
   '/app/crm': typeof AppCrmRoute
   '/app/custos': typeof AppCustosRoute
   '/app/financeiro': typeof AppFinanceiroRoute
   '/app/imoveis': typeof AppImoveisRoute
   '/app/importacoes': typeof AppImportacoesRoute
+  '/app/inquilinos': typeof AppInquilinosRoute
   '/app/integracoes': typeof AppIntegracoesRoute
   '/app/inteligencia': typeof AppInteligenciaRoute
   '/app/notificacoes': typeof AppNotificacoesRoute
@@ -447,12 +490,14 @@ export interface FileRoutesById {
   '/app/testes': typeof AppTestesRoute
   '/app/vistorias': typeof AppVistoriasRouteWithChildren
   '/assinar-vistoria/$token': typeof AssinarVistoriaTokenRoute
+  '/assinatura-vistoria/$token': typeof AssinaturaVistoriaTokenRoute
   '/site/$slug': typeof SiteSlugRouteWithChildren
   '/app/': typeof AppIndexRoute
   '/app/imoveis_/novo': typeof AppImoveisNovoRoute
   '/app/proprietarios/$ownerId': typeof AppProprietariosOwnerIdRoute
   '/app/site/builder': typeof AppSiteBuilderRouteWithChildren
   '/app/vistorias/$inspectionId': typeof AppVistoriasInspectionIdRoute
+  '/app/vistorias/nova': typeof AppVistoriasNovaRoute
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
@@ -484,13 +529,16 @@ export interface FileRouteTypes {
     | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
+    | '/app/compradores'
     | '/app/configuracoes'
     | '/app/contratos'
+    | '/app/corretores'
     | '/app/crm'
     | '/app/custos'
     | '/app/financeiro'
     | '/app/imoveis'
     | '/app/importacoes'
+    | '/app/inquilinos'
     | '/app/integracoes'
     | '/app/inteligencia'
     | '/app/notificacoes'
@@ -500,12 +548,14 @@ export interface FileRouteTypes {
     | '/app/testes'
     | '/app/vistorias'
     | '/assinar-vistoria/$token'
+    | '/assinatura-vistoria/$token'
     | '/site/$slug'
     | '/app/'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/app/vistorias/nova'
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
@@ -534,13 +584,16 @@ export interface FileRouteTypes {
     | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
+    | '/app/compradores'
     | '/app/configuracoes'
     | '/app/contratos'
+    | '/app/corretores'
     | '/app/crm'
     | '/app/custos'
     | '/app/financeiro'
     | '/app/imoveis'
     | '/app/importacoes'
+    | '/app/inquilinos'
     | '/app/integracoes'
     | '/app/inteligencia'
     | '/app/notificacoes'
@@ -550,11 +603,13 @@ export interface FileRouteTypes {
     | '/app/testes'
     | '/app/vistorias'
     | '/assinar-vistoria/$token'
+    | '/assinatura-vistoria/$token'
     | '/app'
     | '/app/imoveis/novo'
     | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/app/vistorias/nova'
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
@@ -584,13 +639,16 @@ export interface FileRouteTypes {
     | '/redefinir-senha'
     | '/resultados'
     | '/app/agenda'
+    | '/app/compradores'
     | '/app/configuracoes'
     | '/app/contratos'
+    | '/app/corretores'
     | '/app/crm'
     | '/app/custos'
     | '/app/financeiro'
     | '/app/imoveis'
     | '/app/importacoes'
+    | '/app/inquilinos'
     | '/app/integracoes'
     | '/app/inteligencia'
     | '/app/notificacoes'
@@ -600,12 +658,14 @@ export interface FileRouteTypes {
     | '/app/testes'
     | '/app/vistorias'
     | '/assinar-vistoria/$token'
+    | '/assinatura-vistoria/$token'
     | '/site/$slug'
     | '/app/'
     | '/app/imoveis_/novo'
     | '/app/proprietarios/$ownerId'
     | '/app/site/builder'
     | '/app/vistorias/$inspectionId'
+    | '/app/vistorias/nova'
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
@@ -636,6 +696,7 @@ export interface RootRouteChildren {
   RedefinirSenhaRoute: typeof RedefinirSenhaRoute
   ResultadosRoute: typeof ResultadosRoute
   AssinarVistoriaTokenRoute: typeof AssinarVistoriaTokenRoute
+  AssinaturaVistoriaTokenRoute: typeof AssinaturaVistoriaTokenRoute
   SiteSlugRoute: typeof SiteSlugRouteWithChildren
   PortalCompradorTokenRoute: typeof PortalCompradorTokenRoute
   PortalInquilinoTokenRoute: typeof PortalInquilinoTokenRoute
@@ -644,102 +705,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/resultados': {
-      id: '/resultados'
-      path: '/resultados'
-      fullPath: '/resultados'
-      preLoaderRoute: typeof ResultadosRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/redefinir-senha': {
-      id: '/redefinir-senha'
-      path: '/redefinir-senha'
-      fullPath: '/redefinir-senha'
-      preLoaderRoute: typeof RedefinirSenhaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/recuperar-senha': {
-      id: '/recuperar-senha'
-      path: '/recuperar-senha'
-      fullPath: '/recuperar-senha'
-      preLoaderRoute: typeof RecuperarSenhaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/quem-usa': {
-      id: '/quem-usa'
-      path: '/quem-usa'
-      fullPath: '/quem-usa'
-      preLoaderRoute: typeof QuemUsaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/produto': {
-      id: '/produto'
-      path: '/produto'
-      fullPath: '/produto'
-      preLoaderRoute: typeof ProdutoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/planos': {
-      id: '/planos'
-      path: '/planos'
-      fullPath: '/planos'
-      preLoaderRoute: typeof PlanosRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/inteligencia': {
-      id: '/inteligencia'
-      path: '/inteligencia'
-      fullPath: '/inteligencia'
-      preLoaderRoute: typeof InteligenciaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/faq': {
-      id: '/faq'
-      path: '/faq'
-      fullPath: '/faq'
-      preLoaderRoute: typeof FaqRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/entrar': {
-      id: '/entrar'
-      path: '/entrar'
-      fullPath: '/entrar'
-      preLoaderRoute: typeof EntrarRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cadastro': {
-      id: '/cadastro'
-      path: '/cadastro'
-      fullPath: '/cadastro'
-      preLoaderRoute: typeof CadastroRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/ativar-conta': {
-      id: '/ativar-conta'
-      path: '/ativar-conta'
-      fullPath: '/ativar-conta'
-      preLoaderRoute: typeof AtivarContaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/assinatura-bloqueada': {
-      id: '/assinatura-bloqueada'
-      path: '/assinatura-bloqueada'
-      fullPath: '/assinatura-bloqueada'
-      preLoaderRoute: typeof AssinaturaBloqueadaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/app': {
-      id: '/app'
-      path: '/app'
-      fullPath: '/app'
-      preLoaderRoute: typeof AppRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/aceitar-convite': {
-      id: '/aceitar-convite'
-      path: '/aceitar-convite'
-      fullPath: '/aceitar-convite'
-      preLoaderRoute: typeof AceitarConviteRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$slug': {
@@ -749,11 +719,102 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/aceitar-convite': {
+      id: '/aceitar-convite'
+      path: '/aceitar-convite'
+      fullPath: '/aceitar-convite'
+      preLoaderRoute: typeof AceitarConviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/assinatura-bloqueada': {
+      id: '/assinatura-bloqueada'
+      path: '/assinatura-bloqueada'
+      fullPath: '/assinatura-bloqueada'
+      preLoaderRoute: typeof AssinaturaBloqueadaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ativar-conta': {
+      id: '/ativar-conta'
+      path: '/ativar-conta'
+      fullPath: '/ativar-conta'
+      preLoaderRoute: typeof AtivarContaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cadastro': {
+      id: '/cadastro'
+      path: '/cadastro'
+      fullPath: '/cadastro'
+      preLoaderRoute: typeof CadastroRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/entrar': {
+      id: '/entrar'
+      path: '/entrar'
+      fullPath: '/entrar'
+      preLoaderRoute: typeof EntrarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/faq': {
+      id: '/faq'
+      path: '/faq'
+      fullPath: '/faq'
+      preLoaderRoute: typeof FaqRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inteligencia': {
+      id: '/inteligencia'
+      path: '/inteligencia'
+      fullPath: '/inteligencia'
+      preLoaderRoute: typeof InteligenciaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/planos': {
+      id: '/planos'
+      path: '/planos'
+      fullPath: '/planos'
+      preLoaderRoute: typeof PlanosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/produto': {
+      id: '/produto'
+      path: '/produto'
+      fullPath: '/produto'
+      preLoaderRoute: typeof ProdutoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/quem-usa': {
+      id: '/quem-usa'
+      path: '/quem-usa'
+      fullPath: '/quem-usa'
+      preLoaderRoute: typeof QuemUsaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/recuperar-senha': {
+      id: '/recuperar-senha'
+      path: '/recuperar-senha'
+      fullPath: '/recuperar-senha'
+      preLoaderRoute: typeof RecuperarSenhaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/redefinir-senha': {
+      id: '/redefinir-senha'
+      path: '/redefinir-senha'
+      fullPath: '/redefinir-senha'
+      preLoaderRoute: typeof RedefinirSenhaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/resultados': {
+      id: '/resultados'
+      path: '/resultados'
+      fullPath: '/resultados'
+      preLoaderRoute: typeof ResultadosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/': {
@@ -763,116 +824,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/site/$slug': {
-      id: '/site/$slug'
-      path: '/site/$slug'
-      fullPath: '/site/$slug'
-      preLoaderRoute: typeof SiteSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/assinar-vistoria/$token': {
-      id: '/assinar-vistoria/$token'
-      path: '/assinar-vistoria/$token'
-      fullPath: '/assinar-vistoria/$token'
-      preLoaderRoute: typeof AssinarVistoriaTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/app/vistorias': {
-      id: '/app/vistorias'
-      path: '/vistorias'
-      fullPath: '/app/vistorias'
-      preLoaderRoute: typeof AppVistoriasRouteImport
+    '/app/agenda': {
+      id: '/app/agenda'
+      path: '/agenda'
+      fullPath: '/app/agenda'
+      preLoaderRoute: typeof AppAgendaRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/testes': {
-      id: '/app/testes'
-      path: '/testes'
-      fullPath: '/app/testes'
-      preLoaderRoute: typeof AppTestesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/site': {
-      id: '/app/site'
-      path: '/site'
-      fullPath: '/app/site'
-      preLoaderRoute: typeof AppSiteRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/proprietarios': {
-      id: '/app/proprietarios'
-      path: '/proprietarios'
-      fullPath: '/app/proprietarios'
-      preLoaderRoute: typeof AppProprietariosRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/operacoes': {
-      id: '/app/operacoes'
-      path: '/operacoes'
-      fullPath: '/app/operacoes'
-      preLoaderRoute: typeof AppOperacoesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/notificacoes': {
-      id: '/app/notificacoes'
-      path: '/notificacoes'
-      fullPath: '/app/notificacoes'
-      preLoaderRoute: typeof AppNotificacoesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/inteligencia': {
-      id: '/app/inteligencia'
-      path: '/inteligencia'
-      fullPath: '/app/inteligencia'
-      preLoaderRoute: typeof AppInteligenciaRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/integracoes': {
-      id: '/app/integracoes'
-      path: '/integracoes'
-      fullPath: '/app/integracoes'
-      preLoaderRoute: typeof AppIntegracoesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/importacoes': {
-      id: '/app/importacoes'
-      path: '/importacoes'
-      fullPath: '/app/importacoes'
-      preLoaderRoute: typeof AppImportacoesRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/imoveis': {
-      id: '/app/imoveis'
-      path: '/imoveis'
-      fullPath: '/app/imoveis'
-      preLoaderRoute: typeof AppImoveisRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/financeiro': {
-      id: '/app/financeiro'
-      path: '/financeiro'
-      fullPath: '/app/financeiro'
-      preLoaderRoute: typeof AppFinanceiroRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/custos': {
-      id: '/app/custos'
-      path: '/custos'
-      fullPath: '/app/custos'
-      preLoaderRoute: typeof AppCustosRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/crm': {
-      id: '/app/crm'
-      path: '/crm'
-      fullPath: '/app/crm'
-      preLoaderRoute: typeof AppCrmRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/app/contratos': {
-      id: '/app/contratos'
-      path: '/contratos'
-      fullPath: '/app/contratos'
-      preLoaderRoute: typeof AppContratosRouteImport
+    '/app/compradores': {
+      id: '/app/compradores'
+      path: '/compradores'
+      fullPath: '/app/compradores'
+      preLoaderRoute: typeof AppCompradoresRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/configuracoes': {
@@ -882,25 +845,179 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppConfiguracoesRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/agenda': {
-      id: '/app/agenda'
-      path: '/agenda'
-      fullPath: '/app/agenda'
-      preLoaderRoute: typeof AppAgendaRouteImport
+    '/app/contratos': {
+      id: '/app/contratos'
+      path: '/contratos'
+      fullPath: '/app/contratos'
+      preLoaderRoute: typeof AppContratosRouteImport
       parentRoute: typeof AppRoute
     }
-    '/site/$slug/': {
-      id: '/site/$slug/'
-      path: '/'
-      fullPath: '/site/$slug/'
-      preLoaderRoute: typeof SiteSlugIndexRouteImport
-      parentRoute: typeof SiteSlugRoute
+    '/app/corretores': {
+      id: '/app/corretores'
+      path: '/corretores'
+      fullPath: '/app/corretores'
+      preLoaderRoute: typeof AppCorretoresRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/portal/proprietario/$token': {
-      id: '/portal/proprietario/$token'
-      path: '/portal/proprietario/$token'
-      fullPath: '/portal/proprietario/$token'
-      preLoaderRoute: typeof PortalProprietarioTokenRouteImport
+    '/app/crm': {
+      id: '/app/crm'
+      path: '/crm'
+      fullPath: '/app/crm'
+      preLoaderRoute: typeof AppCrmRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/custos': {
+      id: '/app/custos'
+      path: '/custos'
+      fullPath: '/app/custos'
+      preLoaderRoute: typeof AppCustosRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/financeiro': {
+      id: '/app/financeiro'
+      path: '/financeiro'
+      fullPath: '/app/financeiro'
+      preLoaderRoute: typeof AppFinanceiroRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/imoveis': {
+      id: '/app/imoveis'
+      path: '/imoveis'
+      fullPath: '/app/imoveis'
+      preLoaderRoute: typeof AppImoveisRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/importacoes': {
+      id: '/app/importacoes'
+      path: '/importacoes'
+      fullPath: '/app/importacoes'
+      preLoaderRoute: typeof AppImportacoesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/inquilinos': {
+      id: '/app/inquilinos'
+      path: '/inquilinos'
+      fullPath: '/app/inquilinos'
+      preLoaderRoute: typeof AppInquilinosRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/integracoes': {
+      id: '/app/integracoes'
+      path: '/integracoes'
+      fullPath: '/app/integracoes'
+      preLoaderRoute: typeof AppIntegracoesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/inteligencia': {
+      id: '/app/inteligencia'
+      path: '/inteligencia'
+      fullPath: '/app/inteligencia'
+      preLoaderRoute: typeof AppInteligenciaRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/notificacoes': {
+      id: '/app/notificacoes'
+      path: '/notificacoes'
+      fullPath: '/app/notificacoes'
+      preLoaderRoute: typeof AppNotificacoesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/operacoes': {
+      id: '/app/operacoes'
+      path: '/operacoes'
+      fullPath: '/app/operacoes'
+      preLoaderRoute: typeof AppOperacoesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/proprietarios': {
+      id: '/app/proprietarios'
+      path: '/proprietarios'
+      fullPath: '/app/proprietarios'
+      preLoaderRoute: typeof AppProprietariosRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/site': {
+      id: '/app/site'
+      path: '/site'
+      fullPath: '/app/site'
+      preLoaderRoute: typeof AppSiteRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/testes': {
+      id: '/app/testes'
+      path: '/testes'
+      fullPath: '/app/testes'
+      preLoaderRoute: typeof AppTestesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/vistorias': {
+      id: '/app/vistorias'
+      path: '/vistorias'
+      fullPath: '/app/vistorias'
+      preLoaderRoute: typeof AppVistoriasRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/assinar-vistoria/$token': {
+      id: '/assinar-vistoria/$token'
+      path: '/assinar-vistoria/$token'
+      fullPath: '/assinar-vistoria/$token'
+      preLoaderRoute: typeof AssinarVistoriaTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/assinatura-vistoria/$token': {
+      id: '/assinatura-vistoria/$token'
+      path: '/assinatura-vistoria/$token'
+      fullPath: '/assinatura-vistoria/$token'
+      preLoaderRoute: typeof AssinaturaVistoriaTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/site/$slug': {
+      id: '/site/$slug'
+      path: '/site/$slug'
+      fullPath: '/site/$slug'
+      preLoaderRoute: typeof SiteSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app/imoveis_/novo': {
+      id: '/app/imoveis_/novo'
+      path: '/imoveis/novo'
+      fullPath: '/app/imoveis/novo'
+      preLoaderRoute: typeof AppImoveisNovoRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/proprietarios/$ownerId': {
+      id: '/app/proprietarios/$ownerId'
+      path: '/$ownerId'
+      fullPath: '/app/proprietarios/$ownerId'
+      preLoaderRoute: typeof AppProprietariosOwnerIdRouteImport
+      parentRoute: typeof AppProprietariosRoute
+    }
+    '/app/site/builder': {
+      id: '/app/site/builder'
+      path: '/builder'
+      fullPath: '/app/site/builder'
+      preLoaderRoute: typeof AppSiteBuilderRouteImport
+      parentRoute: typeof AppSiteRoute
+    }
+    '/app/vistorias/$inspectionId': {
+      id: '/app/vistorias/$inspectionId'
+      path: '/$inspectionId'
+      fullPath: '/app/vistorias/$inspectionId'
+      preLoaderRoute: typeof AppVistoriasInspectionIdRouteImport
+      parentRoute: typeof AppVistoriasRoute
+    }
+    '/app/vistorias/nova': {
+      id: '/app/vistorias/nova'
+      path: '/nova'
+      fullPath: '/app/vistorias/nova'
+      preLoaderRoute: typeof AppVistoriasNovaRouteImport
+      parentRoute: typeof AppVistoriasRoute
+    }
+    '/portal/comprador/$token': {
+      id: '/portal/comprador/$token'
+      path: '/portal/comprador/$token'
+      fullPath: '/portal/comprador/$token'
+      preLoaderRoute: typeof PortalCompradorTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/portal/inquilino/$token': {
@@ -910,46 +1027,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PortalInquilinoTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/portal/comprador/$token': {
-      id: '/portal/comprador/$token'
-      path: '/portal/comprador/$token'
-      fullPath: '/portal/comprador/$token'
-      preLoaderRoute: typeof PortalCompradorTokenRouteImport
+    '/portal/proprietario/$token': {
+      id: '/portal/proprietario/$token'
+      path: '/portal/proprietario/$token'
+      fullPath: '/portal/proprietario/$token'
+      preLoaderRoute: typeof PortalProprietarioTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app/vistorias/$inspectionId': {
-      id: '/app/vistorias/$inspectionId'
-      path: '/$inspectionId'
-      fullPath: '/app/vistorias/$inspectionId'
-      preLoaderRoute: typeof AppVistoriasInspectionIdRouteImport
-      parentRoute: typeof AppVistoriasRoute
-    }
-    '/app/site/builder': {
-      id: '/app/site/builder'
-      path: '/builder'
-      fullPath: '/app/site/builder'
-      preLoaderRoute: typeof AppSiteBuilderRouteImport
-      parentRoute: typeof AppSiteRoute
-    }
-    '/app/proprietarios/$ownerId': {
-      id: '/app/proprietarios/$ownerId'
-      path: '/$ownerId'
-      fullPath: '/app/proprietarios/$ownerId'
-      preLoaderRoute: typeof AppProprietariosOwnerIdRouteImport
-      parentRoute: typeof AppProprietariosRoute
-    }
-    '/app/imoveis_/novo': {
-      id: '/app/imoveis_/novo'
-      path: '/imoveis/novo'
-      fullPath: '/app/imoveis/novo'
-      preLoaderRoute: typeof AppImoveisNovoRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/site/$slug/imoveis/$propertySlug': {
-      id: '/site/$slug/imoveis/$propertySlug'
-      path: '/imoveis/$propertySlug'
-      fullPath: '/site/$slug/imoveis/$propertySlug'
-      preLoaderRoute: typeof SiteSlugImoveisPropertySlugRouteImport
+    '/site/$slug/': {
+      id: '/site/$slug/'
+      path: '/'
+      fullPath: '/site/$slug/'
+      preLoaderRoute: typeof SiteSlugIndexRouteImport
       parentRoute: typeof SiteSlugRoute
     }
     '/app/imoveis_/$propertyId/editar': {
@@ -959,18 +1048,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppImoveisPropertyIdEditarRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/site/builder/preview/$websiteId': {
-      id: '/app/site/builder/preview/$websiteId'
-      path: '/preview/$websiteId'
-      fullPath: '/app/site/builder/preview/$websiteId'
-      preLoaderRoute: typeof AppSiteBuilderPreviewWebsiteIdRouteImport
-      parentRoute: typeof AppSiteBuilderRoute
+    '/site/$slug/imoveis/$propertySlug': {
+      id: '/site/$slug/imoveis/$propertySlug'
+      path: '/imoveis/$propertySlug'
+      fullPath: '/site/$slug/imoveis/$propertySlug'
+      preLoaderRoute: typeof SiteSlugImoveisPropertySlugRouteImport
+      parentRoute: typeof SiteSlugRoute
     }
     '/app/site/builder/editor/$websiteId': {
       id: '/app/site/builder/editor/$websiteId'
       path: '/editor/$websiteId'
       fullPath: '/app/site/builder/editor/$websiteId'
       preLoaderRoute: typeof AppSiteBuilderEditorWebsiteIdRouteImport
+      parentRoute: typeof AppSiteBuilderRoute
+    }
+    '/app/site/builder/preview/$websiteId': {
+      id: '/app/site/builder/preview/$websiteId'
+      path: '/preview/$websiteId'
+      fullPath: '/app/site/builder/preview/$websiteId'
+      preLoaderRoute: typeof AppSiteBuilderPreviewWebsiteIdRouteImport
       parentRoute: typeof AppSiteBuilderRoute
     }
     '/app/site/builder/editor/$websiteId/code': {
@@ -1060,10 +1156,12 @@ const AppSiteRouteWithChildren =
 
 interface AppVistoriasRouteChildren {
   AppVistoriasInspectionIdRoute: typeof AppVistoriasInspectionIdRoute
+  AppVistoriasNovaRoute: typeof AppVistoriasNovaRoute
 }
 
 const AppVistoriasRouteChildren: AppVistoriasRouteChildren = {
   AppVistoriasInspectionIdRoute: AppVistoriasInspectionIdRoute,
+  AppVistoriasNovaRoute: AppVistoriasNovaRoute,
 }
 
 const AppVistoriasRouteWithChildren = AppVistoriasRoute._addFileChildren(
@@ -1072,13 +1170,16 @@ const AppVistoriasRouteWithChildren = AppVistoriasRoute._addFileChildren(
 
 interface AppRouteChildren {
   AppAgendaRoute: typeof AppAgendaRoute
+  AppCompradoresRoute: typeof AppCompradoresRoute
   AppConfiguracoesRoute: typeof AppConfiguracoesRoute
   AppContratosRoute: typeof AppContratosRoute
+  AppCorretoresRoute: typeof AppCorretoresRoute
   AppCrmRoute: typeof AppCrmRoute
   AppCustosRoute: typeof AppCustosRoute
   AppFinanceiroRoute: typeof AppFinanceiroRoute
   AppImoveisRoute: typeof AppImoveisRoute
   AppImportacoesRoute: typeof AppImportacoesRoute
+  AppInquilinosRoute: typeof AppInquilinosRoute
   AppIntegracoesRoute: typeof AppIntegracoesRoute
   AppInteligenciaRoute: typeof AppInteligenciaRoute
   AppNotificacoesRoute: typeof AppNotificacoesRoute
@@ -1094,13 +1195,16 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAgendaRoute: AppAgendaRoute,
+  AppCompradoresRoute: AppCompradoresRoute,
   AppConfiguracoesRoute: AppConfiguracoesRoute,
   AppContratosRoute: AppContratosRoute,
+  AppCorretoresRoute: AppCorretoresRoute,
   AppCrmRoute: AppCrmRoute,
   AppCustosRoute: AppCustosRoute,
   AppFinanceiroRoute: AppFinanceiroRoute,
   AppImoveisRoute: AppImoveisRoute,
   AppImportacoesRoute: AppImportacoesRoute,
+  AppInquilinosRoute: AppInquilinosRoute,
   AppIntegracoesRoute: AppIntegracoesRoute,
   AppInteligenciaRoute: AppInteligenciaRoute,
   AppNotificacoesRoute: AppNotificacoesRoute,
@@ -1148,6 +1252,7 @@ const rootRouteChildren: RootRouteChildren = {
   RedefinirSenhaRoute: RedefinirSenhaRoute,
   ResultadosRoute: ResultadosRoute,
   AssinarVistoriaTokenRoute: AssinarVistoriaTokenRoute,
+  AssinaturaVistoriaTokenRoute: AssinaturaVistoriaTokenRoute,
   SiteSlugRoute: SiteSlugRouteWithChildren,
   PortalCompradorTokenRoute: PortalCompradorTokenRoute,
   PortalInquilinoTokenRoute: PortalInquilinoTokenRoute,
@@ -1156,13 +1261,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
