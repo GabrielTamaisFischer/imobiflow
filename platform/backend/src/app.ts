@@ -135,21 +135,20 @@ export function createApp() {
     );
   }
 
-  app.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "imobiflow-api" });
-  });
-
-  // VERIFICACAO TEMPORARIA DE HOMOLOGACAO (staging) - F5G.
-  // Autorizada explicitamente para confirmar, uma unica vez por cold start,
-  // que o backend deste deploy esta de fato conectado ao banco de staging
-  // antes de qualquer homologacao funcional com dados sinteticos. So roda
-  // quando STAGING_DB_CHECK_ENABLED=true (nunca setado em producao real -
-  // nao existe projeto de producao real para este repositorio hoje; a flag
-  // sera removida junto com este bloco ao final da homologacao). Executa
-  // SOMENTE um SELECT DATABASE() (leitura, zero escrita) e loga apenas o
-  // nome do banco - nunca host, usuario, senha ou a connection string.
-  if (process.env.STAGING_DB_CHECK_ENABLED === "true") {
-    void (async () => {
+  app.get("/health", async (_req, res) => {
+    // VERIFICACAO TEMPORARIA DE HOMOLOGACAO (staging) - F5G.
+    // Autorizada explicitamente para confirmar, dentro do proprio ciclo de
+    // requisicao (para garantir que o log seja emitido antes do lambda
+    // congelar), que o backend deste deploy esta de fato conectado ao banco
+    // de staging antes de qualquer homologacao funcional com dados
+    // sinteticos. So roda quando STAGING_DB_CHECK_ENABLED=true (nunca
+    // setado em producao real - nao existe projeto de producao real para
+    // este repositorio hoje; a flag sera removida junto com este bloco ao
+    // final da homologacao). Executa SOMENTE um SELECT DATABASE() (leitura,
+    // zero escrita), loga apenas o nome do banco nos logs do servidor
+    // (nunca host, usuario, senha ou connection string), e NUNCA inclui o
+    // resultado na resposta HTTP.
+    if (process.env.STAGING_DB_CHECK_ENABLED === "true") {
       try {
         const { getPrisma } = await import("./lib/website-builder-prisma.js");
         const rows = (await getPrisma().$queryRaw`SELECT DATABASE() AS db`) as Array<{ db: string }>;
@@ -157,8 +156,9 @@ export function createApp() {
       } catch {
         console.log("[STAGING_DB_CHECK] error=connection_failed");
       }
-    })();
-  }
+    }
+    res.json({ ok: true, service: "imobiflow-api" });
+  });
 
   app.use("/auth", authRouter);
   app.use("/ai", aiRouter);
