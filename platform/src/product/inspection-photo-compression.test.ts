@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  INSPECTION_PHOTO_MAX_SIDE,
   INSPECTION_UPLOAD_TARGET_BYTES,
   fitWithin,
   prepareInspectionPhotoForUpload,
@@ -37,7 +38,8 @@ function photo(sizeBytes: number, name = "IMG_0001.jpeg", type = "image/jpeg") {
 
 describe("compressão de foto da vistoria", () => {
   it("arquivo dentro do limite segue intacto (mesmo objeto, sem recodificar)", async () => {
-    const original = photo(1_500_000, "foto.png", "image/png");
+    // Abaixo de INSPECTION_UPLOAD_TARGET_BYTES (1,2 MB) — dentro do limite real.
+    const original = photo(1_000_000, "foto.png", "image/png");
     const { encoder, calls } = fakeEncoder(4000, 3000);
     const result = await prepareInspectionPhotoForUpload(original, encoder);
     expect(result.file).toBe(original);
@@ -45,7 +47,7 @@ describe("compressão de foto da vistoria", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("foto de celular grande fica abaixo de ~3 MB, mantém proporção e vira JPEG", async () => {
+  it("foto de celular grande fica abaixo de ~1,2 MB, mantém proporção e vira JPEG", async () => {
     const original = photo(6_500_000);
     const { encoder, calls, wasReleased } = fakeEncoder(4032, 3024);
     const result = await prepareInspectionPhotoForUpload(original, encoder);
@@ -55,9 +57,9 @@ describe("compressão de foto da vistoria", () => {
     expect(result.file.name).toBe("IMG_0001.jpg");
     expect(result.file.lastModified).toBe(original.lastModified);
     expect(result.width! / result.height!).toBeCloseTo(4032 / 3024, 2);
-    expect(Math.max(result.width!, result.height!)).toBeLessThanOrEqual(2560);
+    expect(Math.max(result.width!, result.height!)).toBeLessThanOrEqual(INSPECTION_PHOTO_MAX_SIDE);
     // Começa pela melhor qualidade e só reduz o necessário.
-    expect(calls[0].quality).toBe(0.88);
+    expect(calls[0].quality).toBe(0.82);
     expect(wasReleased()).toBe(true);
     // O original não é alterado (a fila offline guarda este arquivo).
     expect(original.size).toBe(6_500_000);
@@ -111,7 +113,7 @@ describe("compressão de foto da vistoria", () => {
     expect(result.file.type).toBe("image/jpeg");
     expect(result.file.name).toBe("foto.jpg");
     expect(calls).toHaveLength(1);
-    expect(calls[0].quality).toBe(0.88);
+    expect(calls[0].quality).toBe(0.82);
     // Proporção preservada.
     expect(result.width! / result.height!).toBeCloseTo(1920 / 1080, 2);
     // O original (ainda WebP) não é alterado — fila offline guarda este arquivo.

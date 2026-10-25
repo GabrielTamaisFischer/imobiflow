@@ -363,9 +363,17 @@ describe("botão de laudo e busca de imóvel", () => {
     expect(detail).toContain("disabled={busy || !canReport}");
     // Trava síncrona contra duplo clique (o `disabled` só vale após re-render).
     expect(detail).toContain("if (inFlight.current) return;");
-    expect(detail).toMatch(/async function generate\(\) \{ await exclusive\(/);
-    expect(detail).toMatch(/async function sign\(\) \{[^}]*await exclusive\(/);
-    expect(detail).toMatch(/async function compare\(\) \{[^}]*await exclusive\(/);
+    expect(detail).toMatch(/async function generate\(\) \{\s*await exclusive\(/);
+    expect(detail).toMatch(/async function compare\(\) \{[\s\S]*?await exclusive\(/);
+    // A assinatura migrou para o componente dedicado InspectionSigningSection
+    // (não existe mais uma função sign() local a esta página); a trava contra
+    // duplo clique lá usa seu próprio estado `busy`, não o helper exclusive().
+    const signing = await readFile(
+      new URL("../components/app/inspections/InspectionSigningSection.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(signing).toContain("const [busy, setBusy] = useState(false);");
+    expect(signing).toContain("async function startProcess()");
   });
 
   it("busca de imóvel é server-side e não carrega lista fixa de 100", async () => {

@@ -22,7 +22,10 @@ describe("F5E — evidências de vistoria", () => {
     // evidência existente, só a integração visual mudou de lugar.
     const gallery = await source("../components/app/inspections/InspectionEvidenceGallery.tsx");
     const itemCard = await source("../components/app/inspections/InspectionItemCard.tsx");
-    expect(gallery).toContain("Adicionar fotos");
+    // UI atual oferece duas CTAs de captura/seleção (câmera e arquivo), não
+    // mais um único rótulo genérico "Adicionar fotos".
+    expect(gallery).toContain("Tirar fotos");
+    expect(gallery).toContain("Escolher fotos");
     expect(gallery).toContain("multiple");
     const thumbnail = await source("../components/app/inspections/InspectionEvidenceThumbnail.tsx");
     expect(thumbnail).toContain("Remover evidência");

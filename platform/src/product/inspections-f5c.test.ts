@@ -62,7 +62,10 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     // Ação de criar ambiente (sugestão aceita ou manual) só aparece com
     // permissão operacional (inspections.manage) e vistoria mutável — nunca
     // exige cargo administrativo, ao contrário de editar/arquivar o registro.
-    expect(detail).toContain("canEdit && mutable ? <InspectionAddRoom");
+    // `contentEditable` encapsula essa condição (canEdit && (lifecycleMutable
+    // || (canEditRecord && editMode))); no fluxo operacional normal (não
+    // concluída/arquivada) ela se reduz a canEdit, sem exigir cargo alto.
+    expect(detail).toContain("contentEditable ? <InspectionAddRoom");
   });
 
   it("refaz o carregamento após conflito de versão nas mutações do detalhe", async () => {
@@ -118,11 +121,11 @@ describe("F5C — UI de vistoria ligada ao backend canônico", () => {
     expect(detail).toContain("isAdministrative");
     expect(detail).toContain("canEditRecord = canEdit && isAdministrative(session?.access.appUser)");
     expect(detail).toContain("{canEditRecord ? (");
-    expect(detail).toContain("editable={canEditRecord && mutable && editMode}");
+    expect(detail).toContain("editable={canEditRecord && editMode}");
     // O trabalho operacional (ambientes, itens, evidências, iniciar/concluir)
     // continua liberado apenas com inspections.manage, sem exigir cargo alto —
     // desde o SUB-BLOCO 3 isso é passado para o InspectionRoomWorkspace.
-    expect(detail).toContain("canEdit={canEdit && mutable}");
+    expect(detail).toContain("canEdit={contentEditable}");
     expect(workspace).toContain("canEdit ?");
     expect(access).toContain('const administrativeRoles = new Set(["owner", "admin", "manager"]);');
   });
