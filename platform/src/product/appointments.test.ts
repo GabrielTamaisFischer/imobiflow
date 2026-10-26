@@ -17,12 +17,14 @@ describe("F7B — interface de agendamentos canônicos", () => {
     const route = await source("../routes/app.agenda.tsx");
     expect(client).toContain("/real-estate/appointments");
     expect(client).toContain("Idempotency-Key");
-    expect(route).toContain("from: toIsoDateTime(from)");
+    expect(route).toContain("toIsoDateTime(formatDateTimeLocal(range.from))");
     expect(route).not.toContain('from "@/product/agenda"');
   });
 
-  it("mantém labels e estados terminais do contrato", () => {
-    expect(appointmentTypeLabels.visit).toBe("Visita");
+  it("mantém labels e estados terminais do contrato (F8 — tipos/estados ampliados)", () => {
+    expect(appointmentTypeLabels.visit).toBe("Visita a imóvel");
+    expect(appointmentTypeLabels.event).toBe("Evento");
+    expect(appointmentTypeLabels.task).toBe("Tarefa");
     expect(appointmentStatusLabels.scheduled).toBe("Agendada");
     expect(appointmentStatusLabels.completed).toBe("Concluída");
     expect(appointmentStatusLabels.cancelled).toBe("Cancelada");
@@ -47,7 +49,7 @@ describe("F7B — interface de agendamentos canônicos", () => {
     const route = await source("../routes/app.agenda.tsx");
     expect(route).toContain('canManage(user, "appointments.manage")');
     expect(route).toContain("Nenhum agendamento encontrado");
-    expect(route).toContain("Carregando agendamentos");
+    expect(route).toContain("Carregando agenda");
     expect(route).toContain('role="alert"');
   });
 });
