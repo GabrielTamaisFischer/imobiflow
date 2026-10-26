@@ -31,8 +31,14 @@ describe("F7B — interface de agendamentos canônicos", () => {
   });
 
   it("normaliza campos datetime-local para ISO e formata no locale do usuário", () => {
-    expect(toIsoDateTime("2026-09-10T10:30")).toMatch(/2026-09-10T13:30:00.000Z/);
-    expect(formatAppointmentDate("2026-09-10T13:30:00.000Z")).toContain("10/09/2026");
+    // toIsoDateTime interpreta o valor de <input type="datetime-local"> como horário LOCAL do
+    // navegador (comportamento correto do runtime JS para esse formato) e converte para UTC.
+    // Por isso o ISO esperado é calculado a partir do fuso local do processo em execução, em vez
+    // de um literal fixo — o literal antigo (...T13:30:00.000Z) só era válido assumindo
+    // America/Sao_Paulo (UTC-3) e quebrava em qualquer ambiente de CI configurado em outro fuso.
+    const expectedIso = new Date(2026, 8, 10, 10, 30, 0, 0).toISOString();
+    expect(toIsoDateTime("2026-09-10T10:30")).toBe(expectedIso);
+    expect(formatAppointmentDate(expectedIso)).toContain("10/09/2026");
   });
 
   it("usa locking otimista e refetch após conflito", async () => {
