@@ -301,7 +301,11 @@ function AgendaPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Em telas estreitas (celular/tablet retrato) a barra lateral some por padrao para a grade
+  // nao ficar espremida; o usuario ainda pode reabri-la pelo botao do cabecalho.
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window === "undefined" ? true : window.innerWidth >= 1024,
+  );
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [peopleQuery, setPeopleQuery] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
@@ -752,7 +756,7 @@ function AgendaHeader(props: {
         </Button>
         <span className="min-w-0 truncate text-sm font-medium">{props.rangeTitle}</span>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           <Tabs value={props.view} onValueChange={(value) => props.onView(value as ViewMode)}>
             <TabsList>
               {VIEW_TABS.map((tab) => (
@@ -1007,8 +1011,14 @@ function TimeGridView(props: {
   );
   const hasAllDay = allDayByDay.some((list) => list.length > 0);
 
+  // Largura minima por coluna de dia: evita que Semana vire uma faixa ilegivel em telas
+  // estreitas - a grade passa a rolar horizontalmente em vez de espremer as colunas.
+  const minGridWidth = 56 + props.days.length * 92;
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-full flex-col overflow-x-auto">
+    <div className="flex h-full flex-col" style={{ minWidth: minGridWidth }}>
       {/* Cabeçalho dos dias */}
       <div className="flex border-b" style={{ paddingLeft: 56 }}>
         {props.days.map((day) => (
@@ -1124,6 +1134,8 @@ function TimeGridView(props: {
           })}
         </div>
       </div>
+    </div>
+    </div>
     </div>
   );
 }
