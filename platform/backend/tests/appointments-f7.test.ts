@@ -15,9 +15,18 @@ const valid = {
 describe("F7A — domínio canônico de agendamento", () => {
   it.each([
     ["scheduled", "scheduled"],
+    ["scheduled", "confirmed"],
+    ["scheduled", "in_progress"],
     ["scheduled", "completed"],
     ["scheduled", "cancelled"],
-  ])("permite transição válida %s -> %s", (from, to) => {
+    ["scheduled", "no_show"],
+    ["confirmed", "in_progress"],
+    ["confirmed", "completed"],
+    ["confirmed", "cancelled"],
+    ["confirmed", "no_show"],
+    ["in_progress", "completed"],
+    ["in_progress", "cancelled"],
+  ])("permite transição válida %s -> %s (agenda F8 — visita/tarefa/evento)", (from, to) => {
     expect(canTransitionAppointment(from, to)).toBe(true);
   });
 
@@ -26,26 +35,46 @@ describe("F7A — domínio canônico de agendamento", () => {
     ["cancelled", "completed"],
     ["completed", "scheduled"],
     ["completed", "cancelled"],
+    ["no_show", "scheduled"],
+    ["no_show", "completed"],
     ["unknown", "completed"],
   ])("bloqueia transição inválida %s -> %s", (from, to) => {
     expect(canTransitionAppointment(from, to)).toBe(false);
   });
 
-  it.each([
-    ["lead_id", "Lead"],
-    ["property_id", "imóvel"],
-    ["assigned_to", "responsável"],
-  ])("create exige vínculo %s", (field) => {
+  it("create exige vínculo assigned_to sempre", () => {
     const input = { ...valid } as Record<string, unknown>;
-    delete input[field];
+    delete input.assigned_to;
     expect(() => appointmentInput.parse(input)).toThrow();
+  });
+
+  it("create exige imóvel vinculado quando appointment_type é visit (F8)", () => {
+    const input = { ...valid } as Record<string, unknown>;
+    delete input.property_id;
+    expect(() => appointmentInput.parse(input)).toThrow();
+  });
+
+  it("create NÃO exige lead nem imóvel para Evento ou Tarefa (F8 — agenda genérica)", () => {
+    const input = { ...valid, appointment_type: "event" } as Record<string, unknown>;
+    delete input.lead_id;
+    delete input.property_id;
+    const parsed = appointmentInput.parse(input);
+    expect(parsed.lead_id ?? null).toBeNull();
+    expect(parsed.property_id ?? null).toBeNull();
+
+    const task = appointmentInput.parse({ ...input, appointment_type: "task" });
+    expect(task.appointment_type).toBe("task");
   });
 
   it.each([
     ["scheduled", "completed"],
     ["scheduled", "cancelled"],
+    ["scheduled", "confirmed"],
+    ["confirmed", "in_progress"],
+    ["in_progress", "completed"],
     ["completed", "completed"],
     ["cancelled", "cancelled"],
+    ["no_show", "no_show"],
   ])("lifecycle permanece determinístico para %s -> %s", (from, to) => {
     expect(appointmentStatuses).toContain(from);
     expect(appointmentStatuses).toContain(to);
@@ -58,8 +87,13 @@ describe("F7A — domínio canônico de agendamento", () => {
 
   it("aceita todos os tipos canônicos", () => {
     for (const appointment_type of appointmentTypes) {
-      expect(appointmentInput.parse({ ...valid, appointment_type }).appointment_type).toBe(appointment_type);
+      const input = appointment_type === "visit" ? valid : { ...valid, appointment_type };       expect(appointmentInput.parse({ ...input, appointment_type }).appointment_type).toBe(appointment_type);
     }
+  });
+
+  it("inclui event e task no vocabulário de tipos (F8 — agenda genérica)", () => {
+    expect(appointmentTypes).toContain("event");
+    expect(appointmentTypes).toContain("task");
   });
 
   it("aceita metadata estruturada", () => {
@@ -106,8 +140,8 @@ describe("F7A — domínio canônico de agendamento", () => {
     expect(lifecycleInput.parse({ expected_version: 4 }).expected_version).toBe(4);
   });
 
-  it("status não inventa rescheduled persistido", () => {
-    expect(appointmentStatuses).toEqual(["scheduled", "cancelled", "completed"]);
+  it("status canônico cobre ciclo de visita, tarefa e evento (F8)", () => {
+    expect(appointmentStatuses).toEqual(["scheduled", "confirmed", "in_progress", "completed", "cancelled", "no_show"]);
   });
 
   it("Broker possui leitura e gestão de appointments no template", () => {

@@ -10,13 +10,16 @@ import type { RequestWithAccess } from "../types/access.js";
 export const mysqlAppointmentsRouter = Router();
 mysqlAppointmentsRouter.use(requireAuth, requireCompany, requireActiveSubscription);
 
-export const appointmentStatuses = ["scheduled", "cancelled", "completed"] as const;
-export const appointmentTypes = ["visit", "return", "meeting", "inspection", "signature", "follow_up"] as const;
+export const appointmentStatuses = ["scheduled", "confirmed", "in_progress", "completed", "cancelled", "no_show"] as const;
+export const appointmentTypes = ["visit", "return", "meeting", "inspection", "signature", "follow_up", "event", "task"] as const;
+// Tipos que exigem vinculo obrigatorio com um imovel cadastrado (ex.: Visita a imovel).
+const typesRequiringProperty = new Set<(typeof appointmentTypes)[number]>(["visit"]);
 
-const appointmentInput = z.object({
+const appointmentInputShape = z.object({
   id: z.string().uuid(),
-  lead_id: z.string().uuid(),
-  property_id: z.string().uuid(),
+  // Lead e imovel sao opcionais: Evento e Tarefa nao exigem vinculo comercial.
+  lead_id: z.string().uuid().optional().nullable(),
+  property_id: z.string().uuid().optional().nullable(),
   assigned_to: z.string().uuid(),
   appointment_type: z.enum(appointmentTypes).default("visit"),
   title: z.string().trim().min(2).max(180),
@@ -26,6 +29,11 @@ const appointmentInput = z.object({
   ends_at: z.coerce.date().optional().nullable(),
   reminder_at: z.coerce.date().optional().nullable(),
   metadata: z.record(z.unknown()).optional(),
+});
+const appointmentInput = appointmentInputShape.superRefine((value, ctx) => {
+  if (typesRequiringProperty.has(value.appointment_type) && !value.property_id) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["property_id"], message: "Visita a imovel exige um imovel vinculado." });
+  }
 });
 
 const patchInput = z.object({
@@ -37,6 +45,7 @@ const patchInput = z.object({
   starts_at: z.coerce.date().optional(),
   ends_at: z.coerce.date().optional().nullable(),
   reminder_at: z.coerce.date().optional().nullable(),
+  metadata: z.record(z.unknown()).optional(),
 }).refine((value) => Object.keys(value).some((key) => key !== "expected_version"), {
   message: "Informe ao menos um campo para atualizar.",
 });
@@ -101,9 +110,12 @@ function serialize(row: any) {
 export function canTransitionAppointment(current: string, requested: string) {
   if (current === requested) return true;
   const allowed: Record<string, string[]> = {
-    scheduled: ["completed", "cancelled"],
+    scheduled: ["confirmed", "in_progress", "completed", "cancelled", "no_show"],
+    confirmed: ["in_progress", "completed", "cancelled", "no_show"],
+    in_progress: ["completed", "cancelled"],
     cancelled: [],
     completed: [],
+    no_show: [],
   };
   return allowed[current]?.includes(requested) ?? false;
 }
@@ -131,19 +143,20 @@ async function assertLead(req: RequestWithAccess, leadId: string) {
 }
 
 async function assertBroker(req: RequestWithAccess, assignedTo: string) {
-  const broker = await db().appUser.findFirst({
+  // Qualquer usuario ativo da empresa com permissao de agenda pode ser responsavel
+  // (nao apenas corretores) - owner, admin, gerente, assistente etc.
+  const responsible = await db().appUser.findFirst({
     where: {
       id: assignedTo,
       companyId: req.access!.company.id,
       status: "active",
       roleRecord: {
-        systemKey: "broker",
         permissions: { some: { permission: { key: "appointments.view" } } },
       },
     },
     select: { id: true },
   });
-  if (!broker) throw invalid("Responsável inválido para esta empresa.", "INVALID_APPOINTMENT_ASSIGNEE");
+  if (!responsible) throw invalid("Responsável inválido para esta empresa.", "INVALID_APPOINTMENT_ASSIGNEE");
 }
 
 async function findAccessible(req: RequestWithAccess, id: string) {
@@ -151,8 +164,11 @@ async function findAccessible(req: RequestWithAccess, id: string) {
     where: {
       id,
       companyId: req.access!.company.id,
-      property: { is: buildPropertyScopeFilter(req.access!, "appointments.view", "VISIT") },
-      lead: { is: buildLeadScopeFilter(req.access!, "crm.view", "VIEW") },
+      OR: [
+        { propertyId: null },
+        { property: { is: buildPropertyScopeFilter(req.access!, "appointments.view", "VISIT") } },
+      ],
+      AND: [{ OR: [{ leadId: null }, { lead: { is: buildLeadScopeFilter(req.access!, "crm.view", "VIEW") } }] }],
     },
     include,
   });
@@ -175,6 +191,10 @@ mysqlAppointmentsRouter.get("/", requirePermission("appointments.view"), async (
     const propertyId = typeof req.query.property_id === "string" ? req.query.property_id : undefined;
     const leadId = typeof req.query.lead_id === "string" ? req.query.lead_id : undefined;
     const assignedTo = typeof req.query.assigned_to === "string" ? req.query.assigned_to : undefined;
+    const typesParam = typeof req.query.types === "string" ? req.query.types : undefined;
+    const types = typesParam
+      ? typesParam.split(",").map((item) => item.trim()).filter((item): item is (typeof appointmentTypes)[number] => (appointmentTypes as readonly string[]).includes(item))
+      : undefined;
     const rows = await db().appointment.findMany({
       where: {
         companyId: access.company.id,
@@ -182,9 +202,13 @@ mysqlAppointmentsRouter.get("/", requirePermission("appointments.view"), async (
         ...(propertyId ? { propertyId } : {}),
         ...(leadId ? { leadId } : {}),
         ...(assignedTo ? { assignedTo } : {}),
+        ...(types && types.length ? { appointmentType: { in: types } } : {}),
         ...(from || to ? { startsAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
-        property: { is: buildPropertyScopeFilter(access, "appointments.view", "VISIT") },
-        lead: { is: buildLeadScopeFilter(access, "crm.view", "VIEW") },
+        OR: [
+          { propertyId: null },
+          { property: { is: buildPropertyScopeFilter(access, "appointments.view", "VISIT") } },
+        ],
+        AND: [{ OR: [{ leadId: null }, { lead: { is: buildLeadScopeFilter(access, "crm.view", "VIEW") } }] }],
       },
       include,
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],
@@ -204,14 +228,14 @@ mysqlAppointmentsRouter.post("/", requirePermission("appointments.manage"), asyn
     const input = appointmentInput.parse(req.body);
     const endsAt = input.ends_at ?? new Date(input.starts_at.getTime() + 60 * 60 * 1000);
     ensureDateRange(input.starts_at, endsAt);
-    await assertProperty(req, input.property_id);
-    await assertLead(req, input.lead_id);
+    if (input.property_id) await assertProperty(req, input.property_id);
+    if (input.lead_id) await assertLead(req, input.lead_id);
     await assertBroker(req, input.assigned_to);
     const key = resolveIdempotencyKey(req, `appointment.create:${input.id}`);
     const { result, replayed } = await withIdempotency(access.company.id, "appointment.create", key, async () => {
       const row = await db().$transaction(async (tx: any) => {
         const appointment = await tx.appointment.create({ data: {
-          id: input.id, companyId: access.company.id, leadId: input.lead_id, propertyId: input.property_id,
+          id: input.id, companyId: access.company.id, leadId: input.lead_id ?? null, propertyId: input.property_id ?? null,
           assignedTo: input.assigned_to, createdBy: access.appUser.id, appointmentType: input.appointment_type,
           title: input.title, description: input.description ?? null, locationText: input.location_text ?? null,
           startsAt: input.starts_at, endsAt, reminderAt: input.reminder_at ?? null, metadata: input.metadata ?? {}, status: "scheduled",
@@ -242,6 +266,7 @@ mysqlAppointmentsRouter.patch("/:id", requirePermission("appointments.manage"), 
       ...(input.starts_at ? { startsAt } : {}),
       ...(input.ends_at !== undefined || input.starts_at ? { endsAt } : {}),
       ...(input.reminder_at !== undefined ? { reminderAt: input.reminder_at } : {}),
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       version: { increment: 1 },
     };
     const updated = await db().$transaction(async (tx: any) => {
@@ -254,7 +279,7 @@ mysqlAppointmentsRouter.patch("/:id", requirePermission("appointments.manage"), 
   } catch (error) { next(error); }
 });
 
-async function transition(req: RequestWithAccess, id: string, requested: "cancelled" | "completed", expectedVersion: number) {
+async function transition(req: RequestWithAccess, id: string, requested: (typeof appointmentStatuses)[number], expectedVersion: number) {
   const current = await findAccessible(req, id);
   if (current.status === requested) return { row: current, replayed: true };
   if (!canTransitionAppointment(current.status, requested)) throw conflict("Transição de status inválida.", "INVALID_APPOINTMENT_TRANSITION");
@@ -273,6 +298,17 @@ mysqlAppointmentsRouter.post("/:id/cancel", requirePermission("appointments.mana
 
 mysqlAppointmentsRouter.post("/:id/complete", requirePermission("appointments.manage"), async (req: RequestWithAccess, res, next) => {
   try { const input = lifecycleInput.parse(req.body); const result = await transition(req, String(req.params.id), "completed", input.expected_version); res.json({ appointment: serialize(result.row), replayed: result.replayed }); } catch (error) { next(error); }
+});
+
+const statusTransitionInput = z.object({ expected_version: z.number().int().positive(), status: z.enum(appointmentStatuses) });
+
+// Endpoint generico de transicao (confirmar, iniciar, marcar nao compareceu, etc.) alem dos atalhos acima.
+mysqlAppointmentsRouter.post("/:id/status", requirePermission("appointments.manage"), async (req: RequestWithAccess, res, next) => {
+  try {
+    const input = statusTransitionInput.parse(req.body);
+    const result = await transition(req, String(req.params.id), input.status, input.expected_version);
+    res.json({ appointment: serialize(result.row), replayed: result.replayed });
+  } catch (error) { next(error); }
 });
 
 export { appointmentInput, patchInput, lifecycleInput };
