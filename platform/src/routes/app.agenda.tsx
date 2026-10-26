@@ -1373,9 +1373,14 @@ function AppointmentDetailSheet(props: {
   const busy = appointment ? props.running === `status:${appointment.id}` : false;
   const start = appointment ? new Date(appointment.starts_at) : null;
   const end = appointment ? new Date(appointment.ends_at) : null;
-  const nextStatuses = appointment
-    ? appointmentStatusFlowByType[appointment.appointment_type].filter((status) => status !== appointment.status)
-    : [];
+  // Espelha o grafo de transicoes do backend (canTransitionAppointment): cancelled/completed/no_show sao
+  // estados terminais e nao aceitam nenhuma nova transicao - sem isso a UI oferecia botoes que sempre
+  // resultavam em 409 (conflito) ao clicar.
+  const isTerminal = appointment ? ["cancelled", "completed", "no_show"].includes(appointment.status) : true;
+  const nextStatuses =
+    appointment && !isTerminal
+      ? appointmentStatusFlowByType[appointment.appointment_type].filter((status) => status !== appointment.status)
+      : [];
 
   return (
     <Sheet open={Boolean(appointment)} onOpenChange={(open) => !open && props.onClose()}>
@@ -1465,7 +1470,7 @@ function AppointmentDetailSheet(props: {
                   <Pencil className="h-3.5 w-3.5" /> Editar
                 </Button>
               ) : null}
-              {props.canEdit && appointment.status !== "cancelled" && appointment.status !== "completed" ? (
+              {props.canEdit && !isTerminal ? (
                 <Button
                   type="button"
                   variant="destructive"
