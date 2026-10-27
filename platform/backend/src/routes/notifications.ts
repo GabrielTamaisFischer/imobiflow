@@ -12,6 +12,7 @@ import {
   dispatchNotificationEvent,
   queueNotificationEvent,
   registerManualNotificationDelivery,
+  type DispatchNotificationEvent,
 } from "../services/notification-dispatcher.js";
 
 export const notificationsRouter = Router();
@@ -100,6 +101,28 @@ notificationsRouter.get(
       if (error) throw error;
 
       res.json({ events: data ?? [] });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+notificationsRouter.post(
+  "/events/:id/read",
+  requirePermission("notifications.view"),
+  async (req: RequestWithAccess, res, next) => {
+    try {
+      const companyId = req.access!.company.id;
+      const eventId = getRouteParam(req.params.id);
+      const { data, error } = await supabaseAdmin
+        .from("notification_events")
+        .update({ status: "read", updated_at: new Date().toISOString() })
+        .eq("id", eventId)
+        .eq("company_id", companyId)
+        .select(eventSelect)
+        .single<DispatchNotificationEvent>();
+      if (error) throw error;
+      res.json({ event: data });
     } catch (error) {
       next(error);
     }

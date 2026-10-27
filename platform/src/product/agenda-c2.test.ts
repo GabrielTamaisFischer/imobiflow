@@ -34,4 +34,19 @@ describe("Agenda C2-C5 UI wiring", () => {
     expect(source).toContain("Waze");
     expect(source).toContain("agenda-timezones");
   });
+
+  it("uses paginated remote search and renders broker resource columns", () => {
+    expect(source).toContain("searchKind=\"users\"");
+    expect(source).toContain("searchKind=\"leads\"");
+    expect(source).toContain("searchKind=\"properties\"");
+    expect(source).toContain("setTimeout");
+    expect(source).toContain("ResourceTimeGridView");
+    expect(source).toContain("show_brokers_side_by_side");
+  });
+
+  it("connects the in-app notification feed without claiming background push", () => {
+    expect(source).toContain("listAgendaNotifications");
+    expect(source).toContain("markAgendaNotificationRead");
+    expect(source).toContain("Atualização automática");
+  });
 });

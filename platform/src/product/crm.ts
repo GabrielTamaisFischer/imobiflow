@@ -66,7 +66,7 @@ export type LeadInput = {
   lost_reason?: string;
 };
 
-export type CrmUser = { id: string; name: string; email: string; role: string; status: string };
+export type CrmUser = { id: string; name: string; email: string; role: string; status: string; creci?: string | null };
 export type LeadInterest = {
   id: string;
   property_id: string | null;
@@ -173,8 +173,16 @@ export async function updateCrmRouting(input: { mode: "manual" | "round_robin"; 
   return apiRequest<{ mode: string; user_ids: string[] }>("/crm/routing", { method: "PATCH", token: getStoredToken() ?? undefined, body: JSON.stringify(input) });
 }
 
-export async function listCrmUsers() {
-  return apiRequest<{ users: CrmUser[] }>("/crm/users", { token: getStoredToken() ?? undefined });
+export async function listCrmUsers(filters: { search?: string; page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams(
+    Object.entries(filters)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, String(value)]),
+  );
+  return apiRequest<{
+    users: CrmUser[];
+    pagination?: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean };
+  }>(`/crm/users${query.toString() ? `?${query}` : ""}`, { token: getStoredToken() ?? undefined });
 }
 
 export async function updateLead(leadId: string, input: Partial<LeadInput>) {

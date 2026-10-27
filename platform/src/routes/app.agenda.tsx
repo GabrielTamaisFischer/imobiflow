@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
   AlertTriangle,
+  Bell,
   Building2,
   CalendarCheck,
   CalendarClock,
@@ -71,7 +72,7 @@ import {
   type AppointmentType,
 } from "@/product/appointments";
 import { listCrmUsers, listLeads, type CrmUser, type Lead } from "@/product/crm";
-import { listAllProperties, type PropertySummary } from "@/product/real-estate";
+import { listAllProperties, listProperties, type PropertySummary } from "@/product/real-estate";
 import { getSiteSettings } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
 import {
@@ -97,6 +98,7 @@ import {
   type BookingPage,
 } from "@/product/booking";
 import { agendaTimeZones, formatTimeZoneLabel } from "@/product/agenda-catalogs";
+import { listAgendaNotifications, markAgendaNotificationRead, type AgendaNotification } from "@/product/notifications";
 
 export const Route = createFileRoute("/app/agenda")({ component: AgendaPage });
 
@@ -349,6 +351,8 @@ function AgendaPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AgendaNotification[]>([]);
 
   // Em telas estreitas (celular/tablet retrato) a barra lateral some por padrao para a grade
   // nao ficar espremida; o usuario ainda pode reabri-la pelo botao do cabecalho.
@@ -481,6 +485,24 @@ function AgendaPage() {
   }, [isLoading, session, canEdit]);
 
   useEffect(() => {
+    if (isLoading || !session || !canManage(user, "notifications.view")) return;
+    let cancelled = false;
+    const refresh = () => {
+      void listAgendaNotifications(20)
+        .then((response) => {
+          if (!cancelled) setNotifications(response.events);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isLoading, session, user]);
+
+  useEffect(() => {
     if (typeof window !== "undefined") window.localStorage.setItem("imobiflow.agenda.view", view);
   }, [view]);
 
@@ -571,6 +593,13 @@ function AgendaPage() {
     if (!query) return [];
     return users.filter((item) => item.name.toLocaleLowerCase("pt-BR").includes(query)).slice(0, 8);
   }, [peopleQuery, users]);
+
+  const resourceUsers = useMemo(() => {
+    if (!preferences?.show_brokers_side_by_side) return [];
+    const visibleIds = new Set(visibleAppointments.map((item) => item.assigned_to).filter((id): id is string => Boolean(id)));
+    const matching = users.filter((user) => visibleIds.has(user.id));
+    return matching.length ? matching : users.slice(0, 8);
+  }, [preferences?.show_brokers_side_by_side, users, visibleAppointments]);
 
   const selectedAppointment = useMemo(
     () => appointments.find((item) => item.id === selectedId) ?? null,
@@ -860,6 +889,10 @@ function AgendaPage() {
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((value) => !value)}
           onOpenPreferences={() => void openPreferences()}
+          notifications={notifications}
+          notificationsOpen={notificationsOpen}
+          onToggleNotifications={() => setNotificationsOpen((value) => !value)}
+          onReadNotification={(notification) => { void markAgendaNotificationRead(notification.id).then(() => setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, status: "read" } : item))).catch(() => undefined); }}
         />
 
         {error ? (
@@ -921,23 +954,47 @@ function AgendaPage() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Carregando agenda...
               </div>
             ) : view === "day" ? (
-              <TimeGridView
-                days={[anchor]}
-                appointments={visibleAppointments}
-                onSelect={setSelectedId}
-                onCreateAt={(start) => openCreateForm("event", start)}
-                compactShortEvents={preferences?.compact_short_events}
-                dimPastEvents={preferences?.dim_past_events}
-              />
+              preferences?.show_brokers_side_by_side ? (
+                <ResourceTimeGridView
+                  days={[anchor]}
+                  appointments={visibleAppointments}
+                  resources={resourceUsers}
+                  onSelect={setSelectedId}
+                  onCreateAt={(start) => openCreateForm("event", start)}
+                  compactShortEvents={preferences?.compact_short_events}
+                  dimPastEvents={preferences?.dim_past_events}
+                />
+              ) : (
+                <TimeGridView
+                  days={[anchor]}
+                  appointments={visibleAppointments}
+                  onSelect={setSelectedId}
+                  onCreateAt={(start) => openCreateForm("event", start)}
+                  compactShortEvents={preferences?.compact_short_events}
+                  dimPastEvents={preferences?.dim_past_events}
+                />
+              )
             ) : view === "week" ? (
-              <TimeGridView
-                days={Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(anchor), index)).filter((day) => preferences?.show_weekends !== false || (day.getDay() !== 0 && day.getDay() !== 6))}
-                appointments={visibleAppointments}
-                onSelect={setSelectedId}
-                onCreateAt={(start) => openCreateForm("event", start)}
-                compactShortEvents={preferences?.compact_short_events}
-                dimPastEvents={preferences?.dim_past_events}
-              />
+              preferences?.show_brokers_side_by_side ? (
+                <ResourceTimeGridView
+                  days={Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(anchor), index)).filter((day) => preferences?.show_weekends !== false || (day.getDay() !== 0 && day.getDay() !== 6))}
+                  appointments={visibleAppointments}
+                  resources={resourceUsers}
+                  onSelect={setSelectedId}
+                  onCreateAt={(start) => openCreateForm("event", start)}
+                  compactShortEvents={preferences?.compact_short_events}
+                  dimPastEvents={preferences?.dim_past_events}
+                />
+              ) : (
+                <TimeGridView
+                  days={Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(anchor), index)).filter((day) => preferences?.show_weekends !== false || (day.getDay() !== 0 && day.getDay() !== 6))}
+                  appointments={visibleAppointments}
+                  onSelect={setSelectedId}
+                  onCreateAt={(start) => openCreateForm("event", start)}
+                  compactShortEvents={preferences?.compact_short_events}
+                  dimPastEvents={preferences?.dim_past_events}
+                />
+              )
             ) : view === "month" ? (
               <MonthView
                 anchor={anchor}
@@ -1038,7 +1095,12 @@ function AgendaHeader(props: {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenPreferences: () => void;
+  notifications: AgendaNotification[];
+  notificationsOpen: boolean;
+  onToggleNotifications: () => void;
+  onReadNotification: (notification: AgendaNotification) => void;
 }) {
+  const unreadCount = props.notifications.filter((item) => !["read", "cancelled"].includes(item.status)).length;
   return (
     <header className="flex flex-col gap-3 border-b pb-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -1051,6 +1113,13 @@ function AgendaHeader(props: {
           <p className="text-xs text-muted-foreground">Visitas, reuniões, vistorias, retornos e lembretes internos.</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <div className="relative">
+            <Button type="button" variant="outline" size="icon" onClick={props.onToggleNotifications} aria-label="Notificações" aria-expanded={props.notificationsOpen}>
+              <Bell className="h-4 w-4" />
+              {unreadCount ? <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground">{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
+            </Button>
+            {props.notificationsOpen ? <AgendaNotificationsPanel notifications={props.notifications} onRead={props.onReadNotification} /> : null}
+          </div>
           <Button type="button" variant="outline" size="sm" onClick={props.onOpenPreferences}>
             <Settings className="h-4 w-4" /> Preferências
           </Button>
@@ -1125,6 +1194,26 @@ function AgendaHeader(props: {
         </div>
       </div>
     </header>
+  );
+}
+
+function AgendaNotificationsPanel({ notifications, onRead }: { notifications: AgendaNotification[]; onRead: (notification: AgendaNotification) => void }) {
+  return (
+    <div className="absolute right-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border bg-popover p-3 text-popover-foreground shadow-xl" role="dialog" aria-label="Notificações da agenda">
+      <div className="flex items-center justify-between border-b pb-2">
+        <p className="font-medium">Notificações</p>
+        <span className="text-xs text-muted-foreground">Atualização automática</span>
+      </div>
+      <div className="max-h-80 space-y-2 overflow-y-auto pt-2">
+        {notifications.length ? notifications.map((notification) => (
+          <button key={notification.id} type="button" className={["w-full rounded-md border p-2 text-left text-xs", notification.status === "read" ? "opacity-60" : "bg-primary/5"].join(" ")} onClick={() => notification.status !== "read" && onRead(notification)}>
+            <span className="block font-medium">{notification.subject ?? "Atualização da agenda"}</span>
+            <span className="mt-1 block text-muted-foreground">{notification.body}</span>
+            <time className="mt-1 block text-[10px] text-muted-foreground" dateTime={notification.created_at}>{new Date(notification.created_at).toLocaleString("pt-BR")}</time>
+          </button>
+        )) : <p className="py-5 text-center text-sm text-muted-foreground">Nenhuma notificação.</p>}
+      </div>
+    </div>
   );
 }
 
@@ -1443,6 +1532,71 @@ function WorldClock({ timezones }: { timezones: string[] }) {
 // ---------------------------------------------------------------------------
 // Grade de horas (Dia / Semana)
 // ---------------------------------------------------------------------------
+
+function ResourceTimeGridView(props: {
+  days: Date[];
+  appointments: Appointment[];
+  resources: Array<{ id: string; name: string }>;
+  onSelect: (id: string) => void;
+  onCreateAt: (start: Date) => void;
+  compactShortEvents?: boolean;
+  dimPastEvents?: boolean;
+}) {
+  const resources = props.resources.length ? props.resources : [{ id: "__unassigned", name: "Sem responsável" }];
+  const columns = props.days.flatMap((day) => resources.map((resource) => ({ day, resource })));
+  const minGridWidth = 56 + columns.length * 150;
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="flex h-full flex-col overflow-x-auto">
+        <div className="flex h-full flex-col" style={{ minWidth: minGridWidth }}>
+          <div className="flex border-b" style={{ paddingLeft: 56 }}>
+            {columns.map(({ day, resource }) => (
+              <div key={`${day.toISOString()}-${resource.id}`} className="flex-1 border-l px-2 py-1 text-center text-xs">
+                <div className="text-muted-foreground">{WEEKDAY_SHORT[day.getDay()]} {day.getDate()}</div>
+                <div className="truncate font-medium" title={resource.name}>{resource.name}</div>
+              </div>
+            ))}
+          </div>
+          <div className="relative flex-1 overflow-y-auto">
+            <div className="flex" style={{ height: HOURS.length * ROW_HEIGHT_PX }}>
+              <div className="w-14 shrink-0">
+                {HOURS.map((hour) => (
+                  <div key={hour} style={{ height: ROW_HEIGHT_PX }} className="relative -top-2 pr-2 text-right text-[11px] text-muted-foreground">
+                    {hour === 0 ? "" : `${pad2(hour)}:00`}
+                  </div>
+                ))}
+              </div>
+              {columns.map(({ day, resource }) => {
+                const assigned = resource.id === "__unassigned"
+                  ? props.appointments.filter((item) => !item.assigned_to)
+                  : props.appointments.filter((item) => item.assigned_to === resource.id);
+                const positioned = layoutDayAppointments(assigned, day);
+                return (
+                  <div key={`${day.toISOString()}-${resource.id}`} className="relative flex-1 border-l">
+                    {HOURS.map((hour) => (
+                      <button key={hour} type="button" style={{ height: ROW_HEIGHT_PX }} className="block w-full border-b border-dashed border-border/60 text-left hover:bg-accent/30" onClick={() => { const start = new Date(day); start.setHours(hour, 0, 0, 0); props.onCreateAt(start); }} />
+                    ))}
+                    {positioned.map(({ appointment, start, end, col, totalCols }) => {
+                      const style = TYPE_STYLES[appointment.appointment_type];
+                      const durationMinutes = Math.max((end.getTime() - start.getTime()) / 60000, 20);
+                      const width = 100 / totalCols;
+                      return (
+                        <button key={appointment.id} type="button" onClick={(event) => { event.stopPropagation(); props.onSelect(appointment.id); }} style={{ top: (minutesSinceMidnight(start) / 60) * ROW_HEIGHT_PX, height: (durationMinutes / 60) * ROW_HEIGHT_PX, left: `${col * width}%`, width: `${width}%` }} className={["absolute overflow-hidden rounded border px-1.5 py-0.5 text-left text-[11px] leading-tight shadow-sm", style.bg, style.border, style.text, props.compactShortEvents && durationMinutes <= 30 ? "py-0" : "", props.dimPastEvents && end < new Date() ? "opacity-60" : ""].join(" ")}>
+                          <div className="truncate font-medium">{appointment.title}</div>
+                          <div className="truncate opacity-80">{pad2(start.getHours())}:{pad2(start.getMinutes())}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TimeGridView(props: {
   days: Date[];
@@ -2192,6 +2346,7 @@ function SearchableChoice<T extends { id: string }>({
   listId,
   placeholder,
   required = false,
+  searchKind,
 }: {
   items: T[];
   value: string;
@@ -2200,10 +2355,53 @@ function SearchableChoice<T extends { id: string }>({
   listId: string;
   placeholder: string;
   required?: boolean;
+  searchKind?: "users" | "leads" | "properties";
 }) {
   const selected = items.find((item) => item.id === value);
   const [query, setQuery] = useState(() => selected ? getLabel(selected) : "");
+  const [remoteItems, setRemoteItems] = useState<T[]>([]);
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
+  const [searching, setSearching] = useState(false);
   useEffect(() => setQuery(selected ? getLabel(selected) : ""), [selected?.id]);
+  useEffect(() => {
+    if (!searchKind || query.trim().length < 2) {
+      setRemoteItems([]);
+      setRemoteLoaded(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      const request = searchKind === "users"
+        ? listCrmUsers({ search: query.trim(), page: 1, page_size: 20 }).then((response) => response.users)
+        : searchKind === "leads"
+          ? listLeads({ search: query.trim(), page: 1, page_size: 20 }).then((response) => response.leads)
+          : listProperties({ search: query.trim(), page: 1, pageSize: 20 }).then((response) => response.items);
+      void request
+        .then((result) => {
+          if (cancelled) return;
+          setRemoteItems(result as unknown as T[]);
+          setRemoteLoaded(true);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setRemoteItems([]);
+            setRemoteLoaded(true);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query, searchKind]);
+  const visibleItems = remoteLoaded ? remoteItems : items;
+  const optionItems = selected && !visibleItems.some((item) => item.id === selected.id)
+    ? [selected, ...visibleItems]
+    : visibleItems;
   return (
     <div className="relative">
       <Input
@@ -2215,11 +2413,13 @@ function SearchableChoice<T extends { id: string }>({
           const next = event.target.value;
           setQuery(next);
           const normalized = next.trim().toLocaleLowerCase("pt-BR");
-          const match = items.find((item) => getLabel(item).toLocaleLowerCase("pt-BR") === normalized || item.id === next);
+          const match = optionItems.find((item) => getLabel(item).toLocaleLowerCase("pt-BR") === normalized || item.id === next);
           onChange(match?.id ?? "");
         }}
       />
-      <datalist id={listId}>{items.map((item) => <option key={item.id} value={getLabel(item)} />)}</datalist>
+      <datalist id={listId}>{optionItems.map((item) => <option key={item.id} value={getLabel(item)} />)}</datalist>
+      {searching ? <span className="absolute right-2 top-2 text-[10px] text-muted-foreground">Buscando...</span> : null}
+      {!searching && remoteLoaded && !remoteItems.length ? <span className="mt-1 block text-[10px] text-muted-foreground">Nenhum resultado.</span> : null}
     </div>
   );
 }
@@ -2748,9 +2948,10 @@ function BookingPagesPanel({
               items={users}
               value={draft.owner_user_id}
               onChange={(value) => setDraft((current) => ({ ...current, owner_user_id: value }))}
-              getLabel={(item) => item.name}
+              getLabel={(item) => `${item.name}${item.creci ? ` · ${item.creci}` : ""}`}
               listId="booking-page-create-users"
               placeholder="Pesquise por responsável"
+              searchKind="users"
             />
           </label>
           <label className="text-sm">
@@ -2762,6 +2963,7 @@ function BookingPagesPanel({
               getLabel={(item) => `${item.code ? `${item.code} — ` : ""}${item.title}`}
               listId="booking-page-create-properties"
               placeholder="Nenhum ou pesquise por código"
+              searchKind="properties"
             />
           </label>
           <label className="text-sm">
@@ -3012,6 +3214,7 @@ function BookingPagesPanel({
                         getLabel={(lead) => `${lead.name}${lead.email ? ` — ${lead.email}` : ""}`}
                         listId={`booking-page-leads-${page.id}`}
                         placeholder="Pesquise por nome ou e-mail"
+                        searchKind="leads"
                       />
                     </label>
                     <label className="text-xs text-muted-foreground">
@@ -3023,6 +3226,7 @@ function BookingPagesPanel({
                         getLabel={(property) => `${property.code ? `${property.code} — ` : ""}${property.title}${property.city ? ` — ${property.city}` : ""}`}
                         listId={`booking-page-properties-${page.id}`}
                         placeholder="Pesquise por código, título ou cidade"
+                        searchKind="properties"
                       />
                     </label>
                   </div>
@@ -3533,9 +3737,10 @@ function BookingPageEditor({
             items={users}
             value={values.owner_user_id}
             onChange={(value) => set("owner_user_id", value)}
-            getLabel={(item) => item.name}
+            getLabel={(item) => `${item.name}${item.creci ? ` · ${item.creci}` : ""}`}
             listId={`booking-page-edit-users-${page.id}`}
             placeholder="Pesquise por responsável"
+            searchKind="users"
           />
         </label>
         <label>
@@ -3547,6 +3752,7 @@ function BookingPageEditor({
             getLabel={(item) => `${item.code ? `${item.code} — ` : ""}${item.title}`}
             listId={`booking-page-edit-properties-${page.id}`}
             placeholder="Nenhum ou pesquise por código"
+            searchKind="properties"
           />
         </label>
         <label>
@@ -3706,6 +3912,7 @@ function AppointmentForm({
             getLabel={(lead) => lead.name}
             listId="agenda-appointment-leads"
             placeholder="Pesquise por nome"
+            searchKind="leads"
           />
         </label>
         <label className="text-sm">
@@ -3718,6 +3925,7 @@ function AppointmentForm({
             getLabel={(property) => `${property.code ? `${property.code} — ` : ""}${property.title}`}
             listId="agenda-appointment-properties"
             placeholder="Pesquise por código ou título"
+            searchKind="properties"
           />
         </label>
         <label className="text-sm">
@@ -3727,9 +3935,10 @@ function AppointmentForm({
             items={users}
             value={values.assigned_to}
             onChange={(value) => update("assigned_to", value)}
-            getLabel={(item) => `${item.name} · ${item.role}`}
+            getLabel={(item) => `${item.name} · ${item.role}${item.creci ? ` · ${item.creci}` : ""}`}
             listId="agenda-appointment-users"
             placeholder="Pesquise por nome ou CRECI"
+            searchKind="users"
           />
         </label>
         <label className="text-sm">

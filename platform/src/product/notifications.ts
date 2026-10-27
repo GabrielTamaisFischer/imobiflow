@@ -273,3 +273,19 @@ function manualDeliveryPreviewEvent(input: {
     };
   };
 }
+
+export type AgendaNotification = Pick<NotificationEvent, "id" | "status" | "subject" | "body" | "related_entity_type" | "related_entity_id" | "scheduled_for" | "created_at" | "metadata">;
+
+export async function listAgendaNotifications(limit = 20) {
+  return listNotificationEvents(limit) as Promise<{ events: AgendaNotification[] }>;
+}
+
+export async function markAgendaNotificationRead(id: string) {
+  if (isPreviewNotifications()) {
+    return { event: readPreviewNotificationEvents().find((item) => item.id === id) as AgendaNotification };
+  }
+  return apiRequest<{ event: AgendaNotification }>(`/notifications/events/${encodeURIComponent(id)}/read`, {
+    method: "POST",
+    token: getStoredToken() ?? undefined,
+  });
+}

@@ -354,16 +354,54 @@ crmRouter.get("/pipeline", requirePermission("crm.view"), async (req: RequestWit
 
 crmRouter.get("/users", requirePermission("crm.view"), async (req: RequestWithAccess, res, next) => {
   try {
-    const users = await getPrisma().appUser.findMany({
-      where: {
-        companyId: req.access!.company.id,
-        status: "active",
-        roleRecord: { permissions: { some: { permission: { key: { in: ["crm.view", "crm.manage"] } } } } },
-      },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, role: true, status: true },
+    const rawPage = String(req.query.page ?? "1");
+    const rawPageSize = String(req.query.page_size ?? "100");
+    const page = Number(rawPage), pageSize = Number(rawPageSize);
+    if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw invalid("Paginação inválida.", "INVALID_PAGINATION");
+    }
+    const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 120) : "";
+    const where: Prisma.AppUserWhereInput = {
+      companyId: req.access!.company.id,
+      status: "active",
+      roleRecord: { permissions: { some: { permission: { key: { in: ["crm.view", "crm.manage"] } } } } },
+    };
+    if (search) {
+      where.AND = [{ OR: [
+        { name: { contains: search } },
+        { email: { contains: search } },
+        { party: { roles: { some: { role: "broker", brokerProfile: { creciNumber: { contains: search } } } } } },
+      ] }];
+    }
+    const prisma = getPrisma();
+    const [total, users] = await prisma.$transaction([
+      prisma.appUser.count({ where }),
+      prisma.appUser.findMany({
+        where,
+        orderBy: { name: "asc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          party: { select: { roles: { where: { role: "broker" }, select: { brokerProfile: { select: { creciNumber: true } } } } } },
+        },
+      }),
+    ]);
+    res.json({
+      users: users.map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        creci: user.party?.roles.find((role) => role.brokerProfile)?.brokerProfile?.creciNumber ?? null,
+      })),
+      pagination: { page, page_size: pageSize, total, total_pages: Math.ceil(total / pageSize), has_next: page * pageSize < total, has_previous: page > 1 },
     });
-    res.json({ users });
   } catch (error) { next(error); }
 });
 
