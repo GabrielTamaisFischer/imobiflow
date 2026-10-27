@@ -41,7 +41,7 @@ CREATE TABLE `booking_weekly_availability` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updated_at` DATETIME(3) NOT NULL,
 
-    INDEX `booking_weekly_availability_company_id_booking_page_id_weekday_idx`(`company_id`, `booking_page_id`, `weekday`),
+    INDEX `booking_weekly_company_page_weekday_idx`(`company_id`, `booking_page_id`, `weekday`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -58,7 +58,7 @@ CREATE TABLE `booking_availability_exceptions` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updated_at` DATETIME(3) NOT NULL,
 
-    INDEX `booking_availability_exceptions_company_id_booking_page_id_date_idx`(`company_id`, `booking_page_id`, `date`),
+    INDEX `booking_exception_company_page_date_idx`(`company_id`, `booking_page_id`, `date`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

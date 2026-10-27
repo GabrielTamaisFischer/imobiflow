@@ -263,7 +263,7 @@ model BookingWeeklyAvailability {
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   bookingPage   BookingPage @relation(fields: [bookingPageId], references: [id], onDelete: Cascade)
 
-  @@index([companyId, bookingPageId, weekday])
+  @@index([companyId, bookingPageId, weekday], map: "booking_weekly_company_page_weekday_idx")
   @@map("booking_weekly_availability")
 }
 
@@ -281,7 +281,7 @@ model BookingAvailabilityException {
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   bookingPage   BookingPage @relation(fields: [bookingPageId], references: [id], onDelete: Cascade)
 
-  @@index([companyId, bookingPageId, date])
+  @@index([companyId, bookingPageId, date], map: "booking_exception_company_page_date_idx")
   @@map("booking_availability_exceptions")
 }
 
