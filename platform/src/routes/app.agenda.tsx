@@ -2370,13 +2370,14 @@ function SearchableChoice<T extends { id: string }>({
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSearching(true);
       const request = searchKind === "users"
-        ? listCrmUsers({ search: query.trim(), page: 1, page_size: 20 }).then((response) => response.users)
+        ? listCrmUsers({ search: query.trim(), page: 1, page_size: 20 }, controller.signal).then((response) => response.users)
         : searchKind === "leads"
-          ? listLeads({ search: query.trim(), page: 1, page_size: 20 }).then((response) => response.leads)
-          : listProperties({ search: query.trim(), page: 1, pageSize: 20 }).then((response) => response.items);
+          ? listLeads({ search: query.trim(), page: 1, page_size: 20 }, controller.signal).then((response) => response.leads)
+          : listProperties({ search: query.trim(), page: 1, pageSize: 20 }, controller.signal).then((response) => response.items);
       void request
         .then((result) => {
           if (cancelled) return;
@@ -2396,6 +2397,7 @@ function SearchableChoice<T extends { id: string }>({
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      controller.abort();
     };
   }, [query, searchKind]);
   const visibleItems = remoteLoaded ? remoteItems : items;

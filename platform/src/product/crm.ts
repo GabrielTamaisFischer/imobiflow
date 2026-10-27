@@ -111,7 +111,7 @@ export async function loadCrmPipeline() {
   });
 }
 
-export async function listLeads(filters: Record<string, string | number | undefined> = {}) {
+export async function listLeads(filters: Record<string, string | number | undefined> = {}, signal?: AbortSignal) {
   if (isPreviewCrm()) {
     const preview = readPreviewLeads();
     return { leads: preview, pagination: { page: 1, page_size: preview.length, total: preview.length, total_pages: 1, has_next: false, has_previous: false } };
@@ -120,6 +120,7 @@ export async function listLeads(filters: Record<string, string | number | undefi
   const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
   return apiRequest<{ leads: Lead[]; pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean } }>(`/crm/leads${query.toString() ? `?${query}` : ""}`, {
     token: getStoredToken() ?? undefined,
+    signal,
   });
 }
 
@@ -173,7 +174,7 @@ export async function updateCrmRouting(input: { mode: "manual" | "round_robin"; 
   return apiRequest<{ mode: string; user_ids: string[] }>("/crm/routing", { method: "PATCH", token: getStoredToken() ?? undefined, body: JSON.stringify(input) });
 }
 
-export async function listCrmUsers(filters: { search?: string; page?: number; page_size?: number } = {}) {
+export async function listCrmUsers(filters: { search?: string; page?: number; page_size?: number } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams(
     Object.entries(filters)
       .filter(([, value]) => value !== undefined)
@@ -182,7 +183,7 @@ export async function listCrmUsers(filters: { search?: string; page?: number; pa
   return apiRequest<{
     users: CrmUser[];
     pagination?: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean; has_previous: boolean };
-  }>(`/crm/users${query.toString() ? `?${query}` : ""}`, { token: getStoredToken() ?? undefined });
+  }>(`/crm/users${query.toString() ? `?${query}` : ""}`, { token: getStoredToken() ?? undefined, signal });
 }
 
 export async function updateLead(leadId: string, input: Partial<LeadInput>) {

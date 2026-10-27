@@ -706,7 +706,7 @@ export async function deleteOwnerDocument(ownerId: string, documentId: string) {
   );
 }
 
-export async function listProperties(filters: PropertyListFilters = {}): Promise<PropertyPage> {
+export async function listProperties(filters: PropertyListFilters = {}, signal?: AbortSignal): Promise<PropertyPage> {
   if (isPreviewRealEstate()) {
     const matching = filterPreviewProperties(readPreviewProperties(), filters);
     const page = filters.page ?? 1;
@@ -727,6 +727,7 @@ export async function listProperties(filters: PropertyListFilters = {}): Promise
 
   return apiRequest<PropertyPage>(`/real-estate/properties?${buildPropertyListQuery(filters)}`, {
     token: getStoredToken() ?? undefined,
+    signal,
   });
 }
 
