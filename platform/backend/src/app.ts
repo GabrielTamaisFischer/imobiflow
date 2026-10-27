@@ -29,6 +29,7 @@ import { portalIntegrationsRouter } from "./routes/portal-integrations.js";
 import { publicInspectionsRouter } from "./routes/public-inspections.js";
 import { publicPortalsRouter } from "./routes/public-portals.js";
 import { publicSitesRouter } from "./routes/public-sites.js";
+import { publicBookingRouter } from "./routes/public-booking.js";
 import { realEstateRouter } from "./routes/real-estate.js";
 import { registrationsRouter } from "./routes/registrations.js";
 import { mysqlPortalRouter } from "./routes/portal-mysql.js";
@@ -172,6 +173,7 @@ export function createApp() {
   app.use("/public/inspection-signing", publicInspectionSigningRouter);
   app.use("/public/portals", publicPortalsRouter);
   app.use("/public/sites", publicSitesRouter);
+  app.use("/public/booking", publicBookingRouter);
   // F8A: token-bound, privacy-safe aggregates for external tenant/buyer portals.
   app.use("/portal", mysqlPortalRouter);
   // F9A: canonical Prisma/MySQL operational finance. The legacy `/finance`

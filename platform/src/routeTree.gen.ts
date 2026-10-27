@@ -57,6 +57,7 @@ import { Route as PortalCompradorTokenRouteImport } from './routes/portal.compra
 import { Route as PortalInquilinoTokenRouteImport } from './routes/portal.inquilino.$token'
 import { Route as PortalProprietarioTokenRouteImport } from './routes/portal.proprietario.$token'
 import { Route as SiteSlugIndexRouteImport } from './routes/site.$slug.index'
+import { Route as SiteSlugAgendarRouteImport } from './routes/site.$slug.agendar'
 import { Route as AppImoveisPropertyIdEditarRouteImport } from './routes/app.imoveis_.$propertyId.editar'
 import { Route as SiteSlugImoveisPropertySlugRouteImport } from './routes/site.$slug.imoveis.$propertySlug'
 import { Route as AppSiteBuilderEditorWebsiteIdRouteImport } from './routes/app.site.builder.editor.$websiteId'
@@ -305,6 +306,11 @@ const SiteSlugIndexRoute = SiteSlugIndexRouteImport.update({
   path: '/',
   getParentRoute: () => SiteSlugRoute,
 } as any)
+const SiteSlugAgendarRoute = SiteSlugAgendarRouteImport.update({
+  id: '/agendar',
+  path: '/agendar',
+  getParentRoute: () => SiteSlugRoute,
+} as any)
 const AppImoveisPropertyIdEditarRoute =
   AppImoveisPropertyIdEditarRouteImport.update({
     id: '/imoveis_/$propertyId/editar',
@@ -390,6 +396,7 @@ export interface FileRoutesByFullPath {
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug/agendar': typeof SiteSlugAgendarRoute
   '/site/$slug/': typeof SiteSlugIndexRoute
   '/app/imoveis/$propertyId/editar': typeof AppImoveisPropertyIdEditarRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
@@ -444,6 +451,7 @@ export interface FileRoutesByTo {
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug/agendar': typeof SiteSlugAgendarRoute
   '/site/$slug': typeof SiteSlugIndexRoute
   '/app/imoveis/$propertyId/editar': typeof AppImoveisPropertyIdEditarRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
@@ -501,6 +509,7 @@ export interface FileRoutesById {
   '/portal/comprador/$token': typeof PortalCompradorTokenRoute
   '/portal/inquilino/$token': typeof PortalInquilinoTokenRoute
   '/portal/proprietario/$token': typeof PortalProprietarioTokenRoute
+  '/site/$slug/agendar': typeof SiteSlugAgendarRoute
   '/site/$slug/': typeof SiteSlugIndexRoute
   '/app/imoveis_/$propertyId/editar': typeof AppImoveisPropertyIdEditarRoute
   '/site/$slug/imoveis/$propertySlug': typeof SiteSlugImoveisPropertySlugRoute
@@ -559,6 +568,7 @@ export interface FileRouteTypes {
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug/agendar'
     | '/site/$slug/'
     | '/app/imoveis/$propertyId/editar'
     | '/site/$slug/imoveis/$propertySlug'
@@ -613,6 +623,7 @@ export interface FileRouteTypes {
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug/agendar'
     | '/site/$slug'
     | '/app/imoveis/$propertyId/editar'
     | '/site/$slug/imoveis/$propertySlug'
@@ -669,6 +680,7 @@ export interface FileRouteTypes {
     | '/portal/comprador/$token'
     | '/portal/inquilino/$token'
     | '/portal/proprietario/$token'
+    | '/site/$slug/agendar'
     | '/site/$slug/'
     | '/app/imoveis_/$propertyId/editar'
     | '/site/$slug/imoveis/$propertySlug'
@@ -1041,6 +1053,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SiteSlugIndexRouteImport
       parentRoute: typeof SiteSlugRoute
     }
+    '/site/$slug/agendar': {
+      id: '/site/$slug/agendar'
+      path: '/agendar'
+      fullPath: '/site/$slug/agendar'
+      preLoaderRoute: typeof SiteSlugAgendarRouteImport
+      parentRoute: typeof SiteSlugRoute
+    }
     '/app/imoveis_/$propertyId/editar': {
       id: '/app/imoveis_/$propertyId/editar'
       path: '/imoveis/$propertyId/editar'
@@ -1221,11 +1240,13 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface SiteSlugRouteChildren {
+  SiteSlugAgendarRoute: typeof SiteSlugAgendarRoute
   SiteSlugIndexRoute: typeof SiteSlugIndexRoute
   SiteSlugImoveisPropertySlugRoute: typeof SiteSlugImoveisPropertySlugRoute
 }
 
 const SiteSlugRouteChildren: SiteSlugRouteChildren = {
+  SiteSlugAgendarRoute: SiteSlugAgendarRoute,
   SiteSlugIndexRoute: SiteSlugIndexRoute,
   SiteSlugImoveisPropertySlugRoute: SiteSlugImoveisPropertySlugRoute,
 }
@@ -1261,3 +1282,13 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}

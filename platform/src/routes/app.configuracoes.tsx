@@ -32,6 +32,8 @@ import {
   type PaymentGatewayProvider,
 } from "@/product/gateway-accounts";
 import { useSessionGuard } from "@/product/use-session-guard";
+import { getAgendaPreferences, updateAgendaPreferences, type AgendaUserPreferences } from "@/product/agenda-settings";
+import { AGENDA_COUNTRIES, AGENDA_LOCALES } from "@/product/agenda-catalogs";
 
 export const Route = createFileRoute("/app/configuracoes")({
   component: SettingsPage,
@@ -60,6 +62,7 @@ function SettingsPage() {
   const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
+  const [regionalPreferences, setRegionalPreferences] = useState<AgendaUserPreferences | null>(null);
 
   async function refreshSettings() {
     setIsSettingsLoading(true);
@@ -73,6 +76,8 @@ function SettingsPage() {
       setInvitations(invitationsResponse.invitations);
       setCompany(companyResponse.company);
       setRoles(rolesResponse.roles);
+      const agendaResponse = await getAgendaPreferences().catch(() => null);
+      setRegionalPreferences(agendaResponse?.preferences ?? null);
     } catch (settingsError) {
       setError(
         settingsError instanceof Error
@@ -116,6 +121,13 @@ function SettingsPage() {
       ) : null}
 
       <PasswordChangeForm />
+
+      {regionalPreferences ? (
+        <RegionalSettingsForm
+          preferences={regionalPreferences}
+          onSaved={(preferences) => setRegionalPreferences(preferences)}
+        />
+      ) : null}
 
       <section className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 md:flex-row md:items-center md:justify-between">
         <div>
@@ -225,6 +237,57 @@ function SettingsPage() {
         </section>
       )}
     </ModulePage>
+  );
+}
+
+function RegionalSettingsForm({
+  preferences,
+  onSaved,
+}: {
+  preferences: AgendaUserPreferences;
+  onSaved: (preferences: AgendaUserPreferences) => void;
+}) {
+  const [draft, setDraft] = useState({ locale: preferences.locale, country: preferences.country });
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const localeNames = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(["pt-BR"], { type: "language" }) : null;
+  const countryNames = typeof Intl !== "undefined" && "DisplayNames" in Intl ? new Intl.DisplayNames(["pt-BR"], { type: "region" }) : null;
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await updateAgendaPreferences(draft);
+      onSaved(response.preferences);
+      setMessage("Idioma e país salvos para toda a experiência do usuário.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar a regionalização.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="mb-4 rounded-lg border border-border bg-card p-4">
+      <h2 className="text-sm font-semibold">Idioma e região</h2>
+      <p className="mt-1 text-sm text-muted-foreground">Preferências pessoais usadas pela Agenda e por módulos que suportam localização. Os idiomas sem pacote traduzido permanecem identificados como catálogo, não como tradução completa.</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">Idioma (BCP 47)
+          <input list="general-locale-catalog" className="mt-1 h-9 w-full rounded-md border bg-background px-3" value={draft.locale} onChange={(event) => setDraft({ ...draft, locale: event.target.value })} />
+          <datalist id="general-locale-catalog">{AGENDA_LOCALES.map((locale) => <option key={locale} value={locale}>{localeNames?.of(locale) ?? locale}</option>)}</datalist>
+        </label>
+        <label className="text-sm">País ou território (ISO 3166-1)
+          <input list="general-country-catalog" maxLength={2} className="mt-1 h-9 w-full rounded-md border bg-background px-3" value={draft.country} onChange={(event) => setDraft({ ...draft, country: event.target.value.toUpperCase() })} />
+          <datalist id="general-country-catalog">{AGENDA_COUNTRIES.map((country) => <option key={country} value={country}>{countryNames?.of(country) ?? country}</option>)}</datalist>
+        </label>
+      </div>
+      {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+      {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+      <Button type="submit" className="mt-3" disabled={saving}>{saving ? "Salvando..." : "Salvar idioma e região"}</Button>
+    </form>
   );
 }
 

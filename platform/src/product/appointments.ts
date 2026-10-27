@@ -48,6 +48,9 @@ export type Appointment = {
     id: string;
     code: string | null;
     title: string;
+    street?: string | null;
+    number?: string | null;
+    neighborhood?: string | null;
     city: string | null;
     state: string | null;
   } | null;
@@ -71,6 +74,7 @@ export type AppointmentFilters = {
   to?: string;
   // Lista separada por virgula (ex.: "visit,task") para os filtros de categoria da agenda.
   types?: string;
+  q?: string;
 };
 export type AppointmentInput = {
   id?: string;

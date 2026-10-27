@@ -18,4 +18,20 @@ describe("Agenda C2-C5 UI wiring", () => {
     expect(source).toContain("createBooking");
     expect(source).toContain("loadData()");
   });
+
+  it("wires the agenda controls to real state and persisted preferences", () => {
+    expect(source).toContain('aria-label="Visualização da agenda"');
+    expect(source).toContain("imobiflow.agenda.view");
+    expect(source).toContain("aria-label=\"Pesquisar na agenda\"");
+    expect(source).toContain("Filtrar compromissos");
+    expect(source).toContain("isoWeekNumber");
+    expect(source).toContain("show_weekends");
+  });
+
+  it("keeps real-estate associations and map actions in the appointment flow", () => {
+    expect(source).toContain("Visita exige cliente/interessado e imóvel vinculados.");
+    expect(source).toContain("Google Maps");
+    expect(source).toContain("Waze");
+    expect(source).toContain("agenda-timezones");
+  });
 });

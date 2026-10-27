@@ -25,7 +25,7 @@ import {
   X,
   Settings,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,7 +48,6 @@ import {
   SheetDescription,
   SheetFooter,
 } from "@/components/ui/sheet";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ModulePage } from "@/components/app/module-page";
 import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
@@ -73,6 +72,7 @@ import {
 } from "@/product/appointments";
 import { listCrmUsers, listLeads, type CrmUser, type Lead } from "@/product/crm";
 import { listAllProperties, type PropertySummary } from "@/product/real-estate";
+import { getSiteSettings } from "@/product/sites";
 import { useSessionGuard } from "@/product/use-session-guard";
 import {
   getAgendaPreferences,
@@ -96,6 +96,7 @@ import {
   updateWeeklyAvailability,
   type BookingPage,
 } from "@/product/booking";
+import { agendaTimeZones, formatTimeZoneLabel } from "@/product/agenda-catalogs";
 
 export const Route = createFileRoute("/app/agenda")({ component: AgendaPage });
 
@@ -104,6 +105,14 @@ export const Route = createFileRoute("/app/agenda")({ component: AgendaPage });
 // ---------------------------------------------------------------------------
 
 type ViewMode = "day" | "week" | "month" | "year" | "schedule";
+
+type AgendaFilters = {
+  type: AppointmentType | "all";
+  status: AppointmentStatus | "all";
+  assignedTo: string;
+  leadId: string;
+  propertyId: string;
+};
 
 const WEEKDAY_SHORT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const MONTH_NAMES = [
@@ -199,6 +208,14 @@ function formatDateTimeLocal(date: Date) {
 function minutesSinceMidnight(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
+
+function isoWeekNumber(date: Date) {
+  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  return Math.ceil((((utc.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
 // ---------------------------------------------------------------------------
 // Layout de eventos simultâneos (colunas lado a lado, como no Google Calendar)
 // ---------------------------------------------------------------------------
@@ -271,6 +288,7 @@ type FormValues = {
   // prioridade para Tarefa.
   all_day: boolean;
   priority: TaskPriority;
+  purpose: "purchase" | "rent" | "other";
 };
 
 const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = { low: "Baixa", normal: "Normal", high: "Alta" };
@@ -289,11 +307,12 @@ function emptyFormValues(type: AppointmentType, start: Date, currentUserId: stri
     ends_at: formatDateTimeLocal(end),
     all_day: false,
     priority: "normal",
+    purpose: "purchase",
   };
 }
 
 function formValuesFromAppointment(appointment: Appointment): FormValues {
-  const metadata = (appointment.metadata ?? {}) as { all_day?: boolean; priority?: TaskPriority };
+  const metadata = (appointment.metadata ?? {}) as { all_day?: boolean; priority?: TaskPriority; purpose?: FormValues["purpose"] };
   return {
     appointment_type: appointment.appointment_type,
     title: appointment.title,
@@ -306,6 +325,7 @@ function formValuesFromAppointment(appointment: Appointment): FormValues {
     ends_at: formatDateTimeLocal(new Date(appointment.ends_at)),
     all_day: Boolean(metadata.all_day),
     priority: metadata.priority ?? "normal",
+    purpose: metadata.purpose ?? "purchase",
   };
 }
 
@@ -315,7 +335,11 @@ function AgendaPage() {
   const user = session?.access.appUser;
   const canEdit = canManage(user, "appointments.manage");
 
-  const [view, setView] = useState<ViewMode>("week");
+  const [view, setView] = useState<ViewMode>(() => {
+    if (typeof window === "undefined") return "week";
+    const stored = window.localStorage.getItem("imobiflow.agenda.view");
+    return stored === "day" || stored === "week" || stored === "month" || stored === "year" || stored === "schedule" ? stored : "week";
+  });
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -350,6 +374,7 @@ function AgendaPage() {
   const [companySettingsLoading, setCompanySettingsLoading] = useState(false);
   const [companySettingsSaving, setCompanySettingsSaving] = useState(false);
   const [bookingPages, setBookingPages] = useState<BookingPage[]>([]);
+  const [publicSiteSlug, setPublicSiteSlug] = useState<string | null>(null);
   const [bookingPagesOpen, setBookingPagesOpen] = useState(false);
   const [bookingPagesLoading, setBookingPagesLoading] = useState(false);
   const [bookingDate, setBookingDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -359,6 +384,16 @@ function AgendaPage() {
   const [bookingRows, setBookingRows] = useState<Record<string, Array<{ id: string; appointment_id: string; version: number; starts_at: string; ends_at: string; status: string }>>>({});
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [agendaFilters, setAgendaFilters] = useState<AgendaFilters>({
+    type: "all",
+    status: "all",
+    assignedTo: "",
+    leadId: "",
+    propertyId: "",
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [formValues, setFormValues] = useState<FormValues | null>(null);
@@ -402,6 +437,12 @@ function AgendaPage() {
         listAppointments({
           from: toIsoDateTime(formatDateTimeLocal(range.from)),
           to: toIsoDateTime(formatDateTimeLocal(range.to)),
+          q: searchQuery.trim() || undefined,
+          status: agendaFilters.status,
+          assigned_to: agendaFilters.assignedTo || undefined,
+          lead_id: agendaFilters.leadId || undefined,
+          property_id: agendaFilters.propertyId || undefined,
+          types: agendaFilters.type !== "all" ? agendaFilters.type : undefined,
         }),
         listLeads({ page_size: 100 }),
         listAllProperties({ status: "not_archived" }),
@@ -416,17 +457,100 @@ function AgendaPage() {
     } finally {
       setLoading(false);
     }
-  }, [range.from, range.to]);
+  }, [range.from, range.to, searchQuery, agendaFilters]);
 
   useEffect(() => {
     if (!isLoading && session) void loadData();
   }, [isLoading, loadData, session]);
+
+  useEffect(() => {
+    if (isLoading || !session) return;
+    void getAgendaPreferences()
+      .then((response) => setPreferences(response.preferences))
+      .catch(() => undefined);
+  }, [isLoading, session]);
+
+  useEffect(() => {
+    if (isLoading || !session || !canEdit) return;
+    void listBookingPages()
+      .then((response) => setBookingPages(response.pages))
+      .catch(() => undefined);
+    void getSiteSettings()
+      .then((response) => setPublicSiteSlug(response.site?.slug ?? null))
+      .catch(() => setPublicSiteSlug(null));
+  }, [isLoading, session, canEdit]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem("imobiflow.agenda.view", view);
+  }, [view]);
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!preferences?.keyboard_shortcuts_enabled) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT"
+      ) {
+        return;
+      }
+      if (event.key === "j") {
+        event.preventDefault();
+        setAnchor((current) => addDays(current, 1));
+      } else if (event.key === "k") {
+        event.preventDefault();
+        setAnchor((current) => addDays(current, -1));
+      } else if (event.key === "t") {
+        event.preventDefault();
+        setAnchor(startOfDay(new Date()));
+      } else if (event.key === "1") {
+        event.preventDefault();
+        setView("day");
+      } else if (event.key === "2") {
+        event.preventDefault();
+        setView("week");
+      } else if (event.key === "3") {
+        event.preventDefault();
+        setView("month");
+      } else if (event.key === "4") {
+        event.preventDefault();
+        setView("year");
+      } else if (event.key === "5") {
+        event.preventDefault();
+        setView("schedule");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [preferences?.keyboard_shortcuts_enabled]);
 
   const visibleAppointments = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase("pt-BR");
     return appointments.filter((appointment) => {
       if (activeTypes && !activeTypes.has(appointment.appointment_type)) return false;
       if (selectedPersonId && appointment.assigned_to !== selectedPersonId) return false;
+      if (agendaFilters.type !== "all" && appointment.appointment_type !== agendaFilters.type) return false;
+      if (agendaFilters.status !== "all" && appointment.status !== agendaFilters.status) return false;
+      if (agendaFilters.assignedTo && appointment.assigned_to !== agendaFilters.assignedTo) return false;
+      if (agendaFilters.leadId && appointment.lead_id !== agendaFilters.leadId) return false;
+      if (agendaFilters.propertyId && appointment.property_id !== agendaFilters.propertyId) return false;
+      if (preferences?.notify_only_confirmed && appointment.status !== "confirmed") return false;
+      if (preferences?.show_cancelled === false && appointment.status === "cancelled") return false;
+      if (
+        preferences?.show_completed_tasks === false &&
+        appointment.appointment_type === "task" &&
+        appointment.status === "completed"
+      ) return false;
+      if (preferences?.show_weekends === false) {
+        const day = new Date(appointment.starts_at).getDay();
+        if (day === 0 || day === 6) return false;
+      }
       if (!query) return true;
       return [
         appointment.title,
@@ -440,7 +564,7 @@ function AgendaPage() {
         .toLocaleLowerCase("pt-BR")
         .includes(query);
     });
-  }, [appointments, activeTypes, selectedPersonId, searchQuery]);
+  }, [appointments, activeTypes, selectedPersonId, searchQuery, agendaFilters, preferences]);
 
   const peopleResults = useMemo(() => {
     const query = peopleQuery.trim().toLocaleLowerCase("pt-BR");
@@ -592,19 +716,22 @@ function AgendaPage() {
   }
 
   const rangeTitle = useMemo(() => {
-    if (view === "day") return `${anchor.getDate()} de ${MONTH_NAMES[anchor.getMonth()]} de ${anchor.getFullYear()}`;
+    let title: string;
+    if (view === "day") title = `${anchor.getDate()} de ${MONTH_NAMES[anchor.getMonth()]} de ${anchor.getFullYear()}`;
     if (view === "week") {
       const start = startOfWeek(anchor);
       const end = addDays(start, 6);
       if (start.getMonth() === end.getMonth()) {
-        return `${start.getDate()} – ${end.getDate()} de ${MONTH_NAMES[start.getMonth()]} de ${start.getFullYear()}`;
+        title = `${start.getDate()} – ${end.getDate()} de ${MONTH_NAMES[start.getMonth()]} de ${start.getFullYear()}`;
+      } else {
+        title = `${start.getDate()} de ${MONTH_NAMES[start.getMonth()]} – ${end.getDate()} de ${MONTH_NAMES[end.getMonth()]} de ${end.getFullYear()}`;
       }
-      return `${start.getDate()} de ${MONTH_NAMES[start.getMonth()]} – ${end.getDate()} de ${MONTH_NAMES[end.getMonth()]} de ${end.getFullYear()}`;
-    }
-    if (view === "year") return `${anchor.getFullYear()}`;
-    if (view === "schedule") return `A partir de ${anchor.getDate()} de ${MONTH_NAMES[anchor.getMonth()]}`;
-    return `${MONTH_NAMES[anchor.getMonth()]} de ${anchor.getFullYear()}`;
-  }, [anchor, view]);
+    } else if (view === "year") title = `${anchor.getFullYear()}`;
+    else if (view === "schedule") title = `A partir de ${anchor.getDate()} de ${MONTH_NAMES[anchor.getMonth()]}`;
+    else if (view === "month") title = `${MONTH_NAMES[anchor.getMonth()]} de ${anchor.getFullYear()}`;
+    else title = `${anchor.getDate()} de ${MONTH_NAMES[anchor.getMonth()]} de ${anchor.getFullYear()}`;
+    return preferences?.show_week_numbers ? `${title} · Semana ${isoWeekNumber(anchor)}` : title;
+  }, [anchor, view, preferences?.show_week_numbers]);
 
   // -------------------------------------------------------------------------
   // Ações de criação / edição / transição de status
@@ -628,7 +755,12 @@ function AgendaPage() {
     setRunning("save");
     setError(null);
     try {
-      const metadata: Record<string, unknown> = { all_day: formValues.all_day };
+      if (formValues.appointment_type === "visit" && (!formValues.lead_id || !formValues.property_id)) {
+        setError("Visita exige cliente/interessado e imóvel vinculados.");
+        setRunning(null);
+        return;
+      }
+      const metadata: Record<string, unknown> = { all_day: formValues.all_day, purpose: formValues.purpose };
       if (formValues.appointment_type === "task") metadata.priority = formValues.priority;
 
       if (editingId) {
@@ -711,6 +843,16 @@ function AgendaPage() {
           onNext={goNext}
           searchQuery={searchQuery}
           onSearchQuery={setSearchQuery}
+          searchOpen={searchOpen}
+          searchInputRef={searchInputRef}
+          onToggleSearch={() => setSearchOpen((value) => !value)}
+          filtersOpen={filtersOpen}
+          filters={agendaFilters}
+          onToggleFilters={() => setFiltersOpen((value) => !value)}
+          onFiltersChange={setAgendaFilters}
+          filterUsers={users}
+          filterLeads={leads}
+          filterProperties={properties}
           canEdit={canEdit}
           onCreate={() => setCreateMenuOpen((value) => !value)}
           createMenuOpen={createMenuOpen}
@@ -718,7 +860,6 @@ function AgendaPage() {
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((value) => !value)}
           onOpenPreferences={() => void openPreferences()}
-          onOpenBookingPages={() => void openBookingPages()}
         />
 
         {error ? (
@@ -743,7 +884,7 @@ function AgendaPage() {
 
         {bookingPagesOpen ? (
           <BookingPagesPanel
-            pages={bookingPages} leads={leads} properties={properties} users={users} loading={bookingPagesLoading} running={running}
+            pages={bookingPages} leads={leads} properties={properties} users={users} loading={bookingPagesLoading} running={running} publicSiteSlug={publicSiteSlug}
             editingPageId={editingBookingPage} bookingDate={bookingDate} setBookingDate={setBookingDate} availability={bookingAvailability} bookings={bookingRows} bookingLoading={bookingLoading}
             onClose={() => setBookingPagesOpen(false)} onCreate={(input) => void createPage(input)} onToggle={(page) => void toggleBookingPage(page)} onDuplicate={(page) => void duplicatePage(page)}
             onEdit={(page) => setEditingBookingPage(page.id)} onCancelEdit={() => setEditingBookingPage(null)} onSaveEdit={(page, input) => void saveBookingPage(page, input)}
@@ -768,6 +909,9 @@ function AgendaPage() {
               onToggleFilter={(key) =>
                 setActiveFilters((current) => ({ ...current, [key]: !current[key] }))
               }
+              bookingPages={bookingPages}
+              preferences={preferences}
+              onOpenBookingPages={() => void openBookingPages()}
             />
           ) : null}
 
@@ -782,13 +926,17 @@ function AgendaPage() {
                 appointments={visibleAppointments}
                 onSelect={setSelectedId}
                 onCreateAt={(start) => openCreateForm("event", start)}
+                compactShortEvents={preferences?.compact_short_events}
+                dimPastEvents={preferences?.dim_past_events}
               />
             ) : view === "week" ? (
               <TimeGridView
-                days={Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(anchor), index))}
+                days={Array.from({ length: 7 }, (_, index) => addDays(startOfWeek(anchor), index)).filter((day) => preferences?.show_weekends !== false || (day.getDay() !== 0 && day.getDay() !== 6))}
                 appointments={visibleAppointments}
                 onSelect={setSelectedId}
                 onCreateAt={(start) => openCreateForm("event", start)}
+                compactShortEvents={preferences?.compact_short_events}
+                dimPastEvents={preferences?.dim_past_events}
               />
             ) : view === "month" ? (
               <MonthView
@@ -799,9 +947,10 @@ function AgendaPage() {
                   setAnchor(day);
                   setView("day");
                 }}
+                dimPastEvents={preferences?.dim_past_events}
               />
             ) : view === "schedule" ? (
-              <ScheduleView appointments={visibleAppointments} onSelect={setSelectedId} />
+              <ScheduleView appointments={visibleAppointments} onSelect={setSelectedId} dimPastEvents={preferences?.dim_past_events} />
             ) : (
               <YearView
                 anchor={anchor}
@@ -872,6 +1021,16 @@ function AgendaHeader(props: {
   onNext: () => void;
   searchQuery: string;
   onSearchQuery: (value: string) => void;
+  searchOpen: boolean;
+  searchInputRef: RefObject<HTMLInputElement | null>;
+  onToggleSearch: () => void;
+  filtersOpen: boolean;
+  filters: AgendaFilters;
+  onToggleFilters: () => void;
+  onFiltersChange: (filters: AgendaFilters) => void;
+  filterUsers: CrmUser[];
+  filterLeads: Lead[];
+  filterProperties: PropertySummary[];
   canEdit: boolean;
   onCreate: () => void;
   createMenuOpen: boolean;
@@ -879,7 +1038,6 @@ function AgendaHeader(props: {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenPreferences: () => void;
-  onOpenBookingPages: () => void;
 }) {
   return (
     <header className="flex flex-col gap-3 border-b pb-3">
@@ -897,37 +1055,22 @@ function AgendaHeader(props: {
             <Settings className="h-4 w-4" /> Preferências
           </Button>
           {props.canEdit ? (
-            <Button type="button" variant="outline" size="sm" onClick={props.onOpenBookingPages}>
-              <CalendarDays className="h-4 w-4" /> Páginas
-            </Button>
-          ) : null}
-          {props.canEdit ? (
             <div className="relative">
               <Button type="button" onClick={props.onCreate} className="gap-1">
                 <Plus className="h-4 w-4" /> Novo agendamento
               </Button>
               {props.createMenuOpen ? (
                 <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border bg-popover p-1 shadow-md">
-                  {(
-                    [
-                      ["event", "Evento"],
-                      ["visit", "Visita a imóvel"],
-                      ["task", "Tarefa"],
-                    ] as Array<[AppointmentType, string]>
-                  ).map(([type, label]) => (
+                  {(Object.keys(appointmentTypeLabels) as AppointmentType[]).map((type) => (
                     <button
                       key={type}
                       type="button"
                       className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
                       onClick={() => props.onCreateType(type)}
                     >
-                      <TYPE_STYLES_ICON type={type} /> {label}
+                      <TYPE_STYLES_ICON type={type} /> {appointmentTypeLabels[type]}
                     </button>
                   ))}
-                  <div className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground">
-                    <CalendarClock className="h-4 w-4" /> Agendamento com reserva
-                    <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[10px]">Em breve</span>
-                  </div>
                 </div>
               ) : null}
             </div>
@@ -948,27 +1091,37 @@ function AgendaHeader(props: {
         <span className="min-w-0 truncate text-sm font-medium">{props.rangeTitle}</span>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Tabs value={props.view} onValueChange={(value) => props.onView(value as ViewMode)}>
-            <TabsList>
-              {VIEW_TABS.map((tab) => (
-                <TabsTrigger key={tab.key} value={tab.key}>
-                  {tab.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <Select value={props.view} onValueChange={(value) => props.onView(value as ViewMode)}>
+            <SelectTrigger className="h-9 w-[132px] bg-background" aria-label="Visualização da agenda">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {VIEW_TABS.map((tab) => <SelectItem key={tab.key} value={tab.key}>{tab.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {props.searchOpen || props.searchQuery ? (
+            <div className="relative flex items-center">
+              <Search className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                ref={props.searchInputRef}
+                value={props.searchQuery}
+                onChange={(event) => props.onSearchQuery(event.target.value)}
+                placeholder="Pesquisar compromissos, pessoas, imóveis..."
+                className="h-8 w-56 pl-7 pr-7 text-sm"
+                aria-label="Pesquisar na agenda"
+              />
+              <Button type="button" variant="ghost" size="icon" className="absolute right-0 h-7 w-7" onClick={() => { props.onSearchQuery(""); props.onToggleSearch(); }} aria-label="Fechar pesquisa"><X className="h-3.5 w-3.5" /></Button>
+            </div>
+          ) : (
+            <Button type="button" variant="outline" size="icon" onClick={props.onToggleSearch} aria-label="Pesquisar"><Search className="h-3.5 w-3.5" /></Button>
+          )}
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={props.searchQuery}
-              onChange={(event) => props.onSearchQuery(event.target.value)}
-              placeholder="Buscar"
-              className="h-8 w-40 pl-7 text-sm"
-            />
+            <Button type="button" variant="outline" size="sm" className="gap-1" onClick={props.onToggleFilters} aria-expanded={props.filtersOpen}>
+              <Filter className="h-3.5 w-3.5" /> Filtros
+              {(props.filters.type !== "all" || props.filters.status !== "all" || props.filters.assignedTo || props.filters.leadId || props.filters.propertyId) ? <Badge className="ml-1 h-5 px-1.5">!</Badge> : null}
+            </Button>
+            {props.filtersOpen ? <AgendaFiltersPanel {...props} /> : null}
           </div>
-          <Button type="button" variant="outline" size="sm" className="gap-1">
-            <Filter className="h-3.5 w-3.5" /> Filtros
-          </Button>
         </div>
       </div>
     </header>
@@ -978,6 +1131,55 @@ function AgendaHeader(props: {
 function TYPE_STYLES_ICON({ type }: { type: AppointmentType }) {
   const Icon = TYPE_STYLES[type].icon;
   return <Icon className="h-4 w-4" />;
+}
+
+function AgendaFiltersPanel(props: {
+  filters: AgendaFilters;
+  onFiltersChange: (filters: AgendaFilters) => void;
+  filterUsers: CrmUser[];
+  filterLeads: Lead[];
+  filterProperties: PropertySummary[];
+}) {
+  const update = <K extends keyof AgendaFilters>(key: K, value: AgendaFilters[K]) =>
+    props.onFiltersChange({ ...props.filters, [key]: value });
+  return (
+    <div className="absolute right-0 top-full z-40 mt-2 w-72 space-y-3 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg" role="dialog" aria-label="Filtros da agenda">
+      <div className="flex items-center justify-between">
+        <p className="font-medium">Filtrar compromissos</p>
+        <Button type="button" variant="ghost" size="sm" onClick={() => props.onFiltersChange({ type: "all", status: "all", assignedTo: "", leadId: "", propertyId: "" })}>Limpar</Button>
+      </div>
+      <label className="grid gap-1 text-xs">Tipo
+        <select className="h-9 rounded-md border bg-background px-2 text-sm" value={props.filters.type} onChange={(e) => update("type", e.target.value as AgendaFilters["type"])}>
+          <option value="all">Todos os tipos</option>
+          {(Object.keys(appointmentTypeLabels) as AppointmentType[]).map((type) => <option key={type} value={type}>{appointmentTypeLabels[type]}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs">Status
+        <select className="h-9 rounded-md border bg-background px-2 text-sm" value={props.filters.status} onChange={(e) => update("status", e.target.value as AgendaFilters["status"])}>
+          <option value="all">Todos os status</option>
+          {(Object.keys(appointmentStatusLabels) as AppointmentStatus[]).map((status) => <option key={status} value={status}>{appointmentStatusLabels[status]}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs">Corretor responsável
+        <select className="h-9 rounded-md border bg-background px-2 text-sm" value={props.filters.assignedTo} onChange={(e) => update("assignedTo", e.target.value)}>
+          <option value="">Todos os responsáveis</option>
+          {props.filterUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs">Cliente / lead
+        <select className="h-9 rounded-md border bg-background px-2 text-sm" value={props.filters.leadId} onChange={(e) => update("leadId", e.target.value)}>
+          <option value="">Todos os clientes</option>
+          {props.filterLeads.map((lead) => <option key={lead.id} value={lead.id}>{lead.name}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-xs">Imóvel
+        <select className="h-9 rounded-md border bg-background px-2 text-sm" value={props.filters.propertyId} onChange={(e) => update("propertyId", e.target.value)}>
+          <option value="">Todos os imóveis</option>
+          {props.filterProperties.map((property) => <option key={property.id} value={property.id}>{property.code ? `${property.code} — ` : ""}{property.title}</option>)}
+        </select>
+      </label>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +1198,9 @@ function AgendaSidebar(props: {
   onSelectPerson: (id: string | null) => void;
   activeFilters: Record<AgendaFilterKey, boolean>;
   onToggleFilter: (key: AgendaFilterKey) => void;
+  bookingPages: BookingPage[];
+  preferences: AgendaUserPreferences | null;
+  onOpenBookingPages: () => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [miniMonth, setMiniMonth] = useState<Date>(() => startOfMonth(props.anchor));
@@ -1028,13 +1233,7 @@ function AgendaSidebar(props: {
         </Button>
         {createOpen ? (
           <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
-            {(
-              [
-                ["event", "Evento"],
-                ["visit", "Visita a imóvel"],
-                ["task", "Tarefa"],
-              ] as Array<[AppointmentType, string]>
-            ).map(([type, label]) => (
+            {(Object.keys(appointmentTypeLabels) as AppointmentType[]).map((type) => (
               <button
                 key={type}
                 type="button"
@@ -1044,13 +1243,9 @@ function AgendaSidebar(props: {
                   setCreateOpen(false);
                 }}
               >
-                <TYPE_STYLES_ICON type={type} /> {label}
+                <TYPE_STYLES_ICON type={type} /> {appointmentTypeLabels[type]}
               </button>
             ))}
-            <div className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground">
-              <CalendarClock className="h-4 w-4" /> Agendamento com reserva
-              <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[10px]">Em breve</span>
-            </div>
           </div>
         ) : null}
       </div>
@@ -1070,13 +1265,14 @@ function AgendaSidebar(props: {
             </Button>
           </div>
         </div>
-        <div className="grid grid-cols-7 gap-0.5 text-center text-[11px] text-muted-foreground">
+        <div className={props.preferences?.show_week_numbers ? "grid grid-cols-[2rem_repeat(7,minmax(0,1fr))] gap-0.5 text-center text-[11px] text-muted-foreground" : "grid grid-cols-7 gap-0.5 text-center text-[11px] text-muted-foreground"}>
+          {props.preferences?.show_week_numbers ? <span aria-hidden="true">Sem.</span> : null}
           {WEEKDAY_SHORT.map((day) => (
             <span key={day}>{day.slice(0, 1)}</span>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-0.5 text-center text-xs">
-          {miniDays.map((day) => {
+        <div className={props.preferences?.show_week_numbers ? "space-y-0.5 text-center text-xs" : "grid grid-cols-7 gap-0.5 text-center text-xs"}>
+          {props.preferences?.show_week_numbers ? Array.from({ length: 6 }, (_, row) => miniDays.slice(row * 7, row * 7 + 7)).map((week) => <div key={week[0]?.toISOString()} className="grid grid-cols-[2rem_repeat(7,minmax(0,1fr))] gap-0.5"><span className="flex items-center justify-center text-[10px] text-muted-foreground">{isoWeekNumber(week[0])}</span>{week.map((day) => {
             const inMonth = day.getMonth() === miniMonth.getMonth();
             const selected = isSameDay(day, props.anchor);
             const hasEvents = daysWithAppointments.has(formatDateInput(day));
@@ -1096,6 +1292,13 @@ function AgendaSidebar(props: {
                   <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-primary" />
                 ) : null}
               </button>
+            );
+          })}</div>) : miniDays.map((day) => {
+            const inMonth = day.getMonth() === miniMonth.getMonth();
+            const selected = isSameDay(day, props.anchor);
+            const hasEvents = daysWithAppointments.has(formatDateInput(day));
+            return (
+              <button key={day.toISOString()} type="button" onClick={() => props.onAnchorChange(startOfDay(day))} className={["relative flex h-7 w-7 items-center justify-center rounded-full", inMonth ? "text-foreground" : "text-muted-foreground/50", selected ? "bg-primary text-primary-foreground" : isToday(day) ? "border border-primary text-primary" : "hover:bg-accent"].join(" ")}>{day.getDate()}{hasEvents && !selected ? <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-primary" /> : null}</button>
             );
           })}
         </div>
@@ -1139,6 +1342,27 @@ function AgendaSidebar(props: {
           </div>
         ) : null}
       </div>
+
+      <div className="rounded-md border bg-muted/20 p-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium">Páginas de agendamento</p>
+            <p className="text-xs text-muted-foreground">Reserve horários disponíveis</p>
+          </div>
+          <Button type="button" variant="outline" size="icon" className="h-8 w-8" onClick={props.onOpenBookingPages} aria-label="Abrir páginas de agendamento">
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        {props.bookingPages.length ? <div className="mt-2 space-y-1">{props.bookingPages.slice(0, 3).map((page) => <button key={page.id} type="button" className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-xs hover:bg-accent" onClick={props.onOpenBookingPages}><span className="truncate">{page.title}</span><span className="text-muted-foreground">{page.status === "active" ? "Ativa" : "Inativa"}</span></button>)}</div> : <p className="mt-2 text-xs text-muted-foreground">Nenhuma página criada.</p>}
+      </div>
+
+      {props.preferences?.show_world_clock ? (
+        <WorldClock
+          timezones={[props.preferences.timezone, props.preferences.secondary_timezone].filter(
+            (zone): zone is string => Boolean(zone),
+          )}
+        />
+      ) : null}
 
       {/* Minhas agendas */}
       <div>
@@ -1186,6 +1410,36 @@ function AgendaSidebar(props: {
   );
 }
 
+function WorldClock({ timezones }: { timezones: string[] }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const uniqueTimezones = [...new Set(timezones)];
+  return (
+    <div className="rounded-md border bg-muted/20 p-2" aria-label="Relógio mundial">
+      <p className="text-xs font-medium text-muted-foreground">Relógio mundial</p>
+      <div className="mt-1 space-y-1">
+        {uniqueTimezones.map((zone) => (
+          <div key={zone} className="flex items-center justify-between gap-2 text-xs">
+            <span className="truncate" title={formatTimeZoneLabel(zone)}>
+              {formatTimeZoneLabel(zone)}
+            </span>
+            <time dateTime={now.toISOString()} className="shrink-0 font-medium">
+              {new Intl.DateTimeFormat("pt-BR", {
+                timeZone: zone,
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(now)}
+            </time>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Grade de horas (Dia / Semana)
 // ---------------------------------------------------------------------------
@@ -1195,6 +1449,8 @@ function TimeGridView(props: {
   appointments: Appointment[];
   onSelect: (id: string) => void;
   onCreateAt: (start: Date) => void;
+  compactShortEvents?: boolean;
+  dimPastEvents?: boolean;
 }) {
   const isAllDay = (appointment: Appointment) => Boolean((appointment.metadata as { all_day?: boolean } | undefined)?.all_day);
   const allDayByDay = props.days.map((day) =>
@@ -1239,7 +1495,7 @@ function TimeGridView(props: {
                     key={appointment.id}
                     type="button"
                     onClick={() => props.onSelect(appointment.id)}
-                    className={["w-full truncate rounded px-1.5 py-0.5 text-left text-xs", style.bg, style.border, style.text, "border"].join(" ")}
+                    className={["w-full truncate rounded px-1.5 py-0.5 text-left text-xs", style.bg, style.border, style.text, "border", props.dimPastEvents && new Date(appointment.ends_at) < new Date() ? "opacity-60" : ""].join(" ")}
                   >
                     {appointment.title}
                   </button>
@@ -1311,6 +1567,8 @@ function TimeGridView(props: {
                         style.bg,
                         style.border,
                         style.text,
+                        props.compactShortEvents && durationMinutes <= 30 ? "py-0" : "",
+                        props.dimPastEvents && end < new Date() ? "opacity-60" : "",
                       ].join(" ")}
                     >
                       <div className="truncate font-medium">{appointment.title}</div>
@@ -1340,6 +1598,7 @@ function MonthView(props: {
   appointments: Appointment[];
   onSelect: (id: string) => void;
   onOpenDay: (day: Date) => void;
+  dimPastEvents?: boolean;
 }) {
   const gridStart = startOfWeek(startOfMonth(props.anchor));
   const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
@@ -1400,7 +1659,7 @@ function MonthView(props: {
                         event.stopPropagation();
                         props.onSelect(appointment.id);
                       }}
-                      className={["truncate rounded px-1 text-[10px]", style.bg, style.text].join(" ")}
+                      className={["truncate rounded px-1 text-[10px]", style.bg, style.text, props.dimPastEvents && new Date(appointment.ends_at) < new Date() ? "opacity-60" : ""].join(" ")}
                     >
                       {appointment.title}
                     </span>
@@ -1481,7 +1740,7 @@ function YearView(props: {
 // Visualização de Programação (lista cronológica)
 // ---------------------------------------------------------------------------
 
-function ScheduleView(props: { appointments: Appointment[]; onSelect: (id: string) => void }) {
+function ScheduleView(props: { appointments: Appointment[]; onSelect: (id: string) => void; dimPastEvents?: boolean }) {
   const groups = useMemo(() => {
     const sorted = [...props.appointments].sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
     const map = new Map<string, Appointment[]>();
@@ -1524,7 +1783,7 @@ function ScheduleView(props: { appointments: Appointment[]; onSelect: (id: strin
                       key={appointment.id}
                       type="button"
                       onClick={() => props.onSelect(appointment.id)}
-                      className="flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/40"
+                      className={["flex w-full items-center gap-3 rounded-md border px-3 py-2 text-left text-sm hover:bg-accent/40", props.dimPastEvents && end < new Date() ? "opacity-60" : ""].join(" ")}
                     >
                       <span className={["flex h-7 w-7 shrink-0 items-center justify-center rounded-full", style.bg, style.text].join(" ")}>
                         <Icon className="h-3.5 w-3.5" />
@@ -1633,9 +1892,10 @@ function AppointmentDetailSheet(props: {
                 {appointment.property ? (
                   <div className="flex items-center gap-2">
                     <Building2 className="h-4 w-4 text-muted-foreground" />
-                    <span>
-                      Imóvel: {appointment.property.code} — {appointment.property.title}
-                    </span>
+                    <div className="min-w-0">
+                      <span className="block">Imóvel: {appointment.property.code} — {appointment.property.title}</span>
+                      {(appointment.property.street || appointment.property.city) ? <div className="mt-1 flex flex-wrap gap-2 text-xs"><span className="text-muted-foreground">{[appointment.property.street, appointment.property.number, appointment.property.neighborhood, appointment.property.city, appointment.property.state].filter(Boolean).join(", ")}</span><a className="text-primary underline" target="_blank" rel="noreferrer" href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([appointment.property.street, appointment.property.number, appointment.property.neighborhood, appointment.property.city, appointment.property.state].filter(Boolean).join(", "))}`}>Google Maps</a><a className="text-primary underline" target="_blank" rel="noreferrer" href={`https://waze.com/ul?q=${encodeURIComponent([appointment.property.street, appointment.property.number, appointment.property.neighborhood, appointment.property.city, appointment.property.state].filter(Boolean).join(", "))}`}>Waze</a></div> : null}
+                    </div>
                   </div>
                 ) : null}
                 {appointment.lead ? (
@@ -1737,9 +1997,7 @@ function AppointmentFormSheet(props: {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="event">Evento</SelectItem>
-                      <SelectItem value="visit">Visita a imóvel</SelectItem>
-                      <SelectItem value="task">Tarefa</SelectItem>
+                      {(Object.keys(appointmentTypeLabels) as AppointmentType[]).map((type) => <SelectItem key={type} value={type}>{appointmentTypeLabels[type]}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -1764,7 +2022,7 @@ function AppointmentFormSheet(props: {
                 />
               </div>
 
-              {values.appointment_type === "visit" ? (
+              {(["visit", "inspection", "signature"].includes(values.appointment_type)) ? (
                 <div className="space-y-1.5">
                   <Label>Imóvel</Label>
                   <Select
@@ -1781,6 +2039,16 @@ function AppointmentFormSheet(props: {
                         </SelectItem>
                       ))}
                     </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+
+              {values.appointment_type === "visit" ? (
+                <div className="space-y-1.5">
+                  <Label>Finalidade da visita</Label>
+                  <Select value={values.purpose} onValueChange={(value) => props.onChange({ ...values, purpose: value as FormValues["purpose"] })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="purchase">Compra</SelectItem><SelectItem value="rent">Locação</SelectItem><SelectItem value="other">Outra finalidade</SelectItem></SelectContent>
                   </Select>
                 </div>
               ) : null}
@@ -1916,6 +2184,46 @@ type AppointmentFormValues = {
   reminder_at: string;
 };
 
+function SearchableChoice<T extends { id: string }>({
+  items,
+  value,
+  onChange,
+  getLabel,
+  listId,
+  placeholder,
+  required = false,
+}: {
+  items: T[];
+  value: string;
+  onChange: (value: string) => void;
+  getLabel: (item: T) => string;
+  listId: string;
+  placeholder: string;
+  required?: boolean;
+}) {
+  const selected = items.find((item) => item.id === value);
+  const [query, setQuery] = useState(() => selected ? getLabel(selected) : "");
+  useEffect(() => setQuery(selected ? getLabel(selected) : ""), [selected?.id]);
+  return (
+    <div className="relative">
+      <Input
+        required={required}
+        list={listId}
+        value={query}
+        placeholder={placeholder}
+        onChange={(event) => {
+          const next = event.target.value;
+          setQuery(next);
+          const normalized = next.trim().toLocaleLowerCase("pt-BR");
+          const match = items.find((item) => getLabel(item).toLocaleLowerCase("pt-BR") === normalized || item.id === next);
+          onChange(match?.id ?? "");
+        }}
+      />
+      <datalist id={listId}>{items.map((item) => <option key={item.id} value={getLabel(item)} />)}</datalist>
+    </div>
+  );
+}
+
 function AgendaPreferencesPanel({
   preferences,
   loading,
@@ -1940,6 +2248,14 @@ function AgendaPreferencesPanel({
   }
   const update = <K extends keyof AgendaUserPreferences>(key: K, value: AgendaUserPreferences[K]) =>
     onChange({ ...preferences, [key]: value });
+  const togglePreference = (key: keyof AgendaUserPreferences, checked: boolean) => {
+    if (key === "notify_enabled" && checked && typeof Notification !== "undefined" && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+    if (key === "notify_sound" && checked) playAgendaNotificationSound();
+    update(key, checked as AgendaUserPreferences[typeof key]);
+  };
+  const zones = agendaTimeZones(preferences.country);
   return (
     <section
       className="space-y-4 rounded-lg border bg-card p-4"
@@ -1963,18 +2279,6 @@ function AgendaPreferencesPanel({
         </Button>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="text-sm">
-          Idioma
-          <Input value={preferences.locale} onChange={(e) => update("locale", e.target.value)} />
-        </label>
-        <label className="text-sm">
-          País
-          <Input
-            maxLength={2}
-            value={preferences.country}
-            onChange={(e) => update("country", e.target.value.toUpperCase())}
-          />
-        </label>
         <label className="text-sm">
           Formato de data
           <select
@@ -2002,20 +2306,13 @@ function AgendaPreferencesPanel({
             <option value="12h">12 horas</option>
           </select>
         </label>
-        <label className="text-sm">
-          Fuso principal
-          <Input
-            value={preferences.timezone}
-            onChange={(e) => update("timezone", e.target.value)}
-          />
+        <label className="text-sm">Fuso principal
+          <input list="agenda-timezones" className="mt-1 h-9 w-full rounded-md border bg-background px-3" value={preferences.timezone} onChange={(e) => update("timezone", e.target.value)} />
         </label>
-        <label className="text-sm">
-          Fuso secundário
-          <Input
-            value={preferences.secondary_timezone ?? ""}
-            onChange={(e) => update("secondary_timezone", e.target.value || null)}
-          />
+        <label className="text-sm">Fuso secundário
+          <input list="agenda-timezones" className="mt-1 h-9 w-full rounded-md border bg-background px-3" value={preferences.secondary_timezone ?? ""} onChange={(e) => update("secondary_timezone", e.target.value || null)} />
         </label>
+        <datalist id="agenda-timezones">{zones.map((zone) => <option key={zone} value={zone}>{formatTimeZoneLabel(zone)}</option>)}</datalist>
         <label className="text-sm">
           Início da semana
           <select
@@ -2065,12 +2362,18 @@ function AgendaPreferencesPanel({
             <input
               type="checkbox"
               checked={Boolean(preferences[key])}
-              onChange={(e) => update(key, e.target.checked as AgendaUserPreferences[typeof key])}
+              onChange={(e) => togglePreference(key, e.target.checked)}
             />
             {label}
           </label>
         ))}
       </div>
+      {preferences.notify_enabled ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          <span>{typeof Notification !== "undefined" && Notification.permission === "granted" ? "Notificações do navegador autorizadas." : "As notificações do navegador só são solicitadas quando você ativa esta opção."}</span>
+          {preferences.notify_sound ? <Button type="button" size="sm" variant="outline" onClick={() => playAgendaNotificationSound()}>Testar som</Button> : null}
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
         <label className="text-sm">
           Privacidade padrão
@@ -2094,6 +2397,24 @@ function AgendaPreferencesPanel({
       </div>
     </section>
   );
+}
+
+function playAgendaNotificationSound() {
+  if (typeof window === "undefined") return;
+  const AudioContextCtor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return;
+  const context = new AudioContextCtor();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.value = 880;
+  gain.gain.setValueAtTime(0.0001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.2);
+  void context.close();
 }
 
 function AgendaCompanySettingsPanel({
@@ -2221,6 +2542,7 @@ function BookingPagesPanel({
   users,
   loading,
   running,
+  publicSiteSlug,
   onClose,
   onCreate,
   onToggle,
@@ -2250,6 +2572,7 @@ function BookingPagesPanel({
   users: CrmUser[];
   loading: boolean;
   running: string | null;
+  publicSiteSlug: string | null;
   onClose: () => void;
   onCreate: (input: Record<string, unknown>) => void;
   onToggle: (page: BookingPage) => void;
@@ -2319,6 +2642,7 @@ function BookingPagesPanel({
     guests_can_invite: false,
     guests_can_see_guest_list: true,
   });
+  const timezoneOptions = useMemo(() => agendaTimeZones(), []);
   function submitCreate(event: FormEvent) {
     event.preventDefault();
     if (!draft.title.trim() || !draft.owner_user_id) return;
@@ -2343,8 +2667,7 @@ function BookingPagesPanel({
         <div>
           <h2 className="font-semibold">Páginas de agendamento</h2>
           <p className="text-xs text-muted-foreground">
-            Páginas internas para reservar horários; nenhuma publicação externa é criada nesta
-            rodada.
+            Organize horários disponíveis e reserve atendimentos com sua equipe.
           </p>
         </div>
         <div className="flex gap-2">
@@ -2420,39 +2743,26 @@ function BookingPagesPanel({
           </label>
           <label className="text-sm">
             Responsável
-            <select
+            <SearchableChoice
               required
-              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+              items={users}
               value={draft.owner_user_id}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, owner_user_id: event.target.value }))
-              }
-            >
-              <option value="">Selecione</option>
-              {users.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setDraft((current) => ({ ...current, owner_user_id: value }))}
+              getLabel={(item) => item.name}
+              listId="booking-page-create-users"
+              placeholder="Pesquise por responsável"
+            />
           </label>
           <label className="text-sm">
             Imóvel vinculado (opcional)
-            <select
-              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            <SearchableChoice
+              items={properties}
               value={draft.property_id}
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, property_id: event.target.value }))
-              }
-            >
-              <option value="">Nenhum</option>
-              {properties.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.code ? `${item.code} — ` : ""}
-                  {item.title}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setDraft((current) => ({ ...current, property_id: value }))}
+              getLabel={(item) => `${item.code ? `${item.code} — ` : ""}${item.title}`}
+              listId="booking-page-create-properties"
+              placeholder="Nenhum ou pesquise por código"
+            />
           </label>
           <label className="text-sm">
             Local
@@ -2465,12 +2775,19 @@ function BookingPagesPanel({
           </label>
           <label className="text-sm">
             Fuso horário
-            <Input
+            <input
+              list="booking-page-timezones"
+              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
               value={draft.timezone}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, timezone: event.target.value }))
               }
             />
+            <datalist id="booking-page-timezones">
+              {timezoneOptions.map((zone) => (
+                <option key={zone} value={zone} label={formatTimeZoneLabel(zone)} />
+              ))}
+            </datalist>
           </label>
           <label className="text-sm">
             Duração (minutos)
@@ -2564,6 +2881,22 @@ function BookingPagesPanel({
             />{" "}
             Exibir lista de convidados
           </label>
+          <div className="rounded-md border bg-muted/20 p-3 sm:col-span-2" aria-label="Prévia da página de agendamento">
+            <p className="text-xs font-medium text-muted-foreground">Prévia</p>
+            <div className="mt-2 rounded-md bg-background p-3 shadow-sm">
+              <p className="font-medium">{draft.title.trim() || "Título da página"}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {draft.description.trim() || "Descrição do atendimento"}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <span>{draft.duration_minutes} min</span>
+                <span>·</span>
+                <span>{draft.timezone}</span>
+                <span>·</span>
+                <span>{draft.service_type === "visit" ? "Visita" : draft.service_type}</span>
+              </div>
+            </div>
+          </div>
           <div className="flex gap-2 sm:col-span-2">
             <Button
               type="submit"
@@ -2672,44 +3005,25 @@ function BookingPagesPanel({
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="text-xs text-muted-foreground">
                       Cliente
-                      <select
-                        className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm"
+                      <SearchableChoice
+                        items={leads}
                         value={leadByPage[page.id] ?? ""}
-                        onChange={(event) =>
-                          setLeadByPage((current) => ({
-                            ...current,
-                            [page.id]: event.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">Nenhum imóvel</option>
-                        {leads.map((lead) => (
-                          <option key={lead.id} value={lead.id}>
-                            {lead.name}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => setLeadByPage((current) => ({ ...current, [page.id]: value }))}
+                        getLabel={(lead) => `${lead.name}${lead.email ? ` — ${lead.email}` : ""}`}
+                        listId={`booking-page-leads-${page.id}`}
+                        placeholder="Pesquise por nome ou e-mail"
+                      />
                     </label>
                     <label className="text-xs text-muted-foreground">
                       Imóvel
-                      <select
-                        className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm"
+                      <SearchableChoice
+                        items={properties}
                         value={propertyByPage[page.id] ?? ""}
-                        onChange={(event) =>
-                          setPropertyByPage((current) => ({
-                            ...current,
-                            [page.id]: event.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">Selecione</option>
-                        {properties.map((property) => (
-                          <option key={property.id} value={property.id}>
-                            {property.code ? `${property.code} — ` : ""}
-                            {property.title}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => setPropertyByPage((current) => ({ ...current, [page.id]: value }))}
+                        getLabel={(property) => `${property.code ? `${property.code} — ` : ""}${property.title}${property.city ? ` — ${property.city}` : ""}`}
+                        listId={`booking-page-properties-${page.id}`}
+                        placeholder="Pesquise por código, título ou cidade"
+                      />
                     </label>
                   </div>
                   <label className="text-xs text-muted-foreground">
@@ -2757,6 +3071,26 @@ function BookingPagesPanel({
                   ) : availability[page.id] ? (
                     <p className="text-xs text-muted-foreground">Nenhum horário disponível.</p>
                   ) : null}
+                </div>
+              ) : null}
+              {page.status === "active" && publicSiteSlug ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+                  <a
+                    className="text-xs text-primary underline-offset-4 hover:underline"
+                    href={`/site/${encodeURIComponent(publicSiteSlug)}/agendar?page=${encodeURIComponent(page.id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Abrir página pública
+                  </a>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void navigator.clipboard?.writeText(`${window.location.origin}/site/${encodeURIComponent(publicSiteSlug)}/agendar?page=${encodeURIComponent(page.id)}`)}
+                  >
+                    Copiar link público
+                  </Button>
                 </div>
               ) : null}
               <div className="mt-3 border-t pt-3">
@@ -2882,6 +3216,7 @@ function BookingScheduleEditor({
     end_minute: "",
     reason: "",
   });
+  const [copySource, setCopySource] = useState<Record<number, string>>({});
   const dayLabels = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
   const toTime = (minute: number) =>
     `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
@@ -2935,16 +3270,46 @@ function BookingScheduleEditor({
                     >
                       + período
                     </Button>
-                    {weekday > 0 ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => copyDay(weekday - 1, weekday)}
-                      >
-                        Copiar anterior
-                      </Button>
-                    ) : null}
+                    <select
+                      className="h-8 rounded-md border bg-background px-2"
+                      aria-label={`Copiar horários para ${label}`}
+                      value={copySource[weekday] ?? ""}
+                      onChange={(event) =>
+                        setCopySource((current) => ({ ...current, [weekday]: event.target.value }))
+                      }
+                    >
+                      <option value="">Copiar de...</option>
+                      {dayLabels.map((sourceLabel, sourceWeekday) =>
+                        sourceWeekday === weekday ? null : (
+                          <option key={sourceWeekday} value={sourceWeekday}>
+                            {sourceLabel}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={!copySource[weekday]}
+                      onClick={() => {
+                        const source = Number(copySource[weekday]);
+                        if (Number.isInteger(source)) copyDay(source, weekday);
+                      }}
+                    >
+                      Copiar
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={!dayRows.length}
+                      onClick={() =>
+                        setIntervals((current) => current.filter((item) => item.weekday !== weekday))
+                      }
+                    >
+                      Indisponível
+                    </Button>
                   </div>
                   {dayRows.map(({ item, index }) => (
                     <div key={`${weekday}-${index}`} className="flex flex-wrap items-center gap-2">
@@ -3103,6 +3468,7 @@ function BookingPageEditor({
   onCancel: () => void;
   onSave: (input: Record<string, unknown>) => void;
 }) {
+  const timezoneOptions = useMemo(() => agendaTimeZones(), []);
   const [values, setValues] = useState(() => ({
     title: page.title,
     description: page.description ?? "",
@@ -3163,33 +3529,25 @@ function BookingPageEditor({
         </label>
         <label>
           Responsável
-          <select
-            className="mt-1 h-9 w-full rounded-md border bg-background px-2"
+          <SearchableChoice
+            items={users}
             value={values.owner_user_id}
-            onChange={(event) => set("owner_user_id", event.target.value)}
-          >
-            {users.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => set("owner_user_id", value)}
+            getLabel={(item) => item.name}
+            listId={`booking-page-edit-users-${page.id}`}
+            placeholder="Pesquise por responsável"
+          />
         </label>
         <label>
           Imóvel (opcional)
-          <select
-            className="mt-1 h-9 w-full rounded-md border bg-background px-2"
+          <SearchableChoice
+            items={properties}
             value={values.property_id}
-            onChange={(event) => set("property_id", event.target.value)}
-          >
-            <option value="">Nenhum</option>
-            {properties.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.code ? `${item.code} — ` : ""}
-                {item.title}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => set("property_id", value)}
+            getLabel={(item) => `${item.code ? `${item.code} — ` : ""}${item.title}`}
+            listId={`booking-page-edit-properties-${page.id}`}
+            placeholder="Nenhum ou pesquise por código"
+          />
         </label>
         <label>
           Local
@@ -3250,10 +3608,17 @@ function BookingPageEditor({
         </label>
         <label>
           Fuso horário
-          <Input
+          <input
+            list="booking-page-edit-timezones"
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
             value={values.timezone}
             onChange={(event) => set("timezone", event.target.value)}
           />
+          <datalist id="booking-page-edit-timezones">
+            {timezoneOptions.map((zone) => (
+              <option key={zone} value={zone} label={formatTimeZoneLabel(zone)} />
+            ))}
+          </datalist>
         </label>
         <label>
           Cor
@@ -3333,52 +3698,39 @@ function AppointmentForm({
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           Lead
-          <select
+          <SearchableChoice
             required
-            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            items={leads}
             value={values.lead_id}
-            onChange={(event) => update("lead_id", event.target.value)}
-          >
-            <option value="">Selecione</option>
-            {leads.map((lead) => (
-              <option key={lead.id} value={lead.id}>
-                {lead.name}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => update("lead_id", value)}
+            getLabel={(lead) => lead.name}
+            listId="agenda-appointment-leads"
+            placeholder="Pesquise por nome"
+          />
         </label>
         <label className="text-sm">
           Imóvel
-          <select
+          <SearchableChoice
             required
-            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            items={properties}
             value={values.property_id}
-            onChange={(event) => update("property_id", event.target.value)}
-          >
-            <option value="">Selecione</option>
-            {properties.map((property) => (
-              <option key={property.id} value={property.id}>
-                {property.code ? `${property.code} — ` : ""}
-                {property.title}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => update("property_id", value)}
+            getLabel={(property) => `${property.code ? `${property.code} — ` : ""}${property.title}`}
+            listId="agenda-appointment-properties"
+            placeholder="Pesquise por código ou título"
+          />
         </label>
         <label className="text-sm">
           Responsável
-          <select
+          <SearchableChoice
             required
-            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            items={users}
             value={values.assigned_to}
-            onChange={(event) => update("assigned_to", event.target.value)}
-          >
-            <option value="">Selecione</option>
-            {users.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} · {item.role}
-              </option>
-            ))}
-          </select>
+            onChange={(value) => update("assigned_to", value)}
+            getLabel={(item) => `${item.name} · ${item.role}`}
+            listId="agenda-appointment-users"
+            placeholder="Pesquise por nome ou CRECI"
+          />
         </label>
         <label className="text-sm">
           Tipo

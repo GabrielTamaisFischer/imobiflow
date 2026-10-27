@@ -55,7 +55,7 @@ const lifecycleInput = z.object({ expected_version: z.number().int().positive() 
 
 const include = {
   lead: { select: { id: true, name: true, email: true, phone: true, assignedTo: true } },
-  property: { select: { id: true, code: true, title: true, city: true, state: true, responsibleUserId: true } },
+  property: { select: { id: true, code: true, title: true, street: true, number: true, neighborhood: true, city: true, state: true, responsibleUserId: true } },
   assignee: { select: { id: true, name: true, email: true, role: true } },
   creator: { select: { id: true, name: true, email: true } },
   events: { orderBy: { createdAt: "asc" as const } },
@@ -214,6 +214,7 @@ mysqlAppointmentsRouter.get("/", requirePermission("appointments.view"), async (
     const propertyId = typeof req.query.property_id === "string" ? req.query.property_id : undefined;
     const leadId = typeof req.query.lead_id === "string" ? req.query.lead_id : undefined;
     const assignedTo = typeof req.query.assigned_to === "string" ? req.query.assigned_to : undefined;
+    const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 120) : "";
     const typesParam = typeof req.query.types === "string" ? req.query.types : undefined;
     const types = typesParam
       ? typesParam.split(",").map((item) => item.trim()).filter((item): item is (typeof appointmentTypes)[number] => (appointmentTypes as readonly string[]).includes(item))
@@ -231,7 +232,17 @@ mysqlAppointmentsRouter.get("/", requirePermission("appointments.view"), async (
           { propertyId: null },
           { property: { is: buildPropertyScopeFilter(access, "appointments.view", "VISIT") } },
         ],
-        AND: [{ OR: [{ leadId: null }, { lead: { is: buildLeadScopeFilter(access, "crm.view", "VIEW") } }] }],
+        AND: [
+          { OR: [{ leadId: null }, { lead: { is: buildLeadScopeFilter(access, "crm.view", "VIEW") } }] },
+          ...(search ? [{ OR: [
+            { title: { contains: search } },
+            { description: { contains: search } },
+            { locationText: { contains: search } },
+            { lead: { is: { name: { contains: search } } } },
+            { property: { is: { OR: [{ title: { contains: search } }, { code: { contains: search } }, { city: { contains: search } }] } } },
+            { assignee: { is: { name: { contains: search } } } },
+          ] }] : []),
+        ],
       },
       include,
       orderBy: [{ startsAt: "asc" }, { id: "asc" }],

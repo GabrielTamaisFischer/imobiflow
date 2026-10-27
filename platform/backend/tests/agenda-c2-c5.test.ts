@@ -59,7 +59,9 @@ describe("Agenda C2-C5 structural guarantees", () => {
   it("exposes full page configuration and weekly/exception editors", () => {
     expect(agendaUi).toContain("Disponibilidade semanal");
     expect(agendaUi).toContain("Adicionar exceção");
-    expect(agendaUi).toContain("Copiar anterior");
+    expect(agendaUi).toContain("Copiar de...");
+    expect(agendaUi).toContain("setCopySource");
+    expect(agendaUi).toContain("Indisponível");
     expect(agendaUi).toContain("min_notice_minutes");
     expect(agendaUi).toContain("onSaveWeekly");
   });
