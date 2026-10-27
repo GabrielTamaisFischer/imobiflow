@@ -5,6 +5,7 @@ import { requireActiveSubscription, requireAuth, requireCompany, requirePermissi
 import { getPrisma } from "../lib/website-builder-prisma.js";
 import { buildLeadScopeFilter, buildPropertyScopeFilter } from "../services/authorization.js";
 import { resolveIdempotencyKey, withIdempotency } from "../services/idempotency.js";
+import { cancelAppointmentReminders, upsertAppointmentReminder } from "../services/notification-dispatcher.js";
 import type { RequestWithAccess } from "../types/access.js";
 
 export const mysqlAppointmentsRouter = Router();
@@ -126,7 +127,8 @@ function ensureDateRange(startsAt: Date, endsAt: Date) {
   }
 }
 
-async function assertProperty(req: RequestWithAccess, propertyId: string) {
+async function assertProperty(req: RequestWithAccess, propertyId?: string | null) {
+  if (!propertyId) return;
   const property = await db().property.findFirst({
     where: { id: propertyId, companyId: req.access!.company.id, AND: [buildPropertyScopeFilter(req.access!, "appointments.view", "VISIT")] },
     select: { id: true },
@@ -178,6 +180,27 @@ async function findAccessible(req: RequestWithAccess, id: string) {
 
 async function writeEvent(tx: any, companyId: string, appointmentId: string, actorId: string, eventType: string, metadata: Record<string, unknown> = {}) {
   await tx.appointmentEvent.create({ data: { id: randomUUID(), companyId, appointmentId, actorId, eventType, metadataJson: metadata } });
+}
+
+async function scheduleReminderIfEnabled(req: RequestWithAccess, appointment: any) {
+  if (!appointment.reminderAt || !appointment.assignee?.email) return;
+  const preferences = await db().agendaUserPreference.findUnique({
+    where: { companyId_userId: { companyId: req.access!.company.id, userId: appointment.assignedTo } },
+    select: { notifyEnabled: true, notifyOnlyConfirmed: true },
+  });
+  if (preferences?.notifyEnabled === false) return;
+  if (preferences?.notifyOnlyConfirmed && appointment.status !== "confirmed") return;
+  await upsertAppointmentReminder({
+    companyId: req.access!.company.id,
+    appointmentId: appointment.id,
+    actorId: req.access!.appUser.id,
+    recipientId: appointment.assignedTo ?? null,
+    recipientName: appointment.assignee.name,
+    recipientContact: appointment.assignee.email,
+    scheduledFor: appointment.reminderAt.toISOString(),
+    title: appointment.title,
+    startsAt: appointment.startsAt.toISOString(),
+  });
 }
 
 mysqlAppointmentsRouter.get("/", requirePermission("appointments.view"), async (req: RequestWithAccess, res, next) => {
@@ -245,6 +268,15 @@ mysqlAppointmentsRouter.post("/", requirePermission("appointments.manage"), asyn
       });
       return { appointment: serialize(row) };
     });
+    await scheduleReminderIfEnabled(req, {
+      ...result.appointment,
+      reminderAt: result.appointment.reminder_at ? new Date(result.appointment.reminder_at) : null,
+      assignedTo: result.appointment.assigned_to,
+      startsAt: new Date(result.appointment.starts_at),
+      status: result.appointment.status,
+      title: result.appointment.title,
+      assignee: result.appointment.assignee,
+    });
     res.status(replayed ? 200 : 201).json({ ...result, replayed });
   } catch (error) { next(error); }
 });
@@ -275,6 +307,8 @@ mysqlAppointmentsRouter.patch("/:id", requirePermission("appointments.manage"), 
       await writeEvent(tx, req.access!.company.id, current.id, req.access!.appUser.id, "appointment.rescheduled", { expected_version: input.expected_version, starts_at: startsAt.toISOString() });
       return tx.appointment.findUniqueOrThrow({ where: { id: current.id }, include });
     });
+    if (updated.reminderAt) await scheduleReminderIfEnabled(req, updated);
+    else if (input.reminder_at === null) await cancelAppointmentReminders(req.access!.company.id, updated.id);
     res.json({ appointment: serialize(updated) });
   } catch (error) { next(error); }
 });
@@ -289,6 +323,7 @@ async function transition(req: RequestWithAccess, id: string, requested: (typeof
     await writeEvent(tx, req.access!.company.id, id, req.access!.appUser.id, `appointment.${requested}`, { expected_version: expectedVersion });
     return tx.appointment.findUniqueOrThrow({ where: { id }, include });
   });
+  if (requested === "cancelled") await cancelAppointmentReminders(req.access!.company.id, id);
   return { row, replayed: false };
 }
 

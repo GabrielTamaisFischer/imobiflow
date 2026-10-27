@@ -42,7 +42,7 @@ describe("F7A — domínio canônico de agendamento", () => {
     expect(canTransitionAppointment(from, to)).toBe(false);
   });
 
-  it("create exige vínculo assigned_to sempre", () => {
+  it.each([["assigned_to", "responsável"]])("create exige vínculo %s", (field) => {
     const input = { ...valid } as Record<string, unknown>;
     delete input.assigned_to;
     expect(() => appointmentInput.parse(input)).toThrow();

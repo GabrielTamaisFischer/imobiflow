@@ -71,6 +71,13 @@ model Company {
   inspectionSigningProcesses InspectionSigningProcess[]
   inspectionSigningParties   InspectionSigningParty[]
   inspectionSigningEvents    InspectionSigningEvent[]
+  appointmentGuests AppointmentGuest[]
+  bookings          Booking[]
+  agendaUserPreferences AgendaUserPreference[]
+  agendaCompanySettings AgendaCompanySettings?
+  bookingPages BookingPage[]
+  bookingWeeklyAvailabilities BookingWeeklyAvailability[]
+  bookingAvailabilityExceptions BookingAvailabilityException[]
 
   @@index([status])
   @@map("companies")
@@ -135,12 +142,193 @@ model AppUser {
   proposalEvents      ProposalEvent[]
   resolvedOwnerPropertyUpdates OwnerPropertyUpdateRequest[] @relation("OwnerPropertyUpdateResolver")
   createdInspectionSigningProcesses InspectionSigningProcess[] @relation("SigningProcessCreator")
+  agendaUserPreferences AgendaUserPreference[]
+  bookingPagesOwned BookingPage[] @relation("BookingPageOwner")
+  bookingPagesCreated BookingPage[] @relation("BookingPageCreator")
+  bookingsBooked Booking[] @relation("BookingBookedBy")
+  appointmentGuests AppointmentGuest[] @relation("AppointmentGuestUser")
 
+  @@unique([companyId, id])
   @@unique([companyId, email])
   @@unique([companyId, partyId])
   @@index([companyId, status])
   @@index([companyId, partyId])
   @@map("users")
+}
+
+model AgendaUserPreference {
+  id                       String   @id @default(uuid()) @db.Char(36)
+  companyId                String   @map("company_id") @db.Char(36)
+  userId                   String   @map("user_id") @db.Char(36)
+  locale                   String   @default("pt-BR") @db.VarChar(10)
+  country                  String   @default("BR") @db.VarChar(2)
+  dateFormat               String   @default("DMY") @map("date_format") @db.VarChar(3)
+  timeFormat               String   @default("24h") @map("time_format") @db.VarChar(3)
+  weekStart                Int      @default(1) @map("week_start")
+  timezone                 String   @default("America/Sao_Paulo") @db.VarChar(60)
+  secondaryTimezone        String?  @map("secondary_timezone") @db.VarChar(60)
+  showWorldClock           Boolean  @default(false) @map("show_world_clock")
+  defaultEventDuration     Int      @default(60) @map("default_event_duration_minutes")
+  shortenMeetings          Boolean  @default(false) @map("shorten_meetings")
+  notifyEnabled            Boolean  @default(true) @map("notify_enabled")
+  notifyDefaultLeadMinutes Int      @default(15) @map("notify_default_lead_minutes")
+  notifySound              Boolean  @default(false) @map("notify_sound")
+  notifyOnlyConfirmed      Boolean  @default(false) @map("notify_only_confirmed")
+  notifyTasksEnabled       Boolean  @default(true) @map("notify_tasks_enabled")
+  showWeekends             Boolean  @default(true) @map("show_weekends")
+  showCancelled            Boolean  @default(false) @map("show_cancelled")
+  showCompletedTasks       Boolean  @default(true) @map("show_completed_tasks")
+  showWeekNumbers          Boolean  @default(false) @map("show_week_numbers")
+  compactShortEvents       Boolean  @default(false) @map("compact_short_events")
+  dimPastEvents            Boolean  @default(true) @map("dim_past_events")
+  showBrokersSideBySide    Boolean  @default(false) @map("show_brokers_side_by_side")
+  customViewDays           Int?     @map("custom_view_days")
+  defaultVisibility        String   @default("shared") @map("default_visibility") @db.VarChar(20)
+  keyboardShortcutsEnabled Boolean  @default(true) @map("keyboard_shortcuts_enabled")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+  company                  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                     AppUser  @relation(fields: [companyId, userId], references: [companyId, id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([userId])
+  @@map("agenda_user_preferences")
+}
+
+model AgendaCompanySettings {
+  id                           String   @id @default(uuid()) @db.Char(36)
+  companyId                    String   @unique @map("company_id") @db.Char(36)
+  defaultTimezone              String   @default("America/Sao_Paulo") @map("default_timezone") @db.VarChar(60)
+  guestsCanModifyMax           Boolean  @default(false) @map("guests_can_modify_max")
+  guestsCanInviteMax           Boolean  @default(false) @map("guests_can_invite_max")
+  guestsCanSeeGuestListMax     Boolean  @default(true) @map("guests_can_see_guest_list_max")
+  defaultVisibility            String   @default("shared") @map("default_visibility") @db.VarChar(20)
+  notifyChannelSystemEnabled   Boolean  @default(true) @map("notify_channel_system_enabled")
+  notifyChannelEmailEnabled    Boolean  @default(false) @map("notify_channel_email_enabled")
+  notifyChannelWhatsappEnabled Boolean  @default(false) @map("notify_channel_whatsapp_enabled")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
+  company                      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("agenda_company_settings")
+}
+
+model BookingPage {
+  id                    String                         @id @default(uuid()) @db.Char(36)
+  companyId             String                         @map("company_id") @db.Char(36)
+  ownerUserId           String                         @map("owner_user_id") @db.Char(36)
+  propertyId            String?                        @map("property_id") @db.Char(36)
+  title                 String                         @db.VarChar(180)
+  description           String?                        @db.Text
+  serviceType           String                         @default("visit") @map("service_type") @db.VarChar(60)
+  locationText          String?                        @map("location_text") @db.VarChar(240)
+  color                 String?                        @db.VarChar(20)
+  durationMinutes       Int                            @default(60) @map("duration_minutes")
+  bufferMinutes         Int                            @default(30) @map("buffer_minutes")
+  minNoticeMinutes      Int                            @default(240) @map("min_notice_minutes")
+  maxAdvanceDays        Int                            @default(60) @map("max_advance_days")
+  maxBookingsPerDay     Int?                           @map("max_bookings_per_day")
+  timezone              String                         @default("America/Sao_Paulo") @db.VarChar(60)
+  availabilityStartsAt  DateTime?                      @map("availability_starts_at")
+  availabilityEndsAt    DateTime?                      @map("availability_ends_at")
+  guestsCanInvite       Boolean                        @default(false) @map("guests_can_invite")
+  guestsCanSeeGuestList Boolean                        @default(true) @map("guests_can_see_guest_list")
+  status                String                         @default("active") @db.VarChar(20)
+  version               Int                            @default(1)
+  createdBy             String?                        @map("created_by") @db.Char(36)
+  createdAt             DateTime                       @default(now()) @map("created_at")
+  updatedAt             DateTime                       @updatedAt @map("updated_at")
+  company               Company                        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner                 AppUser                        @relation("BookingPageOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  property              Property?                      @relation("BookingPageProperty", fields: [propertyId], references: [id], onDelete: SetNull)
+  creator               AppUser?                       @relation("BookingPageCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  weeklyAvailability    BookingWeeklyAvailability[]
+  exceptions            BookingAvailabilityException[]
+  bookings              Booking[]
+
+  @@index([companyId, ownerUserId, status])
+  @@index([companyId, status])
+  @@map("booking_pages")
+}
+
+model BookingWeeklyAvailability {
+  id            String      @id @default(uuid()) @db.Char(36)
+  companyId     String      @map("company_id") @db.Char(36)
+  bookingPageId String      @map("booking_page_id") @db.Char(36)
+  weekday       Int
+  startMinute   Int         @map("start_minute")
+  endMinute     Int         @map("end_minute")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bookingPage   BookingPage @relation(fields: [bookingPageId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, bookingPageId, weekday])
+  @@map("booking_weekly_availability")
+}
+
+model BookingAvailabilityException {
+  id            String      @id @default(uuid()) @db.Char(36)
+  companyId     String      @map("company_id") @db.Char(36)
+  bookingPageId String      @map("booking_page_id") @db.Char(36)
+  date          DateTime    @db.Date
+  isAvailable   Boolean     @map("is_available")
+  startMinute   Int?        @map("start_minute")
+  endMinute     Int?        @map("end_minute")
+  reason        String?     @db.VarChar(160)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bookingPage   BookingPage @relation(fields: [bookingPageId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, bookingPageId, date])
+  @@map("booking_availability_exceptions")
+}
+
+model Booking {
+  id             String      @id @default(uuid()) @db.Char(36)
+  companyId      String      @map("company_id") @db.Char(36)
+  bookingPageId  String      @map("booking_page_id") @db.Char(36)
+  appointmentId  String      @unique @map("appointment_id") @db.Char(36)
+  bookedByUserId String?     @map("booked_by_user_id") @db.Char(36)
+  partyId        String?     @map("party_id") @db.Char(36)
+  version        Int         @default(1)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  company        Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bookingPage    BookingPage @relation(fields: [bookingPageId], references: [id], onDelete: Cascade)
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  bookedBy       AppUser?    @relation("BookingBookedBy", fields: [bookedByUserId], references: [id], onDelete: SetNull)
+  party          Party?      @relation(fields: [partyId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, bookingPageId, createdAt])
+  @@index([companyId, partyId])
+  @@map("bookings")
+}
+
+model AppointmentGuest {
+  id             String      @id @default(uuid()) @db.Char(36)
+  companyId      String      @map("company_id") @db.Char(36)
+  appointmentId  String      @map("appointment_id") @db.Char(36)
+  partyId        String?     @map("party_id") @db.Char(36)
+  userId         String?     @map("user_id") @db.Char(36)
+  email          String?     @db.VarChar(180)
+  name           String?     @db.VarChar(160)
+  role           String      @default("guest") @db.VarChar(20)
+  responseStatus String      @default("pending") @map("response_status") @db.VarChar(20)
+  canModify      Boolean     @default(false) @map("can_modify")
+  canInvite      Boolean     @default(false) @map("can_invite")
+  respondedAt    DateTime?   @map("responded_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  company        Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  appointment    Appointment @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  party          Party?      @relation("AppointmentGuestParty", fields: [partyId], references: [id], onDelete: SetNull)
+  user           AppUser?    @relation("AppointmentGuestUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, appointmentId])
+  @@index([companyId, partyId])
+  @@map("appointment_guests")
 }
 
 model Permission {
@@ -620,6 +808,8 @@ model Party {
   contractSources ContractParty[] @relation("ContractPartySource")
   appUsers        AppUser[]        @relation("AppUserParty")
   inspectionSigningParties InspectionSigningParty[]
+  bookings Booking[]
+  appointmentGuests AppointmentGuest[] @relation("AppointmentGuestParty")
 
   @@unique([companyId, id])
   // C1.1 (ajuste pós-auditoria) — unique tenant-safe para identidade
@@ -779,6 +969,7 @@ model Property {
   financialEntries        FinancialEntry[]
   proposals               Proposal[]
   ownerPropertyUpdateRequests OwnerPropertyUpdateRequest[]
+  bookingPages BookingPage[] @relation("BookingPageProperty")
 
   @@unique([companyId, code])
   @@index([companyId, status, publishedAt])
@@ -1377,6 +1568,8 @@ model Appointment {
   assignee        AppUser?  @relation("AppointmentAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
   creator         AppUser?  @relation("AppointmentCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   events          AppointmentEvent[]
+  booking         Booking?
+  guests          AppointmentGuest[]
 
   @@index([companyId, propertyId])
   @@index([companyId, leadId])

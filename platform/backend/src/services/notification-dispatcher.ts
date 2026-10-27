@@ -100,6 +100,31 @@ export async function queueNotificationEvent(input: QueueInput) {
   return data;
 }
 
+export async function upsertAppointmentReminder(input: { companyId: string; appointmentId: string; actorId: string; recipientId: string | null; recipientName: string; recipientContact: string; scheduledFor: string; title: string; startsAt: string }) {
+  const { data: existing, error: existingError } = await supabaseAdmin.from("notification_events").select("id, metadata, status").eq("company_id", input.companyId).eq("related_entity_type", "appointment").eq("related_entity_id", input.appointmentId).limit(20);
+  if (existingError) throw existingError;
+  const row = (existing ?? []).find((item: any) => item.metadata?.kind === "appointment_reminder");
+  const payload = { company_id: input.companyId, channel: "system", direction: "outbound", recipient_type: "user", recipient_id: input.recipientId, recipient_name: input.recipientName, recipient_contact: input.recipientContact, subject: `Lembrete: ${input.title}`, body: `Agendamento em ${new Date(input.startsAt).toLocaleString("pt-BR")}.`, status: "queued", provider: "internal", related_entity_type: "appointment", related_entity_id: input.appointmentId, metadata: { kind: "appointment_reminder", appointment_id: input.appointmentId }, created_by: input.actorId, scheduled_for: input.scheduledFor, queued_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  if (row) {
+    const { data, error } = await supabaseAdmin.from("notification_events").update(payload).eq("id", row.id).eq("company_id", input.companyId).select(dispatchEventSelect).single<DispatchNotificationEvent>();
+    if (error) throw error;
+    return data;
+  }
+  const { data, error } = await supabaseAdmin.from("notification_events").insert(payload).select(dispatchEventSelect).single<DispatchNotificationEvent>();
+  if (error) throw error;
+  return data;
+}
+
+export async function cancelAppointmentReminders(companyId: string, appointmentId: string) {
+  const { data: events, error } = await supabaseAdmin.from("notification_events").select("id, metadata, status").eq("company_id", companyId).eq("related_entity_type", "appointment").eq("related_entity_id", appointmentId);
+  if (error) throw error;
+  const ids = (events ?? []).filter((item: any) => item.metadata?.kind === "appointment_reminder").filter((item: any) => !["sent", "delivered", "read"].includes(item.status)).map((item: any) => item.id);
+  if (!ids.length) return 0;
+  const { error: updateError } = await supabaseAdmin.from("notification_events").update({ status: "cancelled", updated_at: new Date().toISOString() }).in("id", ids).eq("company_id", companyId);
+  if (updateError) throw updateError;
+  return ids.length;
+}
+
 export async function dispatchNotificationEvent(input: DispatchInput) {
   const event = await loadDispatchEvent(input.eventId, input.companyId);
 

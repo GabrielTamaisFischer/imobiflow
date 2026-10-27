@@ -5,6 +5,7 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
+  Check,
   CheckSquare,
   ChevronDown,
   ChevronLeft,
@@ -22,6 +23,7 @@ import {
   User2,
   Users as UsersIcon,
   X,
+  Settings,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -52,12 +54,14 @@ import { getModuleByKey } from "@/product/app-modules";
 import { canManage, getSafeApiErrorMessage } from "@/product/app-access";
 import {
   appointmentStatusFlowByType,
+  appointmentStatusLabels,
   appointmentTypeLabels,
   cancelAppointment,
   changeAppointmentStatus,
   completeAppointment,
   createAppointment,
   getAppointmentStatusLabel,
+  formatAppointmentDate,
   listAppointments,
   safeAppointmentError,
   toIsoDateTime,
@@ -70,6 +74,28 @@ import {
 import { listCrmUsers, listLeads, type CrmUser, type Lead } from "@/product/crm";
 import { listAllProperties, type PropertySummary } from "@/product/real-estate";
 import { useSessionGuard } from "@/product/use-session-guard";
+import {
+  getAgendaPreferences,
+  getAgendaCompanySettings,
+  updateAgendaCompanySettings,
+  type AgendaCompanySettings,
+  updateAgendaPreferences,
+  type AgendaUserPreferences,
+} from "@/product/agenda-settings";
+import {
+  createBooking,
+  createBookingException,
+  createBookingPage,
+  deleteBookingException,
+  duplicateBookingPage,
+  listBookingAvailability,
+  listBookingPages,
+  listBookings,
+  rescheduleBooking,
+  updateBookingPage,
+  updateWeeklyAvailability,
+  type BookingPage,
+} from "@/product/booking";
 
 export const Route = createFileRoute("/app/agenda")({ component: AgendaPage });
 
@@ -173,7 +199,6 @@ function formatDateTimeLocal(date: Date) {
 function minutesSinceMidnight(date: Date) {
   return date.getHours() * 60 + date.getMinutes();
 }
-
 // ---------------------------------------------------------------------------
 // Layout de eventos simultâneos (colunas lado a lado, como no Google Calendar)
 // ---------------------------------------------------------------------------
@@ -317,6 +342,21 @@ function AgendaPage() {
     brokers: true,
     shared: true,
   });
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [preferences, setPreferences] = useState<AgendaUserPreferences | null>(null);
+  const [preferencesLoading, setPreferencesLoading] = useState(false);
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const [companySettings, setCompanySettings] = useState<AgendaCompanySettings | null>(null);
+  const [companySettingsLoading, setCompanySettingsLoading] = useState(false);
+  const [companySettingsSaving, setCompanySettingsSaving] = useState(false);
+  const [bookingPages, setBookingPages] = useState<BookingPage[]>([]);
+  const [bookingPagesOpen, setBookingPagesOpen] = useState(false);
+  const [bookingPagesLoading, setBookingPagesLoading] = useState(false);
+  const [bookingDate, setBookingDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [bookingAvailability, setBookingAvailability] = useState<Record<string, Array<{ starts_at: string; ends_at: string }>>>({});
+  const [bookingLoading, setBookingLoading] = useState<string | null>(null);
+  const [editingBookingPage, setEditingBookingPage] = useState<string | null>(null);
+  const [bookingRows, setBookingRows] = useState<Record<string, Array<{ id: string; appointment_id: string; version: number; starts_at: string; ends_at: string; status: string }>>>({});
 
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -412,6 +452,125 @@ function AgendaPage() {
     () => appointments.find((item) => item.id === selectedId) ?? null,
     [appointments, selectedId],
   );
+
+  async function openPreferences() {
+    setPreferencesOpen(true);
+    if (preferences || preferencesLoading) return;
+    setPreferencesLoading(true);
+    try { setPreferences((await getAgendaPreferences()).preferences); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível carregar as preferências da Agenda.")); }
+    finally { setPreferencesLoading(false); }
+  }
+  async function openCompanySettings() {
+    setPreferencesOpen(true);
+    if (companySettings || companySettingsLoading || !canManage(user, "settings.manage")) return;
+    setCompanySettingsLoading(true);
+    try { setCompanySettings((await getAgendaCompanySettings()).settings); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível carregar as políticas da empresa.")); }
+    finally { setCompanySettingsLoading(false); }
+  }
+  async function saveCompanySettings() {
+    if (!companySettings) return;
+    setCompanySettingsSaving(true);
+    try { setCompanySettings((await updateAgendaCompanySettings({ ...companySettings })).settings); setNotice("Políticas da empresa salvas."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível salvar as políticas.")); }
+    finally { setCompanySettingsSaving(false); }
+  }
+  async function savePreferences() {
+    if (!preferences) return;
+    setPreferencesSaving(true);
+    try { setPreferences((await updateAgendaPreferences({ ...preferences })).preferences); setNotice("Preferências da Agenda salvas."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível salvar as preferências.")); }
+    finally { setPreferencesSaving(false); }
+  }
+  async function openBookingPages() {
+    setBookingPagesOpen(true);
+    if (bookingPagesLoading) return;
+    setBookingPagesLoading(true);
+    try { setBookingPages((await listBookingPages()).pages); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível carregar as páginas de agendamento.")); }
+    finally { setBookingPagesLoading(false); }
+  }
+  async function createPage(input: Record<string, unknown>) {
+    if (!input.owner_user_id) { setError("Selecione um responsável."); return; }
+    setRunning("booking-page");
+    try { const response = await createBookingPage(input); setBookingPages((current) => [response.page, ...current]); setNotice("Página de agendamento criada como inativa."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível criar a página de agendamento.")); }
+    finally { setRunning(null); }
+  }
+  async function toggleBookingPage(page: BookingPage) {
+    setRunning(`booking-toggle:${page.id}`);
+    try { const response = await updateBookingPage(page.id, { expected_version: page.version, status: page.status === "active" ? "inactive" : "active" }); setBookingPages((current) => current.map((item) => item.id === page.id ? response.page : item)); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível atualizar a página.")); }
+    finally { setRunning(null); }
+  }
+  async function duplicatePage(page: BookingPage) {
+    setRunning(`booking-duplicate:${page.id}`);
+    try { const response = await duplicateBookingPage(page.id); setBookingPages((current) => [response.page, ...current]); setNotice("Página duplicada como inativa."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível duplicar a página.")); }
+    finally { setRunning(null); }
+  }
+  async function saveBookingPage(page: BookingPage, input: Record<string, unknown>) {
+    setRunning(`booking-edit:${page.id}`);
+    try { const response = await updateBookingPage(page.id, { ...input, expected_version: page.version }); setBookingPages((current) => current.map((item) => item.id === page.id ? response.page : item)); setEditingBookingPage(null); setNotice("Página de agendamento atualizada."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível editar a página.")); }
+    finally { setRunning(null); }
+  }
+  async function savePageWeekly(page: BookingPage, intervals: Array<{ weekday: number; start_minute: number; end_minute: number }>) {
+    setRunning(`booking-weekly:${page.id}`);
+    try { const response = await updateWeeklyAvailability(page.id, intervals); setBookingPages((current) => current.map((item) => item.id === page.id ? response.page : item)); setNotice("Disponibilidade semanal salva."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível salvar a disponibilidade.")); }
+    finally { setRunning(null); }
+  }
+  async function addPageException(page: BookingPage, input: Record<string, unknown>) {
+    setRunning(`booking-exception:${page.id}`);
+    try { const response = await createBookingException(page.id, input); setBookingPages((current) => current.map((item) => item.id === page.id ? { ...item, exceptions: [...item.exceptions, response.exception] } : item)); setNotice("Exceção de disponibilidade adicionada."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível adicionar a exceção.")); }
+    finally { setRunning(null); }
+  }
+  async function removePageException(page: BookingPage, exceptionId: string) {
+    setRunning(`booking-exception-delete:${exceptionId}`);
+    try { await deleteBookingException(page.id, exceptionId); setBookingPages((current) => current.map((item) => item.id === page.id ? { ...item, exceptions: item.exceptions.filter((exception) => exception.id !== exceptionId) } : item)); setNotice("Exceção removida."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível remover a exceção.")); }
+    finally { setRunning(null); }
+  }
+  async function archiveBookingPage(page: BookingPage) {
+    setRunning(`booking-archive:${page.id}`);
+    try { const response = await updateBookingPage(page.id, { expected_version: page.version, status: "archived" }); setBookingPages((current) => current.map((item) => item.id === page.id ? response.page : item)); setNotice("Página arquivada."); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível arquivar a página.")); }
+    finally { setRunning(null); }
+  }
+  async function loadAvailability(page: BookingPage) {
+    setBookingLoading(page.id);
+    try { const response = await listBookingAvailability(page.id, bookingDate); setBookingAvailability((current) => ({ ...current, [page.id]: response.slots })); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível consultar horários.")); }
+    finally { setBookingLoading(null); }
+  }
+  async function reserveSlot(page: BookingPage, slot: { starts_at: string; ends_at: string }, leadId: string, propertyId: string) {
+    if (!leadId) { setError("Selecione o cliente antes de reservar."); return; }
+    setBookingLoading(`${page.id}:${slot.starts_at}`);
+    try { await createBooking(page.id, { lead_id: leadId, property_id: propertyId || null, starts_at: slot.starts_at, ends_at: slot.ends_at }); setNotice("Reserva criada e vinculada ao agendamento."); await loadData(); await loadAvailability(page); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível criar a reserva.")); }
+    finally { setBookingLoading(null); }
+  }
+  async function loadBookings(page: BookingPage) {
+    setBookingLoading(`list:${page.id}`);
+    try { const response = await listBookings(page.id); setBookingRows((current) => ({ ...current, [page.id]: response.bookings })); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível carregar as reservas.")); }
+    finally { setBookingLoading(null); }
+  }
+  async function cancelBooking(row: { appointment_id: string; version: number }) {
+    setBookingLoading(`cancel:${row.appointment_id}`);
+    try { await cancelAppointment(row.appointment_id, row.version); setNotice("Reserva cancelada; o horário foi liberado novamente."); await loadData(); setBookingRows({}); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível cancelar a reserva.")); }
+    finally { setBookingLoading(null); }
+  }
+  async function rescheduleBookingRow(page: BookingPage, row: { id: string; appointment_id: string; version: number }, startsAt: string, endsAt: string) {
+    setBookingLoading(`reschedule:${row.id}`);
+    try { const response = await rescheduleBooking(page.id, row.id, { expected_version: row.version, starts_at: new Date(startsAt).toISOString(), ends_at: new Date(endsAt).toISOString() }); setBookingRows((current) => ({ ...current, [page.id]: (current[page.id] ?? []).map((item) => item.id === row.id ? { ...item, ...response.booking } : item) })); setNotice("Reserva reagendada."); await loadAvailability(page); }
+    catch (error) { setError(getSafeApiErrorMessage(error, "Não foi possível reagendar a reserva.")); }
+    finally { setBookingLoading(null); }
+  }
 
   // -------------------------------------------------------------------------
   // Navegação de datas
@@ -558,6 +717,8 @@ function AgendaPage() {
           onCreateType={(type) => openCreateForm(type, view === "day" ? anchor : new Date())}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((value) => !value)}
+          onOpenPreferences={() => void openPreferences()}
+          onOpenBookingPages={() => void openBookingPages()}
         />
 
         {error ? (
@@ -569,6 +730,26 @@ function AgendaPage() {
           <div className="rounded-md border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
             {notice}
           </div>
+        ) : null}
+
+        {preferencesOpen ? (
+          <>
+            <AgendaPreferencesPanel preferences={preferences} loading={preferencesLoading} saving={preferencesSaving} onClose={() => setPreferencesOpen(false)} onChange={setPreferences} onSave={() => void savePreferences()} />
+            {canManage(user, "settings.manage") ? (
+              <AgendaCompanySettingsPanel settings={companySettings} loading={companySettingsLoading} saving={companySettingsSaving} onOpen={() => void openCompanySettings()} onChange={setCompanySettings} onSave={() => void saveCompanySettings()} />
+            ) : null}
+          </>
+        ) : null}
+
+        {bookingPagesOpen ? (
+          <BookingPagesPanel
+            pages={bookingPages} leads={leads} properties={properties} users={users} loading={bookingPagesLoading} running={running}
+            editingPageId={editingBookingPage} bookingDate={bookingDate} setBookingDate={setBookingDate} availability={bookingAvailability} bookings={bookingRows} bookingLoading={bookingLoading}
+            onClose={() => setBookingPagesOpen(false)} onCreate={(input) => void createPage(input)} onToggle={(page) => void toggleBookingPage(page)} onDuplicate={(page) => void duplicatePage(page)}
+            onEdit={(page) => setEditingBookingPage(page.id)} onCancelEdit={() => setEditingBookingPage(null)} onSaveEdit={(page, input) => void saveBookingPage(page, input)}
+            onSaveWeekly={(page, intervals) => void savePageWeekly(page, intervals)} onAddException={(page, input) => void addPageException(page, input)} onRemoveException={(page, exceptionId) => void removePageException(page, exceptionId)} onArchive={(page) => void archiveBookingPage(page)}
+            onLoadAvailability={(page) => void loadAvailability(page)} onReserve={(page, slot, leadId, propertyId) => void reserveSlot(page, slot, leadId, propertyId)} onLoadBookings={(page) => void loadBookings(page)} onCancelBooking={(row) => void cancelBooking(row)} onRescheduleBooking={(page, row, startsAt, endsAt) => void rescheduleBookingRow(page, row, startsAt, endsAt)}
+          />
         ) : null}
 
         <div className="flex min-h-0 flex-1 gap-3">
@@ -697,6 +878,8 @@ function AgendaHeader(props: {
   onCreateType: (type: AppointmentType) => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  onOpenPreferences: () => void;
+  onOpenBookingPages: () => void;
 }) {
   return (
     <header className="flex flex-col gap-3 border-b pb-3">
@@ -710,6 +893,14 @@ function AgendaHeader(props: {
           <p className="text-xs text-muted-foreground">Visitas, reuniões, vistorias, retornos e lembretes internos.</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={props.onOpenPreferences}>
+            <Settings className="h-4 w-4" /> Preferências
+          </Button>
+          {props.canEdit ? (
+            <Button type="button" variant="outline" size="sm" onClick={props.onOpenBookingPages}>
+              <CalendarDays className="h-4 w-4" /> Páginas
+            </Button>
+          ) : null}
           {props.canEdit ? (
             <div className="relative">
               <Button type="button" onClick={props.onCreate} className="gap-1">
@@ -1711,3 +1902,1676 @@ function AppointmentFormSheet(props: {
 }
 
 export default AgendaPage;
+
+type AppointmentFormValues = {
+  lead_id: string;
+  property_id: string;
+  assigned_to: string;
+  appointment_type: AppointmentType;
+  title: string;
+  description: string;
+  location_text: string;
+  starts_at: string;
+  ends_at: string;
+  reminder_at: string;
+};
+
+function AgendaPreferencesPanel({
+  preferences,
+  loading,
+  saving,
+  onClose,
+  onChange,
+  onSave,
+}: {
+  preferences: AgendaUserPreferences | null;
+  loading: boolean;
+  saving: boolean;
+  onClose: () => void;
+  onChange: (value: AgendaUserPreferences | null) => void;
+  onSave: () => void;
+}) {
+  if (loading || !preferences) {
+    return (
+      <section className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+        Carregando preferências...
+      </section>
+    );
+  }
+  const update = <K extends keyof AgendaUserPreferences>(key: K, value: AgendaUserPreferences[K]) =>
+    onChange({ ...preferences, [key]: value });
+  return (
+    <section
+      className="space-y-4 rounded-lg border bg-card p-4"
+      aria-label="Preferências da Agenda"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Preferências da Agenda</h2>
+          <p className="text-xs text-muted-foreground">
+            Estas opções são pessoais e não alteram a política da empresa.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          aria-label="Fechar preferências"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="text-sm">
+          Idioma
+          <Input value={preferences.locale} onChange={(e) => update("locale", e.target.value)} />
+        </label>
+        <label className="text-sm">
+          País
+          <Input
+            maxLength={2}
+            value={preferences.country}
+            onChange={(e) => update("country", e.target.value.toUpperCase())}
+          />
+        </label>
+        <label className="text-sm">
+          Formato de data
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={preferences.date_format}
+            onChange={(e) =>
+              update("date_format", e.target.value as AgendaUserPreferences["date_format"])
+            }
+          >
+            <option value="DMY">DD/MM/AAAA</option>
+            <option value="MDY">MM/DD/AAAA</option>
+            <option value="YMD">AAAA-MM-DD</option>
+          </select>
+        </label>
+        <label className="text-sm">
+          Formato de hora
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={preferences.time_format}
+            onChange={(e) =>
+              update("time_format", e.target.value as AgendaUserPreferences["time_format"])
+            }
+          >
+            <option value="24h">24 horas</option>
+            <option value="12h">12 horas</option>
+          </select>
+        </label>
+        <label className="text-sm">
+          Fuso principal
+          <Input
+            value={preferences.timezone}
+            onChange={(e) => update("timezone", e.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Fuso secundário
+          <Input
+            value={preferences.secondary_timezone ?? ""}
+            onChange={(e) => update("secondary_timezone", e.target.value || null)}
+          />
+        </label>
+        <label className="text-sm">
+          Início da semana
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={preferences.week_start}
+            onChange={(e) => update("week_start", Number(e.target.value))}
+          >
+            <option value={0}>Domingo</option>
+            <option value={1}>Segunda</option>
+            <option value={6}>Sábado</option>
+          </select>
+        </label>
+        <label className="text-sm">
+          Duração padrão (min)
+          <Input
+            type="number"
+            min={5}
+            max={1440}
+            value={preferences.default_event_duration_minutes}
+            onChange={(e) => update("default_event_duration_minutes", Number(e.target.value))}
+          />
+        </label>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {(
+          [
+            ["show_world_clock", "Relógio mundial"],
+            ["shorten_meetings", "Reuniões rápidas"],
+            ["notify_enabled", "Notificações"],
+            ["notify_sound", "Som de notificação"],
+            ["notify_only_confirmed", "Somente confirmados"],
+            ["notify_tasks_enabled", "Notificar tarefas"],
+            ["show_weekends", "Exibir fins de semana"],
+            ["show_cancelled", "Exibir cancelados"],
+            ["show_completed_tasks", "Exibir concluídos"],
+            ["show_week_numbers", "Números das semanas"],
+            ["compact_short_events", "Eventos curtos compactos"],
+            ["dim_past_events", "Atenuar eventos passados"],
+            ["show_brokers_side_by_side", "Corretores lado a lado"],
+            ["keyboard_shortcuts_enabled", "Atalhos de teclado"],
+          ] as Array<[keyof AgendaUserPreferences, string]>
+        ).map(([key, label]) => (
+          <label
+            key={String(key)}
+            className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+          >
+            <input
+              type="checkbox"
+              checked={Boolean(preferences[key])}
+              onChange={(e) => update(key, e.target.checked as AgendaUserPreferences[typeof key])}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+        <label className="text-sm">
+          Privacidade padrão
+          <select
+            className="ml-2 h-9 rounded-md border bg-background px-3"
+            value={preferences.default_visibility}
+            onChange={(e) =>
+              update(
+                "default_visibility",
+                e.target.value as AgendaUserPreferences["default_visibility"],
+              )
+            }
+          >
+            <option value="shared">Compartilhado</option>
+            <option value="private">Privado</option>
+          </select>
+        </label>
+        <Button type="button" onClick={onSave} disabled={saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Salvar preferências
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function AgendaCompanySettingsPanel({
+  settings,
+  loading,
+  saving,
+  onOpen,
+  onChange,
+  onSave,
+}: {
+  settings: AgendaCompanySettings | null;
+  loading: boolean;
+  saving: boolean;
+  onOpen: () => void;
+  onChange: (value: AgendaCompanySettings | null) => void;
+  onSave: () => void;
+}) {
+  if (!settings)
+    return (
+      <div className="rounded-md border border-dashed p-3 text-sm">
+        <Button type="button" variant="outline" onClick={onOpen} disabled={loading}>
+          {loading ? "Carregando políticas..." : "Carregar políticas da empresa"}
+        </Button>
+      </div>
+    );
+  const update = <K extends keyof AgendaCompanySettings>(key: K, value: AgendaCompanySettings[K]) =>
+    onChange({ ...settings, [key]: value });
+  return (
+    <section
+      className="space-y-3 rounded-md border bg-muted/20 p-3"
+      aria-label="Políticas da empresa"
+    >
+      <div>
+        <h3 className="font-medium">Políticas da empresa</h3>
+        <p className="text-xs text-muted-foreground">
+          Limites institucionais aplicados às reservas e notificações.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">
+          Fuso padrão
+          <Input
+            value={settings.default_timezone}
+            onChange={(event) => update("default_timezone", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Visibilidade
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={settings.default_visibility}
+            onChange={(event) =>
+              update(
+                "default_visibility",
+                event.target.value as AgendaCompanySettings["default_visibility"],
+              )
+            }
+          >
+            <option value="shared">Compartilhado</option>
+            <option value="private">Privado</option>
+          </select>
+        </label>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.guests_can_modify_max}
+            onChange={(event) => update("guests_can_modify_max", event.target.checked)}
+          />{" "}
+          Convidados podem alterar
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.guests_can_invite_max}
+            onChange={(event) => update("guests_can_invite_max", event.target.checked)}
+          />{" "}
+          Convidados podem convidar
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.guests_can_see_guest_list_max}
+            onChange={(event) => update("guests_can_see_guest_list_max", event.target.checked)}
+          />{" "}
+          Exibir lista de convidados
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.notify_channel_system_enabled}
+            onChange={(event) => update("notify_channel_system_enabled", event.target.checked)}
+          />{" "}
+          Notificações no sistema
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.notify_channel_email_enabled}
+            onChange={(event) => update("notify_channel_email_enabled", event.target.checked)}
+          />{" "}
+          Notificações por e-mail
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings.notify_channel_whatsapp_enabled}
+            onChange={(event) => update("notify_channel_whatsapp_enabled", event.target.checked)}
+          />{" "}
+          Notificações WhatsApp
+        </label>
+      </div>
+      <Button type="button" onClick={onSave} disabled={saving}>
+        {saving ? "Salvando..." : "Salvar políticas"}
+      </Button>
+    </section>
+  );
+}
+
+function BookingPagesPanel({
+  pages,
+  leads,
+  properties,
+  users,
+  loading,
+  running,
+  onClose,
+  onCreate,
+  onToggle,
+  onDuplicate,
+  editingPageId,
+  onEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onSaveWeekly,
+  onAddException,
+  onRemoveException,
+  onArchive,
+  bookingDate,
+  setBookingDate,
+  availability,
+  bookings,
+  bookingLoading,
+  onLoadAvailability,
+  onReserve,
+  onLoadBookings,
+  onCancelBooking,
+  onRescheduleBooking,
+}: {
+  pages: BookingPage[];
+  leads: Lead[];
+  properties: PropertySummary[];
+  users: CrmUser[];
+  loading: boolean;
+  running: string | null;
+  onClose: () => void;
+  onCreate: (input: Record<string, unknown>) => void;
+  onToggle: (page: BookingPage) => void;
+  onDuplicate: (page: BookingPage) => void;
+  editingPageId: string | null;
+  onEdit: (page: BookingPage) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (page: BookingPage, input: Record<string, unknown>) => void;
+  onSaveWeekly: (
+    page: BookingPage,
+    intervals: Array<{ weekday: number; start_minute: number; end_minute: number }>,
+  ) => void;
+  onAddException: (page: BookingPage, input: Record<string, unknown>) => void;
+  onRemoveException: (page: BookingPage, exceptionId: string) => void;
+  onArchive: (page: BookingPage) => void;
+  bookingDate: string;
+  setBookingDate: (value: string) => void;
+  availability: Record<string, Array<{ starts_at: string; ends_at: string }>>;
+  bookings: Record<
+    string,
+    Array<{
+      id: string;
+      appointment_id: string;
+      version: number;
+      starts_at: string;
+      ends_at: string;
+      status: string;
+    }>
+  >;
+  bookingLoading: string | null;
+  onLoadAvailability: (page: BookingPage) => void;
+  onReserve: (
+    page: BookingPage,
+    slot: { starts_at: string; ends_at: string },
+    leadId: string,
+    propertyId: string,
+  ) => void;
+  onLoadBookings: (page: BookingPage) => void;
+  onCancelBooking: (row: { appointment_id: string; version: number }) => void;
+  onRescheduleBooking: (
+    page: BookingPage,
+    row: { id: string; appointment_id: string; version: number },
+    startsAt: string,
+    endsAt: string,
+  ) => void;
+}) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [leadByPage, setLeadByPage] = useState<Record<string, string>>({});
+  const [propertyByPage, setPropertyByPage] = useState<Record<string, string>>({});
+  const [rescheduleByBooking, setRescheduleByBooking] = useState<
+    Record<string, { startsAt: string; endsAt: string }>
+  >({});
+  const [draft, setDraft] = useState({
+    title: "",
+    description: "",
+    service_type: "visit",
+    owner_user_id: users[0]?.id ?? "",
+    property_id: "",
+    location_text: "",
+    color: "#6d28d9",
+    duration_minutes: 60,
+    buffer_minutes: 30,
+    min_notice_minutes: 240,
+    max_advance_days: 60,
+    max_bookings_per_day: "",
+    timezone: "America/Sao_Paulo",
+    guests_can_invite: false,
+    guests_can_see_guest_list: true,
+  });
+  function submitCreate(event: FormEvent) {
+    event.preventDefault();
+    if (!draft.title.trim() || !draft.owner_user_id) return;
+    onCreate({
+      ...draft,
+      title: draft.title.trim(),
+      description: draft.description.trim() || null,
+      property_id: draft.property_id || null,
+      location_text: draft.location_text.trim() || null,
+      color: draft.color || null,
+      max_bookings_per_day: draft.max_bookings_per_day ? Number(draft.max_bookings_per_day) : null,
+    });
+    setCreateOpen(false);
+    setDraft((current) => ({ ...current, title: "", description: "" }));
+  }
+  return (
+    <section
+      className="space-y-4 rounded-lg border bg-card p-4"
+      aria-label="Páginas de agendamento"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-semibold">Páginas de agendamento</h2>
+          <p className="text-xs text-muted-foreground">
+            Páginas internas para reservar horários; nenhuma publicação externa é criada nesta
+            rodada.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            onClick={() => setCreateOpen((current) => !current)}
+            disabled={Boolean(running)}
+          >
+            <Plus className="h-4 w-4" /> Nova página
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label="Fechar páginas"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+      {createOpen ? (
+        <form
+          onSubmit={submitCreate}
+          className="grid gap-3 rounded-md border bg-background p-3 sm:grid-cols-2"
+        >
+          <label className="text-sm sm:col-span-2">
+            Título
+            <Input
+              required
+              value={draft.title}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, title: event.target.value }))
+              }
+              placeholder="Ex.: Visita ao imóvel"
+            />
+          </label>
+          <label className="text-sm sm:col-span-2">
+            Descrição
+            <textarea
+              className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2"
+              value={draft.description}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, description: event.target.value }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Tipo de atendimento
+            <select
+              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+              value={draft.service_type}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, service_type: event.target.value }))
+              }
+            >
+              <option value="visit">Visita</option>
+              <option value="meeting">Reunião</option>
+              <option value="inspection">Vistoria</option>
+              <option value="signature">Assinatura</option>
+              <option value="follow_up">Follow-up</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            Cor do evento
+            <Input
+              type="color"
+              value={draft.color}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, color: event.target.value }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Responsável
+            <select
+              required
+              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+              value={draft.owner_user_id}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, owner_user_id: event.target.value }))
+              }
+            >
+              <option value="">Selecione</option>
+              {users.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Imóvel vinculado (opcional)
+            <select
+              className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+              value={draft.property_id}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, property_id: event.target.value }))
+              }
+            >
+              <option value="">Nenhum</option>
+              {properties.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.code ? `${item.code} — ` : ""}
+                  {item.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Local
+            <Input
+              value={draft.location_text}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, location_text: event.target.value }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Fuso horário
+            <Input
+              value={draft.timezone}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, timezone: event.target.value }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Duração (minutos)
+            <Input
+              type="number"
+              min={5}
+              max={1440}
+              value={draft.duration_minutes}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  duration_minutes: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Intervalo (minutos)
+            <Input
+              type="number"
+              min={0}
+              max={1440}
+              value={draft.buffer_minutes}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, buffer_minutes: Number(event.target.value) }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Antecedência mínima (minutos)
+            <Input
+              type="number"
+              min={0}
+              max={43200}
+              value={draft.min_notice_minutes}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  min_notice_minutes: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Antecedência máxima (dias)
+            <Input
+              type="number"
+              min={1}
+              max={730}
+              value={draft.max_advance_days}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  max_advance_days: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label className="text-sm">
+            Limite diário (opcional)
+            <Input
+              type="number"
+              min={1}
+              max={1000}
+              value={draft.max_bookings_per_day}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, max_bookings_per_day: event.target.value }))
+              }
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.guests_can_invite}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, guests_can_invite: event.target.checked }))
+              }
+            />{" "}
+            Convidados podem convidar
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.guests_can_see_guest_list}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  guests_can_see_guest_list: event.target.checked,
+                }))
+              }
+            />{" "}
+            Exibir lista de convidados
+          </label>
+          <div className="flex gap-2 sm:col-span-2">
+            <Button
+              type="submit"
+              disabled={Boolean(running) || !draft.title.trim() || !draft.owner_user_id}
+            >
+              Criar página
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+              Cancelar
+            </Button>
+          </div>
+        </form>
+      ) : null}
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Carregando páginas...</p>
+      ) : pages.length === 0 ? (
+        <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+          Nenhuma página criada.
+        </p>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {pages.map((page) => (
+            <article key={page.id} className="rounded-md border p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  {editingPageId === page.id ? (
+                    <BookingPageEditor
+                      page={page}
+                      users={users}
+                      properties={properties}
+                      busy={running === `booking-edit:${page.id}`}
+                      onCancel={onCancelEdit}
+                      onSave={(input) => onSaveEdit(page, input)}
+                    />
+                  ) : (
+                    <>
+                      <h3 className="font-medium">{page.title}</h3>
+                      <p className="text-xs text-muted-foreground">
+                        {page.owner?.name ?? "Responsável"} · {page.timezone}
+                      </p>
+                    </>
+                  )}
+                </div>
+                <span className="rounded-full bg-muted px-2 py-1 text-xs">
+                  {page.status === "active"
+                    ? "Ativa"
+                    : page.status === "archived"
+                      ? "Arquivada"
+                      : "Inativa"}
+                </span>
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {page.duration_minutes} min + {page.buffer_minutes} min de intervalo
+              </p>
+              {page.status !== "archived" ? (
+                <BookingScheduleEditor
+                  page={page}
+                  busy={Boolean(running)}
+                  onSave={(intervals) => onSaveWeekly(page, intervals)}
+                  onAddException={(input) => onAddException(page, input)}
+                  onRemoveException={(exceptionId) => onRemoveException(page, exceptionId)}
+                />
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onToggle(page)}
+                  disabled={Boolean(running) || page.status === "archived"}
+                >
+                  {page.status === "active" ? "Desativar" : "Ativar"}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onEdit(page)}
+                  disabled={Boolean(running) || page.status === "archived"}
+                >
+                  Editar
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onDuplicate(page)}
+                  disabled={Boolean(running)}
+                >
+                  Duplicar
+                </Button>
+                {page.status !== "archived" ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onArchive(page)}
+                    disabled={Boolean(running)}
+                  >
+                    Arquivar
+                  </Button>
+                ) : null}
+              </div>
+              {page.status === "active" ? (
+                <div className="mt-3 space-y-2 border-t pt-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="text-xs text-muted-foreground">
+                      Cliente
+                      <select
+                        className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm"
+                        value={leadByPage[page.id] ?? ""}
+                        onChange={(event) =>
+                          setLeadByPage((current) => ({
+                            ...current,
+                            [page.id]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Nenhum imóvel</option>
+                        {leads.map((lead) => (
+                          <option key={lead.id} value={lead.id}>
+                            {lead.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-xs text-muted-foreground">
+                      Imóvel
+                      <select
+                        className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm"
+                        value={propertyByPage[page.id] ?? ""}
+                        onChange={(event) =>
+                          setPropertyByPage((current) => ({
+                            ...current,
+                            [page.id]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Selecione</option>
+                        {properties.map((property) => (
+                          <option key={property.id} value={property.id}>
+                            {property.code ? `${property.code} — ` : ""}
+                            {property.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="text-xs text-muted-foreground">
+                    Consultar disponibilidade
+                    <Input
+                      type="date"
+                      value={bookingDate}
+                      onChange={(event) => setBookingDate(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onLoadAvailability(page)}
+                    disabled={bookingLoading === page.id}
+                  >
+                    Consultar horários
+                  </Button>
+                  {availability[page.id]?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {availability[page.id].map((slot) => (
+                        <Button
+                          key={slot.starts_at}
+                          type="button"
+                          size="sm"
+                          onClick={() =>
+                            onReserve(
+                              page,
+                              slot,
+                              leadByPage[page.id] ?? "",
+                              propertyByPage[page.id] ?? "",
+                            )
+                          }
+                          disabled={bookingLoading === `${page.id}:${slot.starts_at}`}
+                        >
+                          {new Date(slot.starts_at).toLocaleTimeString("pt-BR", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}{" "}
+                          · Reservar
+                        </Button>
+                      ))}
+                    </div>
+                  ) : availability[page.id] ? (
+                    <p className="text-xs text-muted-foreground">Nenhum horário disponível.</p>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="mt-3 border-t pt-3">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onLoadBookings(page)}
+                  disabled={bookingLoading === `list:${page.id}`}
+                >
+                  Consultar reservas
+                </Button>
+                {bookings[page.id]?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {bookings[page.id].map((row) => (
+                      <div
+                        key={row.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-xs"
+                      >
+                        <span>
+                          {new Date(row.starts_at).toLocaleString("pt-BR")} · {row.status}
+                        </span>
+                        {row.status === "scheduled" ? (
+                          <div className="flex flex-wrap items-center gap-1">
+                            <Input
+                              type="datetime-local"
+                              value={rescheduleByBooking[row.id]?.startsAt ?? ""}
+                              onChange={(event) =>
+                                setRescheduleByBooking((current) => ({
+                                  ...current,
+                                  [row.id]: {
+                                    startsAt: event.target.value,
+                                    endsAt: current[row.id]?.endsAt ?? "",
+                                  },
+                                }))
+                              }
+                              aria-label="Novo início da reserva"
+                            />
+                            <Input
+                              type="datetime-local"
+                              value={rescheduleByBooking[row.id]?.endsAt ?? ""}
+                              onChange={(event) =>
+                                setRescheduleByBooking((current) => ({
+                                  ...current,
+                                  [row.id]: {
+                                    startsAt: current[row.id]?.startsAt ?? "",
+                                    endsAt: event.target.value,
+                                  },
+                                }))
+                              }
+                              aria-label="Novo fim da reserva"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const value = rescheduleByBooking[row.id];
+                                if (value?.startsAt && value.endsAt)
+                                  onRescheduleBooking(page, row, value.startsAt, value.endsAt);
+                              }}
+                              disabled={
+                                bookingLoading === `reschedule:${row.id}` ||
+                                !rescheduleByBooking[row.id]?.startsAt ||
+                                !rescheduleByBooking[row.id]?.endsAt
+                              }
+                            >
+                              Reagendar
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => onCancelBooking(row)}
+                              disabled={bookingLoading === `cancel:${row.appointment_id}`}
+                            >
+                              Cancelar
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : bookings[page.id] ? (
+                  <p className="mt-2 text-xs text-muted-foreground">Nenhuma reserva encontrada.</p>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+type WeeklyDraftInterval = { weekday: number; start_minute: number; end_minute: number };
+
+function BookingScheduleEditor({
+  page,
+  busy,
+  onSave,
+  onAddException,
+  onRemoveException,
+}: {
+  page: BookingPage;
+  busy: boolean;
+  onSave: (intervals: WeeklyDraftInterval[]) => void;
+  onAddException: (input: Record<string, unknown>) => void;
+  onRemoveException: (exceptionId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [intervals, setIntervals] = useState<WeeklyDraftInterval[]>(() =>
+    page.weekly_availability.map((item) => ({
+      weekday: item.weekday,
+      start_minute: item.startMinute,
+      end_minute: item.endMinute,
+    })),
+  );
+  const [exception, setException] = useState({
+    date: "",
+    is_available: false,
+    start_minute: "",
+    end_minute: "",
+    reason: "",
+  });
+  const dayLabels = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  const toTime = (minute: number) =>
+    `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  const toMinute = (value: string) => {
+    const [hours, minutes] = value.split(":").map(Number);
+    return hours * 60 + minutes;
+  };
+  const addInterval = (weekday: number) =>
+    setIntervals((current) => [...current, { weekday, start_minute: 9 * 60, end_minute: 18 * 60 }]);
+  const copyDay = (source: number, target: number) =>
+    setIntervals((current) => [
+      ...current.filter((item) => item.weekday !== target),
+      ...current
+        .filter((item) => item.weekday === source)
+        .map((item) => ({ ...item, weekday: target })),
+    ]);
+  function submitException(event: FormEvent) {
+    event.preventDefault();
+    if (!exception.date) return;
+    onAddException({
+      date: exception.date,
+      is_available: exception.is_available,
+      start_minute: exception.start_minute ? Number(exception.start_minute) : null,
+      end_minute: exception.end_minute ? Number(exception.end_minute) : null,
+      reason: exception.reason.trim() || null,
+    });
+    setException({ date: "", is_available: false, start_minute: "", end_minute: "", reason: "" });
+  }
+  return (
+    <div className="mt-3 border-t pt-3">
+      <Button type="button" size="sm" variant="ghost" onClick={() => setOpen((value) => !value)}>
+        {open ? "Ocultar disponibilidade" : "Editar disponibilidade"}
+      </Button>
+      {open ? (
+        <div className="mt-2 space-y-3 rounded-md bg-muted/30 p-2 text-xs">
+          <strong>Disponibilidade semanal</strong>
+          <div className="space-y-2">
+            {dayLabels.map((label, weekday) => {
+              const dayRows = intervals
+                .map((item, index) => ({ item, index }))
+                .filter(({ item }) => item.weekday === weekday);
+              return (
+                <div key={label} className="space-y-1 rounded border p-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="w-8">{label}</strong>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => addInterval(weekday)}
+                    >
+                      + período
+                    </Button>
+                    {weekday > 0 ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => copyDay(weekday - 1, weekday)}
+                      >
+                        Copiar anterior
+                      </Button>
+                    ) : null}
+                  </div>
+                  {dayRows.map(({ item, index }) => (
+                    <div key={`${weekday}-${index}`} className="flex flex-wrap items-center gap-2">
+                      <Input
+                        type="time"
+                        value={toTime(item.start_minute)}
+                        onChange={(event) =>
+                          setIntervals((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index
+                                ? { ...row, start_minute: toMinute(event.target.value) }
+                                : row,
+                            ),
+                          )
+                        }
+                      />
+                      <span>até</span>
+                      <Input
+                        type="time"
+                        value={toTime(item.end_minute)}
+                        onChange={(event) =>
+                          setIntervals((current) =>
+                            current.map((row, rowIndex) =>
+                              rowIndex === index
+                                ? { ...row, end_minute: toMinute(event.target.value) }
+                                : row,
+                            ),
+                          )
+                        }
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setIntervals((current) =>
+                            current.filter((_, rowIndex) => rowIndex !== index),
+                          )
+                        }
+                      >
+                        Remover
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+          <Button type="button" size="sm" onClick={() => onSave(intervals)} disabled={busy}>
+            Salvar horários semanais
+          </Button>
+          <form onSubmit={submitException} className="space-y-2 border-t pt-2">
+            <strong>Exceção por data</strong>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                type="date"
+                required
+                value={exception.date}
+                onChange={(event) =>
+                  setException((current) => ({ ...current, date: event.target.value }))
+                }
+              />
+              <Input
+                placeholder="Motivo"
+                value={exception.reason}
+                onChange={(event) =>
+                  setException((current) => ({ ...current, reason: event.target.value }))
+                }
+              />
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={exception.is_available}
+                  onChange={(event) =>
+                    setException((current) => ({ ...current, is_available: event.target.checked }))
+                  }
+                />{" "}
+                Disponibilidade extraordinária
+              </label>
+              {exception.is_available ? (
+                <>
+                  <Input
+                    type="time"
+                    required
+                    value={exception.start_minute ? toTime(Number(exception.start_minute)) : ""}
+                    onChange={(event) =>
+                      setException((current) => ({
+                        ...current,
+                        start_minute: String(toMinute(event.target.value)),
+                      }))
+                    }
+                  />
+                  <Input
+                    type="time"
+                    required
+                    value={exception.end_minute ? toTime(Number(exception.end_minute)) : ""}
+                    onChange={(event) =>
+                      setException((current) => ({
+                        ...current,
+                        end_minute: String(toMinute(event.target.value)),
+                      }))
+                    }
+                  />
+                </>
+              ) : null}
+            </div>
+            <Button type="submit" size="sm" variant="outline" disabled={busy}>
+              Adicionar exceção
+            </Button>
+            {page.exceptions.length ? (
+              <div className="space-y-1">
+                {page.exceptions.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-2 rounded border p-1"
+                  >
+                    <span>
+                      {item.date} ·{" "}
+                      {item.is_available
+                        ? `${item.start_minute ?? "?"}-${item.end_minute ?? "?"}`
+                        : "bloqueado"}
+                      {item.reason ? ` · ${item.reason}` : ""}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onRemoveException(item.id)}
+                      disabled={busy}
+                    >
+                      Remover
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </form>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BookingPageEditor({
+  page,
+  users,
+  properties,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  page: BookingPage;
+  users: CrmUser[];
+  properties: PropertySummary[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (input: Record<string, unknown>) => void;
+}) {
+  const [values, setValues] = useState(() => ({
+    title: page.title,
+    description: page.description ?? "",
+    service_type: page.service_type,
+    owner_user_id: page.owner_user_id,
+    property_id: page.property_id ?? "",
+    location_text: page.location_text ?? "",
+    color: "#6d28d9",
+    duration_minutes: page.duration_minutes,
+    buffer_minutes: page.buffer_minutes,
+    min_notice_minutes: page.min_notice_minutes,
+    max_advance_days: page.max_advance_days,
+    max_bookings_per_day: page.max_bookings_per_day?.toString() ?? "",
+    timezone: page.timezone,
+    guests_can_invite: false,
+    guests_can_see_guest_list: true,
+  }));
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!values.title.trim() || !values.owner_user_id) return;
+    onSave({
+      ...values,
+      title: values.title.trim(),
+      description: values.description.trim() || null,
+      property_id: values.property_id || null,
+      location_text: values.location_text.trim() || null,
+      color: values.color || null,
+      max_bookings_per_day: values.max_bookings_per_day
+        ? Number(values.max_bookings_per_day)
+        : null,
+    });
+  }
+  const set = <K extends keyof typeof values>(key: K, value: (typeof values)[K]) =>
+    setValues((current) => ({ ...current, [key]: value }));
+  return (
+    <form onSubmit={submit} className="grid gap-2 rounded-md border bg-background p-2 text-sm">
+      <Input value={values.title} onChange={(event) => set("title", event.target.value)} required />
+      <textarea
+        className="min-h-16 rounded-md border bg-background px-2 py-1"
+        value={values.description}
+        onChange={(event) => set("description", event.target.value)}
+        placeholder="Descrição"
+      />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label>
+          Tipo
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-2"
+            value={values.service_type}
+            onChange={(event) => set("service_type", event.target.value)}
+          >
+            <option value="visit">Visita</option>
+            <option value="meeting">Reunião</option>
+            <option value="inspection">Vistoria</option>
+            <option value="signature">Assinatura</option>
+            <option value="follow_up">Follow-up</option>
+          </select>
+        </label>
+        <label>
+          Responsável
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-2"
+            value={values.owner_user_id}
+            onChange={(event) => set("owner_user_id", event.target.value)}
+          >
+            {users.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Imóvel (opcional)
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-2"
+            value={values.property_id}
+            onChange={(event) => set("property_id", event.target.value)}
+          >
+            <option value="">Nenhum</option>
+            {properties.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code ? `${item.code} — ` : ""}
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Local
+          <Input
+            value={values.location_text}
+            onChange={(event) => set("location_text", event.target.value)}
+          />
+        </label>
+        <label>
+          Duração (min)
+          <Input
+            type="number"
+            min={5}
+            max={1440}
+            value={values.duration_minutes}
+            onChange={(event) => set("duration_minutes", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Intervalo (min)
+          <Input
+            type="number"
+            min={0}
+            max={1440}
+            value={values.buffer_minutes}
+            onChange={(event) => set("buffer_minutes", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Antecedência mínima
+          <Input
+            type="number"
+            min={0}
+            max={43200}
+            value={values.min_notice_minutes}
+            onChange={(event) => set("min_notice_minutes", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Antecedência máxima (dias)
+          <Input
+            type="number"
+            min={1}
+            max={730}
+            value={values.max_advance_days}
+            onChange={(event) => set("max_advance_days", Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Limite diário
+          <Input
+            type="number"
+            min={1}
+            max={1000}
+            value={values.max_bookings_per_day}
+            onChange={(event) => set("max_bookings_per_day", event.target.value)}
+          />
+        </label>
+        <label>
+          Fuso horário
+          <Input
+            value={values.timezone}
+            onChange={(event) => set("timezone", event.target.value)}
+          />
+        </label>
+        <label>
+          Cor
+          <Input
+            type="color"
+            value={values.color}
+            onChange={(event) => set("color", event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="flex gap-2">
+        <Button
+          type="submit"
+          size="sm"
+          disabled={busy || !values.title.trim() || !values.owner_user_id}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Salvar
+        </Button>
+        <Button type="button" size="sm" variant="outline" onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function AppointmentForm({
+  editing,
+  leads,
+  properties,
+  users,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  editing: Appointment | null;
+  leads: Lead[];
+  properties: PropertySummary[];
+  users: CrmUser[];
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (values: AppointmentFormValues) => Promise<void>;
+}) {
+  const localDate = (value?: string | null) => {
+    if (!value) return "";
+    const date = new Date(value);
+    const pad = (part: number) => String(part).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+  const [values, setValues] = useState<AppointmentFormValues>(() => ({
+    lead_id: editing?.lead_id ?? leads[0]?.id ?? "",
+    property_id: editing?.property_id ?? properties[0]?.id ?? "",
+    assigned_to: editing?.assigned_to ?? users[0]?.id ?? "",
+    appointment_type: editing?.appointment_type ?? "visit",
+    title: editing?.title ?? "",
+    description: editing?.description ?? "",
+    location_text: editing?.location_text ?? "",
+    starts_at: localDate(editing?.starts_at),
+    ends_at: localDate(editing?.ends_at),
+    reminder_at: localDate(editing?.reminder_at),
+  }));
+  function update<K extends keyof AppointmentFormValues>(key: K, value: AppointmentFormValues[K]) {
+    setValues((current) => ({ ...current, [key]: value }));
+  }
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    void onSubmit(values);
+  }
+  return (
+    <form onSubmit={submit} className="space-y-4 rounded-lg border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold">{editing ? "Remarcar agendamento" : "Novo agendamento"}</h2>
+        <Button type="button" variant="ghost" size="icon" onClick={onCancel}>
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">
+          Lead
+          <select
+            required
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={values.lead_id}
+            onChange={(event) => update("lead_id", event.target.value)}
+          >
+            <option value="">Selecione</option>
+            {leads.map((lead) => (
+              <option key={lead.id} value={lead.id}>
+                {lead.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          Imóvel
+          <select
+            required
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={values.property_id}
+            onChange={(event) => update("property_id", event.target.value)}
+          >
+            <option value="">Selecione</option>
+            {properties.map((property) => (
+              <option key={property.id} value={property.id}>
+                {property.code ? `${property.code} — ` : ""}
+                {property.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          Responsável
+          <select
+            required
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={values.assigned_to}
+            onChange={(event) => update("assigned_to", event.target.value)}
+          >
+            <option value="">Selecione</option>
+            {users.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name} · {item.role}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm">
+          Tipo
+          <select
+            className="mt-1 h-9 w-full rounded-md border bg-background px-3"
+            value={values.appointment_type}
+            onChange={(event) => update("appointment_type", event.target.value as AppointmentType)}
+          >
+            {(Object.keys(appointmentTypeLabels) as AppointmentType[]).map((item) => (
+              <option key={item} value={item}>
+                {appointmentTypeLabels[item]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm sm:col-span-2">
+          Título
+          <Input
+            required
+            minLength={2}
+            maxLength={180}
+            value={values.title}
+            onChange={(event) => update("title", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Início
+          <Input
+            required
+            type="datetime-local"
+            value={values.starts_at}
+            onChange={(event) => update("starts_at", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Fim
+          <Input
+            type="datetime-local"
+            value={values.ends_at}
+            onChange={(event) => update("ends_at", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Local
+          <Input
+            maxLength={300}
+            value={values.location_text}
+            onChange={(event) => update("location_text", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Lembrete
+          <Input
+            type="datetime-local"
+            value={values.reminder_at}
+            onChange={(event) => update("reminder_at", event.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          Descrição
+          <textarea
+            className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2 text-sm"
+            maxLength={1000}
+            value={values.description}
+            onChange={(event) => update("description", event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button
+          type="submit"
+          disabled={busy || !values.lead_id || !values.property_id || !values.assigned_to}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {editing ? "Salvar remarcação" : "Criar agendamento"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function AppointmentCard({
+  appointment,
+  canEdit,
+  dimPastEvents,
+  running,
+  onEdit,
+  onCancel,
+  onComplete,
+}: {
+  appointment: Appointment;
+  canEdit: boolean;
+  dimPastEvents: boolean;
+  running: string | null;
+  onEdit: () => void;
+  onCancel: () => void;
+  onComplete: () => void;
+}) {
+  const terminal = appointment.status !== "scheduled";
+  const isPast = new Date(appointment.starts_at).getTime() < Date.now();
+  return (
+    <article
+      className={`rounded-lg border bg-card p-4 shadow-sm ${dimPastEvents && isPast ? "opacity-70" : ""}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-muted px-2 py-1 text-xs font-medium">
+              {appointmentStatusLabels[appointment.status]}
+            </span>
+            <span className="text-xs text-muted-foreground">v{appointment.version}</span>
+          </div>
+          <h2 className="mt-2 text-lg font-semibold">{appointment.title}</h2>
+          <p className="text-sm text-muted-foreground">
+            {appointmentTypeLabels[appointment.appointment_type]} ·{" "}
+            {formatAppointmentDate(appointment.starts_at)}
+          </p>
+        </div>
+        <CalendarDays className="h-5 w-5 text-muted-foreground" />
+      </div>
+      <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="text-muted-foreground">Lead</dt>
+          <dd>{appointment.lead?.name ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Imóvel</dt>
+          <dd>{appointment.property?.code ?? appointment.property?.title ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Responsável</dt>
+          <dd>{appointment.assignee?.name ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Local</dt>
+          <dd>{appointment.location_text ?? "Não informado"}</dd>
+        </div>
+      </dl>
+      {appointment.description ? (
+        <p className="mt-3 whitespace-pre-wrap text-sm text-muted-foreground">
+          {appointment.description}
+        </p>
+      ) : null}
+      {canEdit && !terminal ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onEdit}
+            disabled={Boolean(running)}
+          >
+            Remarcar
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onComplete}
+            disabled={Boolean(running)}
+          >
+            {running === `complete:${appointment.id}` ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}{" "}
+            Concluir
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={onCancel}
+            disabled={Boolean(running)}
+          >
+            {running === `cancel:${appointment.id}` ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <X className="h-4 w-4" />
+            )}{" "}
+            Cancelar
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-muted-foreground">
+          {terminal
+            ? "Este agendamento está encerrado e não pode ser alterado."
+            : "Você possui acesso somente para consulta."}
+        </p>
+      )}
+    </article>
+  );
+}
